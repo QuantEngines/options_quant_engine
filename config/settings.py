@@ -10,7 +10,12 @@ import os
 # ================================
 
 DEFAULT_SYMBOL = "NIFTY"
+DEFAULT_DATA_SOURCE = "NSE"
+
 REFRESH_INTERVAL = 10
+NSE_REFRESH_INTERVAL = 12
+ICICI_REFRESH_INTERVAL = 8
+
 MAX_RETRIES = 3
 QUOTE_BATCH_SIZE = 200
 
@@ -68,22 +73,18 @@ BACKTEST_COMMISSION_PER_ORDER = 20.0
 BACKTEST_ENABLE_BUDGET = False
 BACKTEST_STARTING_CAPITAL = 500000
 
-# Walk-forward ML
 WF_TRAIN_RATIO = 0.7
 WF_MIN_TRAIN_SAMPLES = 100
 
-# Parameter sweep
 SWEEP_SIGNAL_PERSISTENCE_GRID = [1, 2, 3]
 SWEEP_MAX_HOLD_BARS_GRID = [3, 5, 8]
 SWEEP_TP_GRID = [20, 30, 40]
 SWEEP_SL_GRID = [10, 15, 20]
 
-# Monte Carlo
 MC_SIMULATIONS = 1000
 
-# Parallel backtest
 MAX_WORKERS = 2
-ENABLE_PARALLEL_SWEEP = False   # safer default on small laptops / macOS
+ENABLE_PARALLEL_SWEEP = False
 SWEEP_PROGRESS_EVERY = 5
 
 
@@ -93,7 +94,8 @@ SWEEP_PROGRESS_EVERY = 5
 
 DATA_SOURCE_OPTIONS = [
     "NSE",
-    "ZERODHA"
+    "ZERODHA",
+    "ICICI",
 ]
 
 
@@ -101,9 +103,50 @@ DATA_SOURCE_OPTIONS = [
 # Zerodha API Credentials
 # ================================
 
-API_KEY = os.getenv("ZERODHA_API_KEY", "YOUR_API_KEY")
-API_SECRET = os.getenv("ZERODHA_API_SECRET", "YOUR_API_SECRET")
-ACCESS_TOKEN = os.getenv("ZERODHA_ACCESS_TOKEN", "YOUR_ACCESS_TOKEN")
+ZERODHA_API_KEY = os.getenv("ZERODHA_API_KEY", "YOUR_ZERODHA_API_KEY")
+ZERODHA_API_SECRET = os.getenv("ZERODHA_API_SECRET", "YOUR_ZERODHA_API_SECRET")
+ZERODHA_ACCESS_TOKEN = os.getenv("ZERODHA_ACCESS_TOKEN", "YOUR_ZERODHA_ACCESS_TOKEN")
+
+API_KEY = ZERODHA_API_KEY
+API_SECRET = ZERODHA_API_SECRET
+ACCESS_TOKEN = ZERODHA_ACCESS_TOKEN
+
+
+# ================================
+# ICICI Breeze Credentials
+# ================================
+
+ICICI_BREEZE_API_KEY = os.getenv("ICICI_BREEZE_API_KEY", "48nWvK1@5m595035578JvN488P7X2336")
+ICICI_BREEZE_SECRET_KEY = os.getenv("ICICI_BREEZE_SECRET_KEY", "8eP1*B8370902vAmE59262g5u372r2$0")
+ICICI_BREEZE_SESSION_TOKEN = os.getenv("ICICI_BREEZE_SESSION_TOKEN", "54993310")
+
+# Primary fallback expiry
+ICICI_DEFAULT_EXPIRY_DATE = os.getenv(
+    "ICICI_DEFAULT_EXPIRY_DATE",
+    "2026-03-19T06:00:00.000Z"
+)
+
+# Keep these lists in settings.py so this remains the only user-edit file.
+# Order matters: the loader will try them one by one until one works.
+ICICI_SYMBOL_EXPIRY_CANDIDATES = {
+    "NIFTY": [
+        os.getenv("ICICI_NIFTY_EXPIRY_1", "2026-03-19T06:00:00.000Z"),
+        os.getenv("ICICI_NIFTY_EXPIRY_2", "2026-03-26T06:00:00.000Z"),
+        os.getenv("ICICI_NIFTY_EXPIRY_3", "2026-04-30T06:00:00.000Z"),
+    ],
+    "BANKNIFTY": [
+        os.getenv("ICICI_BANKNIFTY_EXPIRY_1", "2026-03-18T06:00:00.000Z"),
+        os.getenv("ICICI_BANKNIFTY_EXPIRY_2", "2026-03-25T06:00:00.000Z"),
+        os.getenv("ICICI_BANKNIFTY_EXPIRY_3", "2026-03-31T06:00:00.000Z"),
+    ],
+    "FINNIFTY": [
+        os.getenv("ICICI_FINNIFTY_EXPIRY_1", "2026-03-17T06:00:00.000Z"),
+        os.getenv("ICICI_FINNIFTY_EXPIRY_2", "2026-03-24T06:00:00.000Z"),
+        os.getenv("ICICI_FINNIFTY_EXPIRY_3", "2026-03-31T06:00:00.000Z"),
+    ],
+}
+
+ICICI_DEBUG = True
 
 
 # ================================

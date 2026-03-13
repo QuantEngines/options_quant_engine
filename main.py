@@ -4,10 +4,14 @@ import pandas as pd
 
 from config.settings import (
     DEFAULT_SYMBOL,
+    DEFAULT_DATA_SOURCE,
     REFRESH_INTERVAL,
+    NSE_REFRESH_INTERVAL,
+    ICICI_REFRESH_INTERVAL,
     LOT_SIZE,
     NUMBER_OF_LOTS,
-    MAX_CAPITAL_PER_TRADE
+    MAX_CAPITAL_PER_TRADE,
+    DATA_SOURCE_OPTIONS,
 )
 
 from data.spot_downloader import get_spot_snapshot, save_spot_snapshot
@@ -67,24 +71,39 @@ TRADER_VIEW_KEYS = [
     "hybrid_move_probability",
     "large_move_probability",
     "ml_move_probability",
+    "data_quality_score",
+    "data_quality_status",
 ]
+
+
+def _refresh_interval_for_source(source: str) -> int:
+    source = source.upper().strip()
+    if source == "NSE":
+        return NSE_REFRESH_INTERVAL
+    if source == "ICICI":
+        return ICICI_REFRESH_INTERVAL
+    return REFRESH_INTERVAL
 
 
 def choose_data_source():
     print("\nChoose data source:")
-    print("1. Zerodha")
-    print("2. NSE")
+    for idx, source in enumerate(DATA_SOURCE_OPTIONS, start=1):
+        print(f"{idx}. {source}")
 
-    choice = input("Enter choice (1/2): ").strip()
+    choice = input(f"Enter choice (1-{len(DATA_SOURCE_OPTIONS)}) [{DEFAULT_DATA_SOURCE}]: ").strip()
 
-    if choice == "1":
-        return "ZERODHA"
+    if not choice:
+        return DEFAULT_DATA_SOURCE
 
-    if choice == "2":
-        return "NSE"
+    try:
+        index = int(choice) - 1
+        if 0 <= index < len(DATA_SOURCE_OPTIONS):
+            return DATA_SOURCE_OPTIONS[index]
+    except Exception:
+        pass
 
-    print("Invalid choice. Defaulting to NSE.")
-    return "NSE"
+    print(f"Invalid choice. Defaulting to {DEFAULT_DATA_SOURCE}.")
+    return DEFAULT_DATA_SOURCE
 
 
 def choose_budget_mode():
@@ -237,6 +256,7 @@ def main():
     source = choose_data_source()
     apply_budget_constraint = choose_budget_mode()
     lot_size, requested_lots, max_capital = get_budget_inputs(apply_budget_constraint)
+    refresh_interval = _refresh_interval_for_source(source)
 
     print("\nRunning Quant Engine for:", symbol)
     print("Data Source:", source)
@@ -264,7 +284,7 @@ def main():
 
                 if not spot_validation.get("is_valid", False):
                     print("\nSpot snapshot invalid. Skipping this cycle.")
-                    time.sleep(REFRESH_INTERVAL)
+                    time.sleep(refresh_interval)
                     continue
 
                 spot = float(spot_snapshot["spot"])
@@ -291,35 +311,15 @@ def main():
 
                 if not option_chain_validation.get("is_valid", False):
                     print("\nOption chain invalid. Skipping this cycle.")
-                    time.sleep(REFRESH_INTERVAL)
+                    time.sleep(refresh_interval)
                     continue
 
                 print("Option chain rows:", len(option_chain))
 
-                gamma = safe_call(
-                    calculate_gamma_exposure,
-                    option_chain,
-                    spot,
-                    default=None
-                )
-
-                flip = safe_call(
-                    gamma_flip_level,
-                    option_chain,
-                    default=None
-                )
-
-                dealer_pos = safe_call(
-                    dealer_inventory_position,
-                    option_chain,
-                    default=None
-                )
-
-                vol_regime_value = safe_call(
-                    detect_volatility_regime,
-                    option_chain,
-                    default=None
-                )
+                gamma = safe_call(calculate_gamma_exposure, option_chain, spot, default=None)
+                flip = safe_call(gamma_flip_level, option_chain, default=None)
+                dealer_pos = safe_call(dealer_inventory_position, option_chain, default=None)
+                vol_regime_value = safe_call(detect_volatility_regime, option_chain, default=None)
 
                 gamma_path = safe_call(
                     simulate_gamma_path,
@@ -333,116 +333,30 @@ def main():
                 else:
                     prices, gamma_curve = [], []
 
-                gamma_event = safe_call(
-                    detect_gamma_squeeze,
-                    prices,
-                    gamma_curve,
-                    default=None
-                )
-
-                flow = safe_call(
-                    flow_signal,
-                    option_chain,
-                    default=None
-                )
-
-                smart_flow = safe_call(
-                    smart_money_signal,
-                    option_chain,
-                    default=None
-                )
-
-                liquidity_levels = safe_call(
-                    strongest_liquidity_levels,
-                    option_chain,
-                    default=[]
-                )
-
-                voids = safe_call(
-                    detect_liquidity_voids,
-                    option_chain,
-                    default=[]
-                )
-
-                void_sig = safe_call(
-                    liquidity_void_signal,
-                    spot,
-                    voids,
-                    default=None
-                )
-
-                vacuum_zones = safe_call(
-                    detect_liquidity_vacuum,
-                    option_chain,
-                    default=[]
-                )
-
-                vacuum_state = safe_call(
-                    vacuum_direction,
-                    spot,
-                    vacuum_zones,
-                    default=None
-                )
-
-                market_gamma = safe_call(
-                    calculate_market_gamma,
-                    option_chain,
-                    default=None
-                )
-
-                gamma_regime = safe_call(
-                    market_gamma_regime,
-                    market_gamma,
-                    default=None
-                )
-
-                gamma_clusters = safe_call(
-                    largest_gamma_strikes,
-                    market_gamma,
-                    default=None
-                )
-
-                walls = safe_call(
-                    classify_walls,
-                    option_chain,
-                    default={}
-                ) or {}
+                gamma_event = safe_call(detect_gamma_squeeze, prices, gamma_curve, default=None)
+                flow = safe_call(flow_signal, option_chain, default=None)
+                smart_flow = safe_call(smart_money_signal, option_chain, default=None)
+                liquidity_levels = safe_call(strongest_liquidity_levels, option_chain, default=[])
+                voids = safe_call(detect_liquidity_voids, option_chain, default=[])
+                void_sig = safe_call(liquidity_void_signal, spot, voids, default=None)
+                vacuum_zones = safe_call(detect_liquidity_vacuum, option_chain, default=[])
+                vacuum_state = safe_call(vacuum_direction, spot, vacuum_zones, default=None)
+                market_gamma = safe_call(calculate_market_gamma, option_chain, default=None)
+                gamma_regime = safe_call(market_gamma_regime, market_gamma, default=None)
+                gamma_clusters = safe_call(largest_gamma_strikes, market_gamma, default=None)
+                walls = safe_call(classify_walls, option_chain, default={}) or {}
 
                 support_wall = walls.get("support_wall") if isinstance(walls, dict) else None
                 resistance_wall = walls.get("resistance_wall") if isinstance(walls, dict) else None
 
-                hedging_flow = safe_call(
-                    dealer_hedging_flow,
-                    option_chain,
-                    default=None
-                )
-
-                hedging_sim = safe_call(
-                    simulate_dealer_hedging,
-                    option_chain,
-                    default={}
-                )
-
-                hedging_bias_value = safe_call(
-                    hedging_bias,
-                    hedging_sim,
-                    default=None
-                )
-
-                atm_iv_value = safe_call(
-                    atm_vol,
-                    option_chain,
-                    spot,
-                    default=None
-                )
+                hedging_flow = safe_call(dealer_hedging_flow, option_chain, default=None)
+                hedging_sim = safe_call(simulate_dealer_hedging, option_chain, default={})
+                hedging_bias_value = safe_call(hedging_bias, hedging_sim, default=None)
+                atm_iv_value = safe_call(atm_vol, option_chain, spot, default=None)
 
                 vol_surface_regime = None
                 if atm_iv_value is not None:
-                    vol_surface_regime = safe_call(
-                        vol_regime,
-                        atm_iv_value,
-                        default=None
-                    )
+                    vol_surface_regime = safe_call(vol_regime, atm_iv_value, default=None)
 
                 intraday_gamma_state = None
                 if previous_chain is not None:
@@ -509,6 +423,8 @@ def main():
                     day_open=day_open,
                     prev_close=prev_close,
                     lookback_avg_range_pct=lookback_avg_range_pct,
+                    spot_validation=spot_validation,
+                    option_chain_validation=option_chain_validation,
                     apply_budget_constraint=apply_budget_constraint,
                     requested_lots=requested_lots,
                     lot_size=lot_size,
@@ -516,9 +432,6 @@ def main():
                 )
 
                 if trade:
-                    trade["spot_validation"] = spot_validation
-                    trade["option_chain_validation"] = option_chain_validation
-
                     print_trader_view(trade)
 
                     dashboard_for_print = dict(dashboard_summary)
@@ -546,6 +459,15 @@ def main():
                         "scoring_breakdown",
                         "spot_validation",
                         "option_chain_validation",
+                        "data_quality_score",
+                        "data_quality_status",
+                        "data_quality_reasons",
+                        "analytics_quality",
+                        "confirmation_status",
+                        "confirmation_veto",
+                        "confirmation_reasons",
+                        "confirmation_breakdown",
+                        "ranked_strike_candidates",
                     ]:
                         if key in trade:
                             dashboard_for_print[key] = trade.get(key)
@@ -566,7 +488,7 @@ def main():
             except Exception as e:
                 print("\nEngine error:", e)
 
-            time.sleep(REFRESH_INTERVAL)
+            time.sleep(refresh_interval)
 
     except KeyboardInterrupt:
         print("\nEngine stopped by user")

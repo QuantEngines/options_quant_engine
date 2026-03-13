@@ -15,6 +15,9 @@ Enhancements:
 - Rule/ML probability diagnostics
 - Better calibrated hybrid move probability
 - Real intraday range feature using spot session data
+- Engine-side data quality gating
+- Confirmation filter layer for live option-buying quality
+- Strike ranking and shortlist support
 """
 
 import pandas as pd
@@ -29,6 +32,8 @@ from config.settings import (
 from strategy.exit_model import calculate_exit
 from strategy.trade_strength import compute_trade_strength
 from strategy.budget_optimizer import optimize_lots
+from strategy.confirmation_filters import compute_confirmation_filters
+from strategy.strike_selector import select_best_strike
 
 from analytics import gamma_exposure as gamma_exposure_mod
 from analytics import gamma_flip as gamma_flip_mod
@@ -156,14 +161,6 @@ def _compute_intraday_range_pct(
     prev_close=None,
     lookback_avg_range_pct=None
 ):
-    """
-    Returns a normalized 0..1.5 measure of how expanded today's underlying move is.
-
-    Priority:
-    1. Use day_high/day_low if available
-    2. Otherwise use max distance from open / prev_close as fallback
-    3. Normalize by recent average range if available, else by fixed baseline
-    """
     spot = _safe_float(spot_price, None)
     if spot in (None, 0):
         return None
@@ -216,7 +213,6 @@ def _blend_move_probability(rule_prob, ml_prob):
 
     ml_prob = _safe_float(ml_prob, rule_prob)
     hybrid = 0.35 * rule_prob + 0.65 * ml_prob
-
     hybrid = 0.10 + 0.80 * hybrid
 
     return round(_clip(hybrid, 0.05, 0.95), 2)
@@ -408,21 +404,128 @@ def _categorical_flow_score(value):
     return mapping.get(value, 0.0)
 
 
-def choose_strike(option_chain, spot, direction):
-    strikes = sorted(option_chain["strikePrice"].dropna().unique().tolist())
+def _normalize_validation_dict(validation):
+    return validation if isinstance(validation, dict) else {}
 
-    if not strikes:
-        return None
 
-    if direction == "CALL":
-        candidates = [s for s in strikes if s >= spot]
-        return min(candidates) if candidates else max(strikes)
+def _compute_data_quality(
+    spot_validation,
+    option_chain_validation,
+    analytics_state,
+    probability_state
+):
+    spot_validation = _normalize_validation_dict(spot_validation)
+    option_chain_validation = _normalize_validation_dict(option_chain_validation)
 
-    if direction == "PUT":
-        candidates = [s for s in strikes if s <= spot]
-        return max(candidates) if candidates else min(strikes)
+    score = 100
+    reasons = []
+    analytics_missing = []
 
-    return None
+    if not spot_validation.get("is_valid", True):
+        score -= 50
+        reasons.append("invalid_spot_snapshot")
+
+    if spot_validation.get("is_stale", False):
+        score -= 25
+        reasons.append("stale_spot_snapshot")
+
+    age_minutes = _safe_float(spot_validation.get("age_minutes"), None)
+    if age_minutes is not None:
+        if age_minutes > 10:
+            score -= 8
+            reasons.append(f"spot_age_gt_10m:{age_minutes}")
+        elif age_minutes > 5:
+            score -= 4
+            reasons.append(f"spot_age_gt_5m:{age_minutes}")
+
+    for warning in spot_validation.get("warnings", []):
+        score -= 2
+        reasons.append(f"spot_warning:{warning}")
+
+    if not option_chain_validation.get("is_valid", True):
+        score -= 50
+        reasons.append("invalid_option_chain")
+
+    row_count = int(option_chain_validation.get("row_count", 0) or 0)
+    priced_rows = int(option_chain_validation.get("priced_rows", 0) or 0)
+
+    if row_count < 120:
+        score -= 8
+        reasons.append(f"low_option_chain_rows:{row_count}")
+    elif row_count < 180:
+        score -= 4
+        reasons.append(f"medium_option_chain_rows:{row_count}")
+
+    priced_ratio = _safe_div(priced_rows, row_count, 0.0)
+    if row_count > 0:
+        if priced_ratio < 0.35:
+            score -= 15
+            reasons.append(f"very_low_priced_ratio:{priced_rows}/{row_count}")
+        elif priced_ratio < 0.55:
+            score -= 8
+            reasons.append(f"low_priced_ratio:{priced_rows}/{row_count}")
+
+    for warning in option_chain_validation.get("warnings", []):
+        score -= 3
+        reasons.append(f"option_chain_warning:{warning}")
+
+    critical_analytics = [
+        "flip",
+        "dealer_pos",
+        "vol_regime",
+        "gamma_regime",
+        "final_flow_signal",
+        "hedging_bias",
+    ]
+
+    secondary_analytics = [
+        "atm_iv",
+        "support_wall",
+        "resistance_wall",
+        "market_gamma_summary",
+    ]
+
+    for key in critical_analytics:
+        if analytics_state.get(key) in [None, "UNKNOWN"]:
+            analytics_missing.append(key)
+            score -= 5
+            reasons.append(f"missing_critical_analytics:{key}")
+
+    for key in secondary_analytics:
+        if analytics_state.get(key) is None:
+            score -= 2
+            reasons.append(f"missing_secondary_analytics:{key}")
+
+    if probability_state.get("rule_move_probability") is None and probability_state.get("ml_move_probability") is None:
+        score -= 10
+        reasons.append("missing_all_move_probabilities")
+    elif probability_state.get("hybrid_move_probability") is None:
+        score -= 5
+        reasons.append("missing_hybrid_move_probability")
+
+    score = int(_clip(score, 0, 100))
+
+    if score >= 85:
+        status = "STRONG"
+    elif score >= 70:
+        status = "GOOD"
+    elif score >= 55:
+        status = "CAUTION"
+    else:
+        status = "WEAK"
+
+    analytics_quality = {
+        "missing_critical": analytics_missing,
+        "critical_missing_count": len(analytics_missing),
+    }
+
+    return {
+        "score": score,
+        "status": status,
+        "reasons": reasons,
+        "analytics_quality": analytics_quality,
+        "fatal": (not spot_validation.get("is_valid", True)) or (not option_chain_validation.get("is_valid", True)),
+    }
 
 
 def classify_spot_vs_flip(spot, flip):
@@ -579,6 +682,8 @@ def generate_trade(
     day_open=None,
     prev_close=None,
     lookback_avg_range_pct=None,
+    spot_validation=None,
+    option_chain_validation=None,
     apply_budget_constraint=False,
     requested_lots=NUMBER_OF_LOTS,
     lot_size=LOT_SIZE,
@@ -912,6 +1017,32 @@ def generate_trade(
         ml_prob=ml_move_probability
     )
 
+    analytics_state = {
+        "flip": flip,
+        "dealer_pos": dealer_pos,
+        "vol_regime": vol_regime,
+        "gamma_regime": gamma_regime,
+        "final_flow_signal": final_flow_signal,
+        "hedging_bias": hedging_bias,
+        "atm_iv": atm_iv,
+        "support_wall": support_wall,
+        "resistance_wall": resistance_wall,
+        "market_gamma_summary": market_gamma_summary,
+    }
+
+    probability_state = {
+        "rule_move_probability": rule_move_probability,
+        "ml_move_probability": ml_move_probability,
+        "hybrid_move_probability": hybrid_move_probability,
+    }
+
+    data_quality = _compute_data_quality(
+        spot_validation=spot_validation,
+        option_chain_validation=option_chain_validation,
+        analytics_state=analytics_state,
+        probability_state=probability_state,
+    )
+
     direction, direction_source = decide_direction(
         final_flow_signal=final_flow_signal,
         dealer_pos=dealer_pos,
@@ -947,6 +1078,24 @@ def generate_trade(
         large_move_probability=hybrid_move_probability,
         ml_move_probability=ml_move_probability
     )
+
+    confirmation = compute_confirmation_filters(
+        direction=score_direction,
+        spot=spot,
+        day_open=day_open,
+        prev_close=prev_close,
+        intraday_range_pct=intraday_range_pct,
+        final_flow_signal=final_flow_signal,
+        hedging_bias=hedging_bias,
+        gamma_event=gamma_event,
+        hybrid_move_probability=hybrid_move_probability,
+        spot_vs_flip=spot_vs_flip,
+    )
+
+    scoring_breakdown["confirmation_filter_score"] = confirmation["score_adjustment"]
+    adjusted_trade_strength = int(_clip(trade_strength + confirmation["score_adjustment"], 0, 100))
+    scoring_breakdown["base_trade_strength"] = trade_strength
+    scoring_breakdown["total_score"] = adjusted_trade_strength
 
     min_trade_strength = BACKTEST_MIN_TRADE_STRENGTH if backtest_mode else MIN_TRADE_STRENGTH
 
@@ -998,9 +1147,19 @@ def generate_trade(
             "prev_close": prev_close,
             "lookback_avg_range_pct": lookback_avg_range_pct,
         },
+        "spot_validation": spot_validation,
+        "option_chain_validation": option_chain_validation,
+        "data_quality_score": data_quality["score"],
+        "data_quality_status": data_quality["status"],
+        "data_quality_reasons": data_quality["reasons"],
+        "analytics_quality": data_quality["analytics_quality"],
+        "confirmation_status": confirmation["status"],
+        "confirmation_veto": confirmation["veto"],
+        "confirmation_reasons": confirmation["reasons"],
+        "confirmation_breakdown": confirmation["breakdown"],
         "direction_source": direction_source,
-        "trade_strength": trade_strength,
-        "signal_quality": classify_signal_quality(trade_strength),
+        "trade_strength": adjusted_trade_strength,
+        "signal_quality": classify_signal_quality(adjusted_trade_strength),
         "scoring_breakdown": scoring_breakdown,
         "budget_constraint_applied": apply_budget_constraint,
         "lot_size": lot_size,
@@ -1009,12 +1168,38 @@ def generate_trade(
         "backtest_mode": backtest_mode
     }
 
+    if data_quality["fatal"]:
+        base_payload["message"] = "Trade blocked due to invalid market data"
+        base_payload["trade_status"] = "DATA_INVALID"
+        return base_payload
+
     if direction is None:
         base_payload["message"] = "No trade signal"
         base_payload["trade_status"] = "NO_SIGNAL"
         return base_payload
 
-    strike = choose_strike(df, spot, direction)
+    if confirmation["veto"]:
+        base_payload["message"] = "Trade downgraded to watchlist due to confirmation conflict"
+        base_payload["trade_status"] = "WATCHLIST"
+        return base_payload
+
+    ranked_strikes = []
+    strike = None
+
+    if direction is not None:
+        strike, ranked_strikes = select_best_strike(
+            option_chain=df,
+            direction=direction,
+            spot=spot,
+            support_wall=support_wall,
+            resistance_wall=resistance_wall,
+            gamma_clusters=gamma_clusters,
+            lot_size=lot_size,
+            max_capital=max_capital if apply_budget_constraint else None,
+        )
+
+    base_payload["ranked_strike_candidates"] = ranked_strikes
+
     if strike is None:
         base_payload["direction"] = direction
         base_payload["message"] = "No valid strike found"
@@ -1067,8 +1252,23 @@ def generate_trade(
         base_payload["capital_per_lot"] = round(entry_price * lot_size, 2)
         base_payload["capital_required"] = round(entry_price * lot_size * requested_lots, 2)
 
-    if trade_strength < min_trade_strength:
+    if adjusted_trade_strength < min_trade_strength:
         base_payload["message"] = "Trade filtered out due to low strength"
+        base_payload["trade_status"] = "WATCHLIST"
+        return base_payload
+
+    if data_quality["score"] < 55:
+        base_payload["message"] = "Trade downgraded to watchlist due to weak data quality"
+        base_payload["trade_status"] = "WATCHLIST"
+        return base_payload
+
+    if data_quality["status"] == "CAUTION" and adjusted_trade_strength < (min_trade_strength + 8):
+        base_payload["message"] = "Trade downgraded to watchlist due to cautionary data quality"
+        base_payload["trade_status"] = "WATCHLIST"
+        return base_payload
+
+    if confirmation["status"] == "CONFLICT" and adjusted_trade_strength < (min_trade_strength + 10):
+        base_payload["message"] = "Trade downgraded to watchlist due to weak live confirmation"
         base_payload["trade_status"] = "WATCHLIST"
         return base_payload
 

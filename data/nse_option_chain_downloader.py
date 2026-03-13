@@ -1,31 +1,27 @@
 """
 NSE Option Chain Downloader
+
+Hardened version for NSE's silent anti-bot behavior:
+- handles HTTP 200 with empty JSON {}
+- aggressively refreshes cookies/session
+- uses legacy endpoint directly
 """
 
+import json
+import random
 import time
-from urllib.parse import quote
 
 import pandas as pd
 import requests
 
 
 class NSEOptionChainDownloader:
-    BASE_URL = "https://www.nseindia.com"
+    HOME_PAGE = "https://www.nseindia.com/"
     OPTION_CHAIN_PAGE = "https://www.nseindia.com/option-chain"
+    ALT_OPTION_CHAIN_PAGE = "https://www.nseindia.com/market-data/option-chain"
 
-    CONTRACT_INFO_URL = (
-        "https://www.nseindia.com/api/option-chain-contract-info?symbol={symbol}"
-    )
-
-    INDEX_DATA_URL = (
-        "https://www.nseindia.com/api/option-chain-v3"
-        "?type=Indices&symbol={symbol}&expiry={expiry}"
-    )
-
-    STOCK_DATA_URL = (
-        "https://www.nseindia.com/api/option-chain-v3"
-        "?type=Equity&symbol={symbol}&expiry={expiry}"
-    )
+    LEGACY_INDEX_URL = "https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
+    LEGACY_STOCK_URL = "https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
 
     INDEX_SYMBOLS = {
         "NIFTY",
@@ -35,204 +31,265 @@ class NSEOptionChainDownloader:
         "NIFTYNXT50",
     }
 
-    def __init__(self):
-        self.session = requests.Session()
-        self.headers = {
+    def __init__(self, debug=False):
+        self.debug = debug
+        self.session = None
+        self._new_session()
+
+    def _log(self, *args):
+        if self.debug:
+            print("[NSE DEBUG]", *args)
+
+    def _base_headers(self, referer=None):
+        return {
             "user-agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/130.0.0.0 Safari/537.36"
             ),
-            "accept-language": "en,gu;q=0.9,hi;q=0.8",
-            "accept-encoding": "gzip, deflate, br",
             "accept": "application/json, text/plain, */*",
-            "referer": self.OPTION_CHAIN_PAGE,
+            "accept-language": "en-US,en;q=0.9",
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
+            "referer": referer or self.OPTION_CHAIN_PAGE,
+            "origin": "https://www.nseindia.com",
             "connection": "keep-alive",
         }
-        self.cookies = {}
+
+    def _new_session(self):
+        if self.session is not None:
+            try:
+                self.session.close()
+            except Exception:
+                pass
+
+        self.session = requests.Session()
         self._bootstrap_session()
 
     def _bootstrap_session(self):
-        self.session.close()
-        self.session = requests.Session()
-
-        response = self.session.get(
+        warmup_urls = [
+            self.HOME_PAGE,
             self.OPTION_CHAIN_PAGE,
-            headers=self.headers,
-            timeout=10
-        )
-        self.cookies = dict(response.cookies)
+            self.ALT_OPTION_CHAIN_PAGE,
+        ]
+
+        for url in warmup_urls:
+            try:
+                resp = self.session.get(
+                    url,
+                    headers=self._base_headers(referer=self.HOME_PAGE),
+                    timeout=10
+                )
+                self._log("bootstrap", url, "status=", resp.status_code)
+                time.sleep(0.4)
+            except Exception as e:
+                self._log("bootstrap_failed", url, str(e))
 
     def _is_index(self, symbol: str) -> bool:
         return symbol.upper().strip() in self.INDEX_SYMBOLS
 
-    def _safe_json(self, response: requests.Response) -> dict:
+    def _request_json_once(self, url: str, referer: str):
         try:
-            return response.json()
-        except Exception:
-            return {}
+            response = self.session.get(
+                url,
+                headers=self._base_headers(referer=referer),
+                timeout=12
+            )
 
-    def _extract_expiry_dates(self, data: dict) -> list:
-        if "expiryDates" in data:
-            return data["expiryDates"]
+            content_type = response.headers.get("content-type", "")
+            text_preview = response.text[:250].replace("\n", " ").replace("\r", " ")
 
-        if "records" in data and "expiryDates" in data["records"]:
-            return data["records"]["expiryDates"]
+            self._log(
+                f"url={url}",
+                f"status={response.status_code}",
+                f"content_type={content_type}",
+                f"preview={text_preview}"
+            )
 
-        return []
+            if response.status_code != 200:
+                return None, f"http_{response.status_code}"
 
-    def _get_expiry_dates(self, symbol: str) -> list:
-        url = self.CONTRACT_INFO_URL.format(symbol=symbol)
-
-        for _ in range(3):
             try:
-                response = self.session.get(
-                    url,
-                    headers=self.headers,
-                    cookies=self.cookies,
-                    timeout=10
-                )
+                data = response.json()
+            except Exception as e:
+                return None, f"json_decode_error:{e}"
 
-                if response.status_code == 401:
-                    self._bootstrap_session()
-                    continue
+            if not isinstance(data, dict):
+                return None, "response_not_dict"
 
-                data = self._safe_json(response)
-                expiries = self._extract_expiry_dates(data)
+            if not data:
+                return None, "empty_json_dict"
 
-                if expiries:
-                    return expiries
+            return data, None
 
-            except Exception:
-                pass
+        except Exception as e:
+            return None, str(e)
 
-            time.sleep(1)
-            self._bootstrap_session()
+    def _request_json(self, url: str):
+        referers = [
+            self.OPTION_CHAIN_PAGE,
+            self.ALT_OPTION_CHAIN_PAGE,
+            self.HOME_PAGE,
+        ]
 
-        return []
+        last_error = None
 
-    def _extract_chain_rows(self, data: dict) -> list:
-        if "data" in data and isinstance(data["data"], list):
-            return data["data"]
+        for attempt in range(1, 7):
+            referer = referers[(attempt - 1) % len(referers)]
 
-        if "records" in data and "data" in data["records"]:
-            return data["records"]["data"]
+            data, err = self._request_json_once(url, referer=referer)
+            if data:
+                self._log("json_keys", list(data.keys())[:10])
+                return data
 
-        if "filtered" in data and "data" in data["filtered"]:
-            return data["filtered"]["data"]
+            last_error = err
+            self._log(f"attempt={attempt}", f"error={err}", "refreshing session")
 
-        return []
+            self._new_session()
+            time.sleep(0.8 + random.uniform(0.2, 0.8))
 
-    def _fetch_chain_for_expiry(self, symbol: str, expiry: str) -> pd.DataFrame:
-        expiry_q = quote(expiry)
+        self._log("request_failed", f"url={url}", f"last_error={last_error}")
+        return {}
+
+    def _get_legacy_chain_json(self, symbol: str) -> dict:
+        symbol = symbol.upper().strip()
 
         if self._is_index(symbol):
-            url = self.INDEX_DATA_URL.format(symbol=symbol, expiry=expiry_q)
+            url = self.LEGACY_INDEX_URL.format(symbol=symbol)
         else:
-            url = self.STOCK_DATA_URL.format(symbol=symbol, expiry=expiry_q)
+            url = self.LEGACY_STOCK_URL.format(symbol=symbol)
 
-        for _ in range(3):
-            try:
-                response = self.session.get(
-                    url,
-                    headers=self.headers,
-                    cookies=self.cookies,
-                    timeout=10
-                )
+        return self._request_json(url)
 
-                if response.status_code == 401:
-                    self._bootstrap_session()
-                    continue
+    def _extract_rows(self, data: dict) -> list:
+        if not isinstance(data, dict):
+            return []
 
-                data = self._safe_json(response)
-                items = self._extract_chain_rows(data)
+        if isinstance(data.get("records"), dict) and isinstance(data["records"].get("data"), list):
+            return data["records"]["data"]
 
-                rows = []
+        if isinstance(data.get("filtered"), dict) and isinstance(data["filtered"].get("data"), list):
+            return data["filtered"]["data"]
 
-                for item in items:
-                    strike = item.get("strikePrice")
+        if isinstance(data.get("data"), list):
+            return data["data"]
 
-                    ce = item.get("CE")
-                    if ce:
-                        rows.append({
-                            "strikePrice": strike,
-                            "OPTION_TYP": "CE",
-                            "lastPrice": ce.get("lastPrice", 0),
-                            "openInterest": ce.get("openInterest", 0),
-                            "changeinOI": ce.get("changeinOpenInterest", 0),
-                            "impliedVolatility": ce.get("impliedVolatility", 0),
-                            "totalTradedVolume": ce.get("totalTradedVolume", 0),
-                            "IV": ce.get("impliedVolatility", 0),
-                            "VOLUME": ce.get("totalTradedVolume", 0),
-                            "OPEN_INT": ce.get("openInterest", 0),
-                            "STRIKE_PR": strike,
-                            "LAST_PRICE": ce.get("lastPrice", 0),
-                            "EXPIRY_DT": expiry,
-                        })
+        self._log("row_extraction_failed", f"top_level_keys={list(data.keys())[:15]}")
+        try:
+            self._log("response_json_preview", json.dumps(data)[:500])
+        except Exception:
+            pass
 
-                    pe = item.get("PE")
-                    if pe:
-                        rows.append({
-                            "strikePrice": strike,
-                            "OPTION_TYP": "PE",
-                            "lastPrice": pe.get("lastPrice", 0),
-                            "openInterest": pe.get("openInterest", 0),
-                            "changeinOI": pe.get("changeinOpenInterest", 0),
-                            "impliedVolatility": pe.get("impliedVolatility", 0),
-                            "totalTradedVolume": pe.get("totalTradedVolume", 0),
-                            "IV": pe.get("impliedVolatility", 0),
-                            "VOLUME": pe.get("totalTradedVolume", 0),
-                            "OPEN_INT": pe.get("openInterest", 0),
-                            "STRIKE_PR": strike,
-                            "LAST_PRICE": pe.get("lastPrice", 0),
-                            "EXPIRY_DT": expiry,
-                        })
+        return []
 
-                df = pd.DataFrame(rows)
+    def _extract_expiry_from_item(self, item: dict):
+        expiry = item.get("expiryDate")
+        if expiry:
+            return expiry
 
-                if not df.empty:
-                    return df
+        ce = item.get("CE", {})
+        pe = item.get("PE", {})
 
-            except Exception:
-                pass
+        if isinstance(ce, dict) and ce.get("expiryDate"):
+            return ce.get("expiryDate")
 
-            time.sleep(1)
-            self._bootstrap_session()
+        if isinstance(pe, dict) and pe.get("expiryDate"):
+            return pe.get("expiryDate")
 
-        return pd.DataFrame()
+        return None
+
+    def _extract_nearest_expiry(self, items: list):
+        expiries = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            expiry = self._extract_expiry_from_item(item)
+            if expiry and expiry not in expiries:
+                expiries.append(expiry)
+
+        self._log("detected_expiries", expiries[:10])
+        return expiries[0] if expiries else None
+
+    def _rows_to_df(self, items: list, expiry_filter=None) -> pd.DataFrame:
+        rows = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            strike = item.get("strikePrice")
+            item_expiry = self._extract_expiry_from_item(item)
+
+            if expiry_filter is not None and item_expiry != expiry_filter:
+                continue
+
+            ce = item.get("CE")
+            if isinstance(ce, dict):
+                rows.append({
+                    "strikePrice": strike,
+                    "OPTION_TYP": "CE",
+                    "lastPrice": ce.get("lastPrice", 0),
+                    "openInterest": ce.get("openInterest", 0),
+                    "changeinOI": ce.get("changeinOpenInterest", 0),
+                    "impliedVolatility": ce.get("impliedVolatility", 0),
+                    "totalTradedVolume": ce.get("totalTradedVolume", 0),
+                    "IV": ce.get("impliedVolatility", 0),
+                    "VOLUME": ce.get("totalTradedVolume", 0),
+                    "OPEN_INT": ce.get("openInterest", 0),
+                    "STRIKE_PR": strike,
+                    "LAST_PRICE": ce.get("lastPrice", 0),
+                    "EXPIRY_DT": ce.get("expiryDate", item_expiry),
+                })
+
+            pe = item.get("PE")
+            if isinstance(pe, dict):
+                rows.append({
+                    "strikePrice": strike,
+                    "OPTION_TYP": "PE",
+                    "lastPrice": pe.get("lastPrice", 0),
+                    "openInterest": pe.get("openInterest", 0),
+                    "changeinOI": pe.get("changeinOpenInterest", 0),
+                    "impliedVolatility": pe.get("impliedVolatility", 0),
+                    "totalTradedVolume": pe.get("totalTradedVolume", 0),
+                    "IV": pe.get("impliedVolatility", 0),
+                    "VOLUME": pe.get("totalTradedVolume", 0),
+                    "OPEN_INT": pe.get("openInterest", 0),
+                    "STRIKE_PR": strike,
+                    "LAST_PRICE": pe.get("lastPrice", 0),
+                    "EXPIRY_DT": pe.get("expiryDate", item_expiry),
+                })
+
+        df = pd.DataFrame(rows)
+        self._log("rows_to_df", f"expiry_filter={expiry_filter}", f"row_count={len(df)}")
+        return df
 
     def fetch_option_chain(self, symbol="NIFTY") -> pd.DataFrame:
         symbol = symbol.upper().strip()
 
-        expiries = self._get_expiry_dates(symbol)
-
-        if not expiries:
-            print("Option chain download error: could not fetch expiry dates")
+        data = self._get_legacy_chain_json(symbol)
+        if not data:
+            print("Option chain download error: empty or blocked NSE response")
             return pd.DataFrame()
 
-        nearest_expiry = expiries[0]
-        df = self._fetch_chain_for_expiry(symbol, nearest_expiry)
+        items = self._extract_rows(data)
+        self._log("raw_item_count", len(items))
 
-        if df.empty:
-            print("Option chain download error: could not fetch option chain data")
+        if not items:
+            print("Option chain download error: could not fetch option chain rows")
             return pd.DataFrame()
 
-        return df
+        nearest_expiry = self._extract_nearest_expiry(items)
 
-    def stream_option_chain(self, symbol="NIFTY", interval=30):
-        while True:
-            df = self.fetch_option_chain(symbol)
-
+        if nearest_expiry is not None:
+            df = self._rows_to_df(items, expiry_filter=nearest_expiry)
             if not df.empty:
-                print("Option chain rows:", len(df))
-                yield df
-            else:
-                print("Option chain unavailable")
+                return df
 
-            time.sleep(interval)
+        df = self._rows_to_df(items, expiry_filter=None)
+        if not df.empty:
+            return df
 
-    def close(self):
-        try:
-            self.session.close()
-        except Exception:
-            pass
+        print("Option chain download error: could not build option chain dataframe")
+        return pd.DataFrame()

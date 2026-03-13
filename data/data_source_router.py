@@ -1,12 +1,13 @@
 """
 Data Source Router
 
-Routes option-chain requests to Zerodha or NSE.
+Routes option-chain requests to Zerodha, NSE, or ICICI.
 Keeps a common interface for the rest of the engine.
 """
 
 from data.zerodha_option_chain import ZerodhaOptionChain
 from data.nse_option_chain_downloader import NSEOptionChainDownloader
+from data.icici_breeze_option_chain import ICICIBreezeOptionChain
 
 
 class DataSourceRouter:
@@ -22,11 +23,14 @@ class DataSourceRouter:
             self.loader = ZerodhaOptionChain()
 
         elif self.source == "NSE":
-            self.loader = NSEOptionChainDownloader()
+            self.loader = NSEOptionChainDownloader(debug=True)
+
+        elif self.source == "ICICI":
+            self.loader = ICICIBreezeOptionChain(debug=True)
 
         else:
             raise ValueError(
-                "Unsupported data source. Use 'ZERODHA' or 'NSE'."
+                "Unsupported data source. Use 'ZERODHA', 'NSE', or 'ICICI'."
             )
 
     def get_option_chain(self, symbol: str):
@@ -40,12 +44,14 @@ class DataSourceRouter:
         if self.source == "NSE":
             return self.loader.fetch_option_chain(symbol)
 
+        if self.source == "ICICI":
+            return self.loader.fetch_option_chain(symbol)
+
         raise ValueError("Invalid source selected")
 
     def close(self):
         """
         Cleanly close any underlying resources.
-        Useful for Playwright-based NSE loader.
         """
 
         if self.loader is not None and hasattr(self.loader, "close"):
