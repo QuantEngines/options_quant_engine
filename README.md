@@ -1,6 +1,6 @@
 # Options Quant Engine
 
-An interactive options analytics and signal-generation engine for Indian index and stock options. The project combines live option-chain ingestion, dealer/gamma/liquidity analytics, ML-assisted move probability scoring, and a research backtesting stack that can generate synthetic historical option chains when cached data is not available.
+An interactive options analytics and signal-generation engine for Indian index and stock options. The project combines live option-chain ingestion, dealer/gamma/liquidity analytics, Greek-enriched market-structure analysis, conservative macro/news overlays, replay tooling, and a research backtesting stack that can generate synthetic historical option chains when cached data is not available.
 
 ## What This Project Does
 
@@ -10,9 +10,9 @@ The engine is built around two workflows:
    - Pulls spot price data with `yfinance`
    - Pulls option-chain data from NSE, Zerodha, or ICICI Breeze
    - Supports index options and stock options such as `RELIANCE`, `SBIN`, and `TCS`
-   - Computes dealer positioning, gamma structure, volatility, liquidity, and flow analytics
+   - Computes dealer positioning, gamma structure, volatility, liquidity, flow, and macro/news diagnostics
    - Produces a directional trade idea with strike, entry, target, stop, quality, and budget-aware sizing
-   - Prints a terminal dashboard with validation, trader view, dealer structure, diagnostics, and ranked strikes
+   - Prints a terminal dashboard with validation, trader view, dealer structure, macro/news regime, diagnostics, and ranked strikes
 
 2. Research workflow via `backtest/backtest_runner.py`
    - Runs single historical backtests or parameter sweeps
@@ -35,8 +35,9 @@ The engine is built around two workflows:
 2. Option-chain data is routed through `data/data_source_router.py`
 3. `engine/trading_engine.py` normalizes the chain and computes all analytics
 4. Strategy modules assign direction, strike, exits, score, and optional lot optimization
-5. Visualization modules print a terminal dashboard
-6. Backtest modules reuse the same trade-generation engine on historical snapshots
+5. Macro/news modules build scheduled-event and headline-derived regime state
+6. Visualization modules print a terminal dashboard
+7. Backtest and replay modules reuse the same trade-generation engine on historical snapshots
 
 ## Features
 
@@ -63,6 +64,12 @@ The engine is built around two workflows:
 - Volatility analytics:
   - volatility regime
   - volatility surface / ATM IV regime
+- Macro/news overlay:
+  - scheduled macro event filter
+  - provider-agnostic headline ingestion
+  - deterministic headline classification
+  - macro/news score aggregation
+  - conservative trade-strength, confirmation, and size adjustments
 - Signal generation:
   - CALL/PUT direction selection
   - strike selection
@@ -79,6 +86,9 @@ The engine is built around two workflows:
   - hybrid rule + ML move probability
 - Research tooling:
   - intraday-style historical replay backtester
+  - replay bias/regression harness
+  - macro/news scenario runner
+  - macro/news smoke harness
   - walk-forward retraining scaffold
   - parameter sweep
   - Monte Carlo reshuffle
@@ -89,14 +99,18 @@ The engine is built around two workflows:
 ```text
 options_quant_engine/
 ├── main.py
+├── smoke_macro_news.py
 ├── requirements.txt
 ├── config/
 ├── data/
 ├── analytics/
+├── macro/
+├── news/
 ├── strategy/
 ├── models/
 ├── engine/
 ├── backtest/
+├── tests/
 ├── visualization/
 └── data_store/
 ```
@@ -130,6 +144,26 @@ Market-structure analytics used by both live trading and backtests.
 #### `engine/`
 
 - `trading_engine.py`: the main decision engine. It normalizes data, calls analytics, blends rule-based and ML signals, computes trade strength, sets exits, and returns the final trade payload.
+
+#### `macro/`
+
+Conservative macro-event and macro/news overlay modules.
+
+- `scheduled_event_risk.py`: scheduled macro event window filter
+- `scope_utils.py`: shared scope normalization for macro/news matching
+- `macro_news_aggregator.py`: compact macro/news regime builder
+- `macro_news_config.py`: grouped macro/news tuning config
+- `engine_adjustments.py`: conservative macro/news trade adjustment policy
+
+#### `news/`
+
+Provider-agnostic headline ingestion and deterministic classification.
+
+- `models.py`: normalized headline records and ingestion state
+- `providers.py`: mock and RSS headline providers
+- `service.py`: stale handling, replay-aware ingestion, neutral fallback
+- `keyword_rules.py`: keyword dictionaries and scoring rules
+- `classifier.py`: deterministic headline classification and scoring
 
 #### `strategy/`
 
@@ -177,6 +211,8 @@ Historical replay and evaluation.
 - `monte_carlo.py`: reshuffled-path robustness analysis
 - `parameter_sweep.py`: grid builder and ranking
 - `walk_forward.py`: walk-forward retraining scaffold
+- `replay_regression.py`: replay bias/regression summary harness
+- `macro_news_scenario_runner.py`: scenario-based macro/news validation runner
 
 #### `visualization/`
 
@@ -191,6 +227,15 @@ Global settings and credentials.
 
 - `settings.py`: thresholds, lot size, capital limits, refresh interval, backtest config, directories, broker env var reads, and provider debug flags
 - `generate_token.py`: helper to exchange a Zerodha request token for an access token
+- `india_macro_schedule.json`: local India macro schedule for the event filter
+- `india_macro_schedule_notes.md`: timing and source assumptions for the schedule
+- `macro_events.example.json`: example generic macro event schedule
+- `mock_headlines.example.json`: local mock headlines for deterministic testing
+- `macro_news_scenarios.json`: mock scenario library for macro/news validation
+
+#### `tests/`
+
+- `test_macro_news_layer.py`: macro/news classification, aggregation, and adjustment coverage
 
 #### `data_store/`
 
@@ -219,10 +264,14 @@ It:
    - rule-based large-move probability
    - ML move probability
    - hybrid move probability
-7. Scores the setup using `strategy/trade_strength.py`
-8. Applies target/stop logic
-9. Optionally reduces lot count if the trade breaches capital constraints
-10. Returns a final trade payload including trader view fields and dashboard fields
+7. Builds a conservative macro/news overlay:
+   - scheduled event risk
+   - headline-based macro regime
+   - confirmation and size adjustments
+8. Scores the setup using `strategy/trade_strength.py`
+9. Applies target/stop logic
+10. Optionally reduces lot count if the trade breaches capital constraints or macro/news sizing cuts apply
+11. Returns a final trade payload including trader view fields and dashboard fields
 
 ## Installation
 
@@ -253,6 +302,25 @@ Canonical replay bias/regression check:
 
 ```bash
 python -m backtest.replay_regression --symbol NIFTY --source ICICI --replay-dir debug_samples
+```
+
+Macro/news smoke check:
+
+```bash
+python smoke_macro_news.py
+```
+
+Macro/news scenario validation:
+
+```bash
+python -m backtest.macro_news_scenario_runner
+python -m backtest.macro_news_scenario_runner --scenario risk_off_geopolitical_burst
+```
+
+Macro/news unit tests:
+
+```bash
+python -m unittest tests/test_macro_news_layer.py
 ```
 
 The regression harness summarizes:
@@ -322,6 +390,16 @@ NSE_DEBUG=false
 ICICI_DEBUG=false
 ```
 
+Optional macro/news settings:
+
+```bash
+MACRO_EVENT_FILTER_ENABLED=true
+MACRO_EVENT_SCHEDULE_FILE=config/india_macro_schedule.json
+HEADLINE_PROVIDER=MOCK
+HEADLINE_MOCK_FILE=config/mock_headlines.example.json
+HEADLINE_RSS_URLS=
+```
+
 ### Runtime credential prompts
 
 If you choose `ZERODHA` or `ICICI` in `main.py`, the app will prompt for the required broker credentials. Press Enter to reuse values already loaded from `.env` or your shell environment.
@@ -374,6 +452,8 @@ Then the engine enters a refresh loop and prints:
 - spot validation
 - spot price
 - option-chain validation
+- macro event risk
+- macro / news regime
 - trader view
 - dealer positioning dashboard
 - quant trade signal
@@ -450,6 +530,9 @@ Typical fields include:
 - large move probability
 - ML move probability
 - hybrid move probability
+- macro regime
+- macro adjustment score
+- macro position-size multiplier / suggested lots
 
 ### Dealer Dashboard
 
@@ -463,6 +546,7 @@ Typical fields include:
 - intraday gamma state
 - volatility regime / ATM IV regime
 - flow and smart-money state
+- macro regime and macro/news diagnostics
 - gamma event
 - walls, voids, and vacuum zones
 - dealer liquidity map
@@ -473,6 +557,7 @@ Typical fields include:
 The live output also includes:
 
 - option-chain validation stats such as row count, CE/PE counts, priced rows, and IV rows
+- macro/news diagnostic fields such as macro regime, event risk, vol shock, news confidence, and regime reasons
 - a compact diagnostics block with supporting analytics
 - a ranked strikes table for the currently selected expiry
 
@@ -485,12 +570,14 @@ The live output also includes:
 - NSE endpoints can change or rate-limit requests.
 - ICICI expiry resolution uses ICICI metadata and configured fallbacks; manual expiry overrides are optional, not required.
 - For stock options, spot lookup uses Yahoo Finance NSE cash tickers such as `.NS`, while broker requests continue to use the clean underlying code such as `RELIANCE`.
-- Some missing Greeks are approximated in `engine/trading_engine.py` when a source does not provide them.
+- Missing live-provider Greeks can be computed via the internal Black-Scholes Greek engine, subject to expiry and IV quality.
 - Some IV values may be estimated from market inputs when the live provider does not supply usable implied volatility.
+- The macro/news layer is intentionally conservative; it is a filter and modifier, not a primary signal generator.
+- RSS ingestion is foundational and deterministic, but entity/symbol resolution is still intentionally lightweight.
 - Historical backtests may be based on synthetic option chains rather than real archived option-chain snapshots.
 - The walk-forward module is a scaffold, not a complete training pipeline.
 - Visualization is terminal-based; there is no web UI in the current codebase.
-- There is no formal test suite in this repository yet.
+- Current automated coverage focuses on the macro/news layer and scenario behavior rather than the full engine end-to-end.
 
 ## Suggested Workflow
 
@@ -502,6 +589,7 @@ The live output also includes:
 4. For stock options, choose `STOCK` and then enter the real underlying symbol
 5. Start with `NSE` if you want a public data path, or `ICICI` / `ZERODHA` if you want broker-backed live data
 6. Observe trader view, dashboard output, and refresh behavior
+7. Save replay snapshots during market hours for later after-hours regression checks
 
 ### For research
 
@@ -510,12 +598,13 @@ The live output also includes:
 3. Review cached data generated under `data_store/`
 4. Use parameter sweep to compare persistence / hold-bar settings
 5. Extend walk-forward retraining if you want a fuller ML workflow
+6. Use replay and macro/news scenario runners before changing thresholds
 
 ## Possible Next Improvements
 
 - add a proper CLI with argument flags instead of interactive prompts
 - separate live data adapters from research data generators
-- add unit tests for analytics and trade generation
+- expand automated tests from macro/news scenarios into broader engine replay regression
 - persist trade logs to CSV or a database
 - add model training and serialization workflow
 - build a richer dashboard or notebook layer for research
