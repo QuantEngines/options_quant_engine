@@ -29,6 +29,7 @@ from data.historical_iv_surface import (
 YF_SYMBOL_MAP = {
     "NIFTY": "^NSEI",
     "BANKNIFTY": "^NSEBANK",
+    "FINNIFTY": "^NSEFIN",
 }
 
 
@@ -93,7 +94,15 @@ def _black_scholes_price(spot, strike, t, sigma, option_type):
 
 
 def _symbol_to_yfinance(symbol: str) -> str:
-    return YF_SYMBOL_MAP.get(symbol.upper().strip(), symbol)
+    normalized = str(symbol or "").upper().strip()
+
+    if normalized in YF_SYMBOL_MAP:
+        return YF_SYMBOL_MAP[normalized]
+
+    if normalized.startswith("^") or "." in normalized:
+        return normalized
+
+    return f"{normalized}.NS"
 
 
 def _flatten_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:

@@ -8,14 +8,26 @@ import yfinance as yf
 IST_TIMEZONE = "Asia/Kolkata"
 
 
+def normalize_underlying_symbol(symbol: str) -> str:
+    return str(symbol or "").upper().strip()
+
+
 def _normalize_symbol(symbol: str) -> str:
+    normalized = normalize_underlying_symbol(symbol)
     ticker_map = {
         "NIFTY": "^NSEI",
         "NIFTY50": "^NSEI",
         "BANKNIFTY": "^NSEBANK",
         "FINNIFTY": "^NSEFIN",
     }
-    return ticker_map.get(symbol.upper().strip(), symbol)
+    if normalized in ticker_map:
+        return ticker_map[normalized]
+
+    if normalized.startswith("^") or "." in normalized:
+        return normalized
+
+    # NSE cash equities are typically exposed via the .NS Yahoo Finance suffix.
+    return f"{normalized}.NS"
 
 
 def _to_ist_timestamp(index_value):
@@ -85,7 +97,8 @@ def get_spot_snapshot(symbol: str) -> dict:
     - lookback_avg_range_pct
     """
 
-    ticker = _normalize_symbol(symbol)
+    normalized_symbol = normalize_underlying_symbol(symbol)
+    ticker = _normalize_symbol(normalized_symbol)
     data = yf.Ticker(ticker)
 
     intraday = data.history(period="5d", interval="5m", auto_adjust=False)
@@ -126,7 +139,7 @@ def get_spot_snapshot(symbol: str) -> dict:
     lookback_avg_range_pct = _compute_lookback_avg_range_pct(daily)
 
     snapshot = {
-        "symbol": symbol.upper().strip(),
+        "symbol": normalized_symbol,
         "ticker": ticker,
         "spot": round(spot, 4),
         "day_open": round(day_open, 4) if day_open is not None else None,

@@ -65,6 +65,7 @@ def _load_breeze_connect_class():
 class ICICIBreezeOptionChain:
     SECURITY_MASTER_URL = "https://directlink.icicidirect.com/NewSecurityMaster/SecurityMaster.zip"
     SECURITY_MASTER_MEMBER = "FONSEScripMaster.txt"
+    INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
 
     def __init__(self, debug=None):
         self.debug = ICICI_DEBUG if debug is None else debug
@@ -77,6 +78,50 @@ class ICICIBreezeOptionChain:
 
     def _format_expiry(self, dt: datetime) -> str:
         return dt.strftime("%Y-%m-%dT06:00:00.000Z")
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        normalized = str(symbol or "").upper().strip()
+        for prefix in ("NSE:", "NFO:"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix):]
+        for suffix in (".NS", ".BO"):
+            if normalized.endswith(suffix):
+                normalized = normalized[:-len(suffix)]
+        return normalized.strip()
+
+    def _symbol_aliases(self, symbol: str) -> list[str]:
+        normalized = self._normalize_symbol(symbol)
+        aliases = [normalized]
+
+        if "&" in normalized:
+            aliases.append(normalized.replace("&", "AND"))
+            aliases.append(normalized.replace("&", ""))
+
+        if "-" in normalized:
+            aliases.append(normalized.replace("-", ""))
+
+        cleaned = []
+        for alias in aliases:
+            alias = alias.strip()
+            if alias and alias not in cleaned:
+                cleaned.append(alias)
+
+        return cleaned
+
+    def _is_index_symbol(self, symbol: str) -> bool:
+        return self._normalize_symbol(symbol) in self.INDEX_SYMBOLS
+
+    def _last_weekday_of_month(self, year: int, month: int, weekday: int) -> datetime:
+        if month == 12:
+            next_month = datetime(year + 1, 1, 1)
+        else:
+            next_month = datetime(year, month + 1, 1)
+
+        candidate = next_month - timedelta(days=1)
+        while candidate.weekday() != weekday:
+            candidate -= timedelta(days=1)
+
+        return candidate
 
     def _norm_cdf(self, x: float) -> float:
         return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
@@ -236,9 +281,9 @@ class ICICIBreezeOptionChain:
         return None
 
     def _match_symbol_in_master(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        symbol = symbol.upper().strip()
+        aliases = self._symbol_aliases(symbol)
         symbol_columns = [
-            "stock_code", "stockcode", "symbol", "underlying", "underlying_name",
+            "exchangecode", "exchange_code", "stock_code", "stockcode", "symbol", "underlying", "underlying_name",
             "underlying_symbol", "exchange_stock_code", "short_name", "stock_name",
             "shortname", "assetname", "companyname"
         ]
@@ -248,7 +293,24 @@ class ICICIBreezeOptionChain:
             if col not in df.columns:
                 continue
             values = df[col].astype(str).str.upper().str.strip()
-            mask = mask | values.eq(symbol)
+            for alias in aliases:
+                mask = mask | values.eq(alias)
+
+        if mask.any():
+            return df.loc[mask].copy()
+
+        # Fallback for security master variants that embed the underlying symbol
+        # in a longer display name.
+        fuzzy_columns = [
+            "underlying_name", "stock_name", "companyname", "short_name", "assetname"
+        ]
+        for col in fuzzy_columns:
+            if col not in df.columns:
+                continue
+            values = df[col].astype(str).str.upper().str.strip()
+            for alias in aliases:
+                if len(alias) >= 4:
+                    mask = mask | values.str.contains(alias, regex=False, na=False)
 
         return df.loc[mask].copy()
 
@@ -274,33 +336,87 @@ class ICICIBreezeOptionChain:
         return filtered
 
     def _generate_dynamic_expiries(self, symbol: str, count: int = 6):
-        weekday_map = {
-            "NIFTY": 1,
-            "BANKNIFTY": 1,
-            "FINNIFTY": 1,
-        }
-        target_weekday = weekday_map.get(symbol.upper().strip(), 3)
         now_utc = datetime.utcnow()
-        current_date = now_utc.date()
         expiries = []
 
-        while len(expiries) < count:
-            days_ahead = (target_weekday - current_date.weekday()) % 7
-            if days_ahead == 0 and now_utc.hour >= 6:
-                days_ahead = 7
+        if self._is_index_symbol(symbol):
+            target_weekday = 1  # Tuesday
+            current_date = now_utc.date()
 
-            expiry_date = current_date + timedelta(days=days_ahead)
-            expiries.append(
-                self._format_expiry(datetime.combine(expiry_date, datetime.min.time()))
+            while len(expiries) < count:
+                days_ahead = (target_weekday - current_date.weekday()) % 7
+                if days_ahead == 0 and now_utc.hour >= 6:
+                    days_ahead = 7
+
+                expiry_date = current_date + timedelta(days=days_ahead)
+                expiries.append(
+                    self._format_expiry(datetime.combine(expiry_date, datetime.min.time()))
+                )
+                current_date = expiry_date + timedelta(days=1)
+
+            return expiries
+
+        # Individual stock options are monthly contracts; use the last Tuesday
+        # of the month as the fallback expiry schedule.
+        month_cursor = datetime(now_utc.year, now_utc.month, 1)
+
+        while len(expiries) < count:
+            expiry_date = self._last_weekday_of_month(
+                year=month_cursor.year,
+                month=month_cursor.month,
+                weekday=1,  # Tuesday
             )
-            current_date = expiry_date + timedelta(days=1)
+
+            if expiry_date > now_utc:
+                expiries.append(self._format_expiry(expiry_date))
+
+            if month_cursor.month == 12:
+                month_cursor = datetime(month_cursor.year + 1, 1, 1)
+            else:
+                month_cursor = datetime(month_cursor.year, month_cursor.month + 1, 1)
 
         return expiries
 
-    def _fetch_market_expiries(self, symbol: str):
+    def _extract_request_symbols_from_master(self, df: pd.DataFrame, input_symbol: str) -> list[str]:
+        candidates = []
+
+        for symbol in self._symbol_aliases(input_symbol):
+            if symbol not in candidates:
+                candidates.append(symbol)
+
+        code_columns = [
+            "exchangecode",
+            "exchange_code",
+            "underlying_symbol",
+            "underlying",
+            "exchange_stock_code",
+            "stock_code",
+            "stockcode",
+            "symbol",
+            "shortname",
+            "short_name",
+        ]
+
+        for col in code_columns:
+            if col not in df.columns:
+                continue
+
+            for value in df[col].dropna().astype(str).tolist():
+                normalized = self._normalize_symbol(value)
+                if not normalized or " " in normalized:
+                    continue
+                if normalized not in candidates:
+                    candidates.append(normalized)
+
+        return candidates
+
+    def _fetch_market_metadata(self, symbol: str):
         master_df = self._load_security_master()
         if master_df.empty:
-            return []
+            return {
+                "expiries": [],
+                "request_symbols": self._symbol_aliases(symbol),
+            }
 
         normalized = self._normalize_master_columns(master_df)
         symbol_rows = self._match_symbol_in_master(normalized, symbol)
@@ -313,8 +429,14 @@ class ICICIBreezeOptionChain:
                 expiries.append(expiry)
 
         expiries.sort(key=lambda value: datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.000Z"))
+        request_symbols = self._extract_request_symbols_from_master(option_rows, symbol)
+
         self._log("icici_master_expiry_candidates", f"symbol={symbol}", f"candidates={expiries[:10]}")
-        return expiries
+        self._log("icici_master_request_symbols", f"symbol={symbol}", f"candidates={request_symbols[:10]}")
+        return {
+            "expiries": expiries,
+            "request_symbols": request_symbols,
+        }
 
     def _init_client(self):
         BreezeConnect = _load_breeze_connect_class()
@@ -342,9 +464,10 @@ class ICICIBreezeOptionChain:
         self._log("Breeze session initialized")
 
     def _resolve_expiry_candidates(self, symbol: str):
-        symbol = symbol.upper().strip()
+        symbol = self._normalize_symbol(symbol)
         cleaned = []
-        market_candidates = self._fetch_market_expiries(symbol)
+        metadata = self._fetch_market_metadata(symbol)
+        market_candidates = metadata.get("expiries", [])
         manual_candidates = ICICI_SYMBOL_EXPIRY_CANDIDATES.get(symbol, [])
 
         for expiry in market_candidates + manual_candidates:
@@ -359,6 +482,19 @@ class ICICIBreezeOptionChain:
                 cleaned.append(expiry)
 
         self._log("resolved_expiry_candidates", f"symbol={symbol}", f"candidates={cleaned}")
+        return cleaned
+
+    def _resolve_request_symbols(self, symbol: str) -> list[str]:
+        symbol = self._normalize_symbol(symbol)
+        metadata = self._fetch_market_metadata(symbol)
+        request_symbols = metadata.get("request_symbols", [])
+        cleaned = []
+
+        for candidate in request_symbols + self._symbol_aliases(symbol):
+            if candidate and candidate not in cleaned:
+                cleaned.append(candidate)
+
+        self._log("resolved_request_symbols", f"symbol={symbol}", f"candidates={cleaned}")
         return cleaned
 
     def _preview_response(self, response, label):
@@ -487,56 +623,76 @@ class ICICIBreezeOptionChain:
             df = df.sort_values(["strikePrice", "OPTION_TYP"]).reset_index(drop=True)
         return df
 
-    def _fetch_for_expiry(self, symbol: str, expiry_date: str):
-        self._log("fetching option chain", f"symbol={symbol}", f"expiry={expiry_date}")
+    def _fetch_for_expiry(self, symbol: str, expiry_date: str, request_symbols: list[str]):
+        for request_symbol in request_symbols:
+            self._log(
+                "fetching option chain",
+                f"symbol={symbol}",
+                f"request_symbol={request_symbol}",
+                f"expiry={expiry_date}",
+            )
 
-        call_resp = self.breeze.get_option_chain_quotes(
-            stock_code=symbol,
-            exchange_code="NFO",
-            product_type="options",
-            expiry_date=expiry_date,
-            right="call",
-            strike_price="",
-        )
+            call_resp = self.breeze.get_option_chain_quotes(
+                stock_code=request_symbol,
+                exchange_code="NFO",
+                product_type="options",
+                expiry_date=expiry_date,
+                right="call",
+                strike_price="",
+            )
 
-        put_resp = self.breeze.get_option_chain_quotes(
-            stock_code=symbol,
-            exchange_code="NFO",
-            product_type="options",
-            expiry_date=expiry_date,
-            right="put",
-            strike_price="",
-        )
+            put_resp = self.breeze.get_option_chain_quotes(
+                stock_code=request_symbol,
+                exchange_code="NFO",
+                product_type="options",
+                expiry_date=expiry_date,
+                right="put",
+                strike_price="",
+            )
 
-        call_rows = self._extract_success_rows(call_resp, label=f"call_{expiry_date}")
-        put_rows = self._extract_success_rows(put_resp, label=f"put_{expiry_date}")
+            call_rows = self._extract_success_rows(call_resp, label=f"call_{request_symbol}_{expiry_date}")
+            put_rows = self._extract_success_rows(put_resp, label=f"put_{request_symbol}_{expiry_date}")
 
-        self._log(
-            "expiry_result",
-            expiry_date,
-            f"call_rows={len(call_rows)}",
-            f"put_rows={len(put_rows)}"
-        )
+            self._log(
+                "expiry_result",
+                expiry_date,
+                f"request_symbol={request_symbol}",
+                f"call_rows={len(call_rows)}",
+                f"put_rows={len(put_rows)}"
+            )
 
-        all_rows = call_rows + put_rows
-        if not all_rows:
-            return pd.DataFrame()
+            all_rows = call_rows + put_rows
+            if not all_rows:
+                continue
 
-        df = self._normalize_rows(all_rows)
-        if df.empty:
-            self._log("normalization_produced_empty_df", f"expiry={expiry_date}")
-        self._log("normalized_rows", len(df), f"expiry={expiry_date}")
-        return df
+            df = self._normalize_rows(all_rows)
+            if df.empty:
+                self._log(
+                    "normalization_produced_empty_df",
+                    f"request_symbol={request_symbol}",
+                    f"expiry={expiry_date}",
+                )
+                continue
+
+            self._log("normalized_rows", len(df), f"request_symbol={request_symbol}", f"expiry={expiry_date}")
+            return df
+
+        return pd.DataFrame()
 
     def fetch_option_chain(self, symbol="NIFTY"):
-        symbol = symbol.upper().strip()
+        symbol = self._normalize_symbol(symbol)
         expiry_candidates = self._resolve_expiry_candidates(symbol)
+        request_symbols = self._resolve_request_symbols(symbol)
 
         last_errors = []
 
         for expiry_date in expiry_candidates:
             try:
-                df = self._fetch_for_expiry(symbol=symbol, expiry_date=expiry_date)
+                df = self._fetch_for_expiry(
+                    symbol=symbol,
+                    expiry_date=expiry_date,
+                    request_symbols=request_symbols,
+                )
                 if df is not None and not df.empty:
                     self._log("selected_expiry", expiry_date, f"rows={len(df)}")
                     return df

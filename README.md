@@ -9,6 +9,7 @@ The engine is built around two workflows:
 1. Live terminal workflow via `main.py`
    - Pulls spot price data with `yfinance`
    - Pulls option-chain data from NSE, Zerodha, or ICICI Breeze
+   - Supports index options and stock options such as `RELIANCE`, `SBIN`, and `TCS`
    - Computes dealer positioning, gamma structure, volatility, liquidity, and flow analytics
    - Produces a directional trade idea with strike, entry, target, stop, quality, and budget-aware sizing
    - Prints a terminal dashboard with validation, trader view, dealer structure, diagnostics, and ranked strikes
@@ -338,6 +339,7 @@ python main.py
 You will be prompted for:
 
 - symbol: `NIFTY / BANKNIFTY / FINNIFTY / STOCK`
+- if you choose `STOCK`, the app will prompt for the actual stock-option underlying symbol such as `RELIANCE`, `SBIN`, or `TCS`
 - data source: `NSE`, `ZERODHA`, or `ICICI`
 - broker credentials when `ZERODHA` or `ICICI` is selected
 - whether budget constraints should be applied
@@ -453,11 +455,12 @@ The live output also includes:
 ## Assumptions and Limitations
 
 - The live engine is analytics-driven and prints trade ideas; it does not place broker orders.
-- `main.py` accepts `STOCK` as input in the prompt, but actual symbol support depends on the data source and whether the symbol resolves correctly in `yfinance` and the option-chain loader.
+- `main.py` accepts `STOCK` as a shortcut, then prompts for the actual underlying symbol; live stock-option support depends on whether that symbol is available from the selected provider.
 - Zerodha support requires valid Kite credentials and instrument access.
 - ICICI support requires valid Breeze credentials and a live session token.
 - NSE endpoints can change or rate-limit requests.
 - ICICI expiry resolution uses ICICI metadata and configured fallbacks; manual expiry overrides are optional, not required.
+- For stock options, spot lookup uses Yahoo Finance NSE cash tickers such as `.NS`, while broker requests continue to use the clean underlying code such as `RELIANCE`.
 - Some missing Greeks are approximated in `engine/trading_engine.py` when a source does not provide them.
 - Some IV values may be estimated from market inputs when the live provider does not supply usable implied volatility.
 - Historical backtests may be based on synthetic option chains rather than real archived option-chain snapshots.
@@ -472,8 +475,9 @@ The live output also includes:
 1. Configure dependencies
 2. Create `.env` from `.env.example` or be ready to enter broker credentials interactively
 3. Run `python main.py`
-4. Start with `NSE` if you want a public data path, or `ICICI` / `ZERODHA` if you want broker-backed live data
-5. Observe trader view, dashboard output, and refresh behavior
+4. For stock options, choose `STOCK` and then enter the real underlying symbol
+5. Start with `NSE` if you want a public data path, or `ICICI` / `ZERODHA` if you want broker-backed live data
+6. Observe trader view, dashboard output, and refresh behavior
 
 ### For research
 

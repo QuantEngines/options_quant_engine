@@ -114,6 +114,28 @@ def choose_data_source():
     return DEFAULT_DATA_SOURCE
 
 
+def choose_underlying_symbol():
+    raw_symbol = input(
+        "Enter symbol (NIFTY / BANKNIFTY / FINNIFTY / STOCK): "
+    ).strip().upper()
+
+    if not raw_symbol:
+        return DEFAULT_SYMBOL
+
+    if raw_symbol != "STOCK":
+        return raw_symbol
+
+    stock_symbol = input(
+        "Enter stock option underlying symbol (example: RELIANCE / SBIN / TCS): "
+    ).strip().upper()
+
+    if stock_symbol:
+        return stock_symbol
+
+    print(f"No stock symbol entered. Defaulting to {DEFAULT_SYMBOL}.")
+    return DEFAULT_SYMBOL
+
+
 def choose_budget_mode():
     print("\nApply budget constraint in trade decision?")
     print("1. Yes")
@@ -424,9 +446,7 @@ def print_diagnostics(trade):
 
 
 def main():
-    symbol = input(
-        "Enter symbol (NIFTY / BANKNIFTY / FINNIFTY / STOCK): "
-    ).strip().upper() or DEFAULT_SYMBOL
+    symbol = choose_underlying_symbol()
 
     source = choose_data_source()
     prompt_provider_credentials(source)
