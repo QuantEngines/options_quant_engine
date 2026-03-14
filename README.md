@@ -24,6 +24,8 @@ The current repository does not contain a live order-routing engine. Broker inte
 
 ### Environment
 
+macOS / Linux:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -31,7 +33,38 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+Windows PowerShell:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+Windows Command Prompt:
+
+```bat
+py -3 -m venv .venv
+.venv\Scripts\activate.bat
+pip install -r requirements.txt
+copy .env.example .env
+```
+
 Fill in provider credentials only for the routes you want to use.
+
+Notes:
+
+- the commands elsewhere in this README are written in Unix-style form because
+  the repo has primarily been developed on macOS
+- on Windows, once the virtual environment is activated, the Python commands
+  are usually the same, for example `python main.py` and
+  `streamlit run app/streamlit_app.py`
+- if PowerShell blocks activation, you may need:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
 
 ### Terminal Engine
 
@@ -319,13 +352,11 @@ The maintained research note source is:
 
 - [quant_note_trade_signal_logic.md](/Users/pramitdutta/Desktop/options_quant_engine/research/quant_note_trade_signal_logic.md)
 
-The polished export is:
+Local rendered research-note artifacts are generated under `documentation/`, but
+that folder is intentionally excluded from git for now.
 
-- [quant_note_trade_signal_logic_polished.pdf](/Users/pramitdutta/Desktop/options_quant_engine/documentation/research_notes/quant_note_trade_signal_logic_polished.pdf)
-
-Published research-note artifacts live under:
-
-- [research_notes](/Users/pramitdutta/Desktop/options_quant_engine/documentation/research_notes)
+If you want to regenerate local publishable artifacts, use the markdown sources
+under `research/` and `documentation/research_notes/`.
 
 ## Testing
 

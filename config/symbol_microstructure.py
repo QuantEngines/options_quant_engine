@@ -2,6 +2,8 @@
 Symbol-aware live trading thresholds for intraday microstructure logic.
 """
 
+from __future__ import annotations
+
 DEFAULT_MICROSTRUCTURE_CONFIG = {
     "flip_buffer_points": 25.0,
     "wall_proximity_points": 50.0,
