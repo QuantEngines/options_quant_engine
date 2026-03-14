@@ -1,0 +1,19 @@
+{
+  "name": "macro_overlay_v1",
+  "version": "1.0.0",
+  "description": "Candidate pack with slightly stronger macro/global caution penalties.",
+  "parent": "baseline_v1",
+  "tags": [
+    "candidate",
+    "macro"
+  ],
+  "metadata": {
+    "state": "candidate",
+    "owner": "research"
+  },
+  "overrides": {
+    "macro_news.adjustment.lockdown_adjustment_score": -14,
+    "global_risk.core.risk_adjustment_risk_off": -5,
+    "global_risk.core.risk_adjustment_extreme": -7
+  }
+}

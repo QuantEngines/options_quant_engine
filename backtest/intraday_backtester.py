@@ -1,12 +1,9 @@
 """
-Intraday Backtester
+Historical bar-based backtester.
 
-State-of-the-art research backtester:
-- signal persistence
-- time-based exits
-- cost-aware fills
-- budget-aware optional mode
-- proper trade log
+The default historical builder creates one synthetic snapshot per trading
+day, so persistence and holding periods are measured in bars unless a
+finer-grained dataset is supplied.
 """
 
 from config.settings import (
@@ -14,8 +11,11 @@ from config.settings import (
     BACKTEST_MAX_HOLD_BARS,
     BACKTEST_ENABLE_BUDGET,
     BACKTEST_STARTING_CAPITAL,
+    TARGET_PROFIT_PERCENT,
+    STOP_LOSS_PERCENT,
 )
 from data.historical_option_chain import load_option_chain
+from data.expiry_resolver import filter_option_chain_by_expiry, resolve_selected_expiry
 from engine.trading_engine import generate_trade
 from backtest.pnl_engine import calculate_trade_pnl
 from backtest.performance_metrics import compute_performance_metrics
@@ -52,6 +52,8 @@ def run_intraday_backtest(
     years: int = 1,
     signal_persistence: int = BACKTEST_SIGNAL_PERSISTENCE,
     max_hold_bars: int = BACKTEST_MAX_HOLD_BARS,
+    target_profit_percent: float = TARGET_PROFIT_PERCENT,
+    stop_loss_percent: float = STOP_LOSS_PERCENT,
 ):
     historical_df = load_option_chain(symbol=symbol, years=years)
 
@@ -76,17 +78,28 @@ def run_intraday_backtest(
     direction_count = 0
 
     for idx, (ts, snapshot) in enumerate(grouped):
-        option_chain = snapshot.copy()
-        if option_chain.empty:
+        snapshot_chain = snapshot.copy()
+        if snapshot_chain.empty:
             continue
 
-        spot = float(option_chain["spot"].iloc[0]) if "spot" in option_chain.columns else float(option_chain["strikePrice"].median())
+        signal_expiry = resolve_selected_expiry(snapshot_chain)
+        signal_chain = filter_option_chain_by_expiry(snapshot_chain, signal_expiry)
+        if signal_chain is None or signal_chain.empty:
+            continue
+
+        spot = float(signal_chain["spot"].iloc[0]) if "spot" in signal_chain.columns else float(signal_chain["strikePrice"].median())
 
         if open_trade is not None:
             open_trade["bars_held"] += 1
+            exit_chain = snapshot_chain.copy()
+            selected_expiry = open_trade["trade"].get("selected_expiry")
+            if selected_expiry:
+                filtered_exit_chain = filter_option_chain_by_expiry(exit_chain, selected_expiry)
+                if filtered_exit_chain is not None and not filtered_exit_chain.empty:
+                    exit_chain = filtered_exit_chain
 
             should_exit = False
-            pnl_preview = calculate_trade_pnl(open_trade["trade"], option_chain)
+            pnl_preview = calculate_trade_pnl(open_trade["trade"], exit_chain)
             exit_reason = pnl_preview.get("exit_reason")
 
             if exit_reason in ["TARGET_HIT", "STOP_LOSS_HIT"]:
@@ -97,25 +110,29 @@ def run_intraday_backtest(
                 should_exit = True
 
             if should_exit:
-                trade_log.append(_finalize_open_trade(open_trade, option_chain, ts))
+                trade_log.append(_finalize_open_trade(open_trade, exit_chain, ts))
                 open_trade = None
 
         if open_trade is not None:
-            previous_chain = option_chain.copy()
+            previous_chain = signal_chain.copy()
             continue
 
         trade = generate_trade(
             symbol=symbol,
             spot=spot,
-            option_chain=option_chain,
+            option_chain=signal_chain,
             previous_chain=previous_chain,
             apply_budget_constraint=BACKTEST_ENABLE_BUDGET,
-            backtest_mode=True
+            backtest_mode=True,
+            target_profit_percent=target_profit_percent,
+            stop_loss_percent=stop_loss_percent,
         )
 
         if trade is None:
-            previous_chain = option_chain.copy()
+            previous_chain = signal_chain.copy()
             continue
+
+        trade["selected_expiry"] = signal_expiry
 
         direction = trade.get("direction")
 
@@ -136,7 +153,7 @@ def run_intraday_backtest(
                 "bars_held": 0
             }
 
-        previous_chain = option_chain.copy()
+        previous_chain = signal_chain.copy()
 
     metrics = compute_performance_metrics(
         trade_log,
@@ -146,6 +163,7 @@ def run_intraday_backtest(
     result = {
         "symbol": symbol,
         "years": years,
+        "bar_interval": "1d_default_synthetic",
         "total_snapshots": total_snapshots,
         "total_rows": int(len(historical_df)),
         "total_trades": len(trade_log),

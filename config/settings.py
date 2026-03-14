@@ -218,6 +218,15 @@ MACRO_NEWS_RISK_BIAS_THRESHOLD = float(os.getenv("MACRO_NEWS_RISK_BIAS_THRESHOLD
 
 
 # ================================
+# Global Market Risk Feature Data
+# ================================
+
+GLOBAL_MARKET_DATA_ENABLED = os.getenv("GLOBAL_MARKET_DATA_ENABLED", "true").strip().lower() == "true"
+GLOBAL_MARKET_LOOKBACK_DAYS = int(os.getenv("GLOBAL_MARKET_LOOKBACK_DAYS", "90"))
+GLOBAL_MARKET_STALE_DAYS = int(os.getenv("GLOBAL_MARKET_STALE_DAYS", "5"))
+
+
+# ================================
 # Logging Configuration
 # ================================
 

@@ -1,0 +1,22 @@
+{
+  "name": "overnight_focus_v1",
+  "version": "1.0.0",
+  "description": "Candidate pack biased toward more conservative overnight selection.",
+  "parent": "baseline_v1",
+  "tags": [
+    "candidate",
+    "overnight"
+  ],
+  "metadata": {
+    "state": "candidate",
+    "owner": "research"
+  },
+  "overrides": {
+    "global_risk.core.overnight_gap_block_threshold": 64,
+    "gamma_vol_acceleration.core.overnight_watch_threshold": 3,
+    "dealer_pressure.core.overnight_watch_threshold": 3,
+    "option_efficiency.core.overnight_watch_threshold": 2,
+    "evaluation_thresholds.selection.require_overnight_hold_allowed": true,
+    "evaluation_thresholds.selection.global_risk_score_cap": 70.0
+  }
+}

@@ -1,1206 +1,53 @@
 """
-Refactored Trading Engine
+Trading engine orchestration layer.
 
-Adds:
-- Dealer Liquidity Map Predictor
-- Model integration from models/
-- Hybrid move probability
-- Clean liquidity vacuum zone formatting
-- Proper ML move probability wiring
-- Optional budget-aware trade sizing
-- Separate backtest mode with lower trade threshold
-
-Enhancements:
-- Continuous large-move probability methodology
-- Rule/ML probability diagnostics
-- Better calibrated hybrid move probability
-- Real intraday range feature using spot session data
-- Engine-side data quality gating
-- Confirmation filter layer for live option-buying quality
-- Strike ranking and shortlist support
+Public APIs remain stable here while the bulk of pure helper logic lives in
+`engine.trading_engine_support`.
 """
 
-import pandas as pd
+from __future__ import annotations
 
-from config.signal_policy import (
-    DIRECTION_MIN_MARGIN,
-    DIRECTION_MIN_SCORE,
-    DIRECTION_VOTE_WEIGHTS,
-)
-from config.symbol_microstructure import get_microstructure_config
 from config.settings import (
-    LOT_SIZE,
-    NUMBER_OF_LOTS,
-    MAX_CAPITAL_PER_TRADE,
     BACKTEST_MIN_TRADE_STRENGTH,
-    MACRO_EVENT_STRONG_WATCH_RISK_THRESHOLD,
+    LOT_SIZE,
     MACRO_EVENT_WATCH_RISK_THRESHOLD,
+    MAX_CAPITAL_PER_TRADE,
+    NUMBER_OF_LOTS,
+    STOP_LOSS_PERCENT,
+    TARGET_PROFIT_PERCENT,
 )
-
-from strategy.exit_model import calculate_exit
-from strategy.trade_strength import compute_trade_strength
-from strategy.budget_optimizer import optimize_lots
-from strategy.confirmation_filters import compute_confirmation_filters
-from strategy.strike_selector import select_best_strike
-
-from analytics import gamma_exposure as gamma_exposure_mod
-from analytics import gamma_flip as gamma_flip_mod
-from analytics import dealer_inventory as dealer_inventory_mod
-from analytics import volatility_regime as volatility_regime_mod
-
-from analytics import dealer_gamma_path as dealer_gamma_path_mod
-from analytics import options_flow_imbalance as options_flow_imbalance_mod
-from analytics import liquidity_heatmap as liquidity_heatmap_mod
-from analytics import liquidity_void as liquidity_void_mod
-
-from analytics import dealer_hedging_flow as dealer_hedging_flow_mod
-from analytics import dealer_hedging_simulator as dealer_hedging_simulator_mod
-from analytics import market_gamma_map as market_gamma_map_mod
-from analytics import gamma_walls as gamma_walls_mod
-from analytics import intraday_gamma_shift as intraday_gamma_shift_mod
-from analytics import smart_money_flow as smart_money_flow_mod
-from analytics import liquidity_vacuum as liquidity_vacuum_mod
-from analytics import volatility_surface as volatility_surface_mod
-from analytics.dealer_liquidity_map import build_dealer_liquidity_map
-from analytics.greeks_engine import enrich_chain_with_greeks, summarize_greek_exposures
-from engine.runtime_metadata import empty_confirmation_state, empty_scoring_breakdown
+from config.signal_policy import get_trade_runtime_thresholds
+from engine.trading_engine_support import (
+    _clip,
+    _collect_market_state,
+    _compute_data_quality,
+    _compute_probability_state,
+    _compute_signal_state,
+    _safe_float,
+    _to_python_number,
+    classify_execution_regime,
+    classify_signal_quality,
+    classify_signal_regime,
+    classify_spot_vs_flip,
+    classify_spot_vs_flip_for_symbol,
+    decide_direction,
+    derive_dealer_pressure_trade_modifiers,
+    derive_gamma_vol_trade_modifiers,
+    derive_global_risk_trade_modifiers,
+    derive_option_efficiency_trade_modifiers,
+    normalize_option_chain,
+)
 from macro.engine_adjustments import compute_macro_news_adjustments
-
-import models.feature_builder as feature_builder_mod
-import models.large_move_probability as large_move_probability_mod
-import models.ml_move_predictor as ml_move_predictor_mod
-
-
-MIN_TRADE_STRENGTH = 45
-STRONG_SIGNAL_THRESHOLD = 75
-MEDIUM_SIGNAL_THRESHOLD = 60
-WEAK_SIGNAL_THRESHOLD = 40
-
-
-def _clip(x, lo, hi):
-    return max(lo, min(hi, x))
-
-
-def _safe_float(x, default=0.0):
-    try:
-        if x is None:
-            return default
-        return float(x)
-    except Exception:
-        return default
-
-
-def _safe_div(a, b, default=0.0):
-    try:
-        a = float(a)
-        b = float(b)
-        if b == 0:
-            return default
-        return a / b
-    except Exception:
-        return default
-
-
-def _map_vacuum_strength(vacuum_state, liquidity_voids=None, nearest_vacuum_gap_pct=None):
-    base = {
-        "BREAKOUT_ZONE": 0.85,
-        "NEAR_VACUUM": 0.60,
-        "VACUUM_WATCH": 0.40,
-    }.get(vacuum_state, 0.15)
-
-    if nearest_vacuum_gap_pct is not None:
-        gap = _clip(_safe_float(nearest_vacuum_gap_pct), 0.0, 1.5)
-        proximity_boost = 1.0 - (gap / 1.5)
-        base = 0.6 * base + 0.4 * proximity_boost
-
-    if liquidity_voids is not None:
-        try:
-            void_count = len(liquidity_voids)
-            base += min(void_count, 5) * 0.03
-        except Exception:
-            pass
-
-    return round(_clip(base, 0.0, 1.0), 3)
-
-
-def _map_hedging_flow_ratio(hedging_bias, hedge_flow_value=None):
-    if hedge_flow_value is not None:
-        return round(_clip(_safe_float(hedge_flow_value), -1.0, 1.0), 3)
-
-    mapping = {
-        "UPSIDE_ACCELERATION": 0.75,
-        "DOWNSIDE_ACCELERATION": -0.75,
-        "UPSIDE_PINNING": 0.20,
-        "DOWNSIDE_PINNING": -0.20,
-        "PINNING": 0.0,
-    }
-    return round(mapping.get(hedging_bias, 0.0), 3)
-
-
-def _map_smart_money_flow_score(smart_money_flow, flow_imbalance=None):
-    base = {
-        "BULLISH_FLOW": 0.70,
-        "BEARISH_FLOW": -0.70,
-        "MIXED_FLOW": 0.0,
-        "NEUTRAL_FLOW": 0.0,
-    }.get(smart_money_flow, 0.0)
-
-    if flow_imbalance is not None:
-        base = 0.5 * base + 0.5 * _clip(_safe_float(flow_imbalance), -1.0, 1.0)
-
-    return round(_clip(base, -1.0, 1.0), 3)
-
-
-def _compute_gamma_flip_distance_pct(spot_price, gamma_flip):
-    if gamma_flip is None:
-        return None
-
-    spot = _safe_float(spot_price, None)
-    flip = _safe_float(gamma_flip, None)
-
-    if spot in (None, 0) or flip is None:
-        return None
-
-    return round(abs(spot - flip) / spot * 100.0, 4)
-
-
-def _compute_intraday_range_pct(
-    symbol=None,
-    spot_price=None,
-    day_high=None,
-    day_low=None,
-    day_open=None,
-    prev_close=None,
-    lookback_avg_range_pct=None
-):
-    micro_cfg = get_microstructure_config(symbol)
-    spot = _safe_float(spot_price, None)
-    if spot in (None, 0):
-        return None
-
-    high = _safe_float(day_high, None)
-    low = _safe_float(day_low, None)
-    open_px = _safe_float(day_open, None)
-    prev_close_px = _safe_float(prev_close, None)
-    avg_range = _safe_float(lookback_avg_range_pct, None)
-
-    realized_range_pct = None
-
-    if high is not None and low is not None and high >= low:
-        realized_range_pct = ((high - low) / spot) * 100.0
-    else:
-        anchor_moves = []
-
-        if open_px not in (None, 0):
-            anchor_moves.append(abs(spot - open_px) / spot * 100.0)
-
-        if prev_close_px not in (None, 0):
-            anchor_moves.append(abs(spot - prev_close_px) / spot * 100.0)
-
-        if anchor_moves:
-            realized_range_pct = max(anchor_moves) * 1.5
-
-    if realized_range_pct is None:
-        return None
-
-    baseline_floor = _safe_float(micro_cfg.get("range_baseline_floor_pct"), 0.9)
-    baseline = avg_range if avg_range not in (None, 0) else baseline_floor
-    baseline = max(baseline, baseline_floor)
-    normalized = realized_range_pct / max(baseline, 0.25)
-
-    return round(_clip(normalized, 0.0, 1.5), 4)
-
-
-def _compute_atm_iv_percentile(atm_iv, low_iv=8.0, high_iv=28.0):
-    iv = _safe_float(atm_iv, None)
-    if iv is None:
-        return None
-
-    pct = (iv - low_iv) / max(high_iv - low_iv, 1e-6)
-    return round(_clip(pct, 0.0, 1.0), 4)
-
-
-def _blend_move_probability(rule_prob, ml_prob):
-    rule_prob = _safe_float(rule_prob, 0.22)
-
-    if ml_prob is None:
-        return round(_clip(rule_prob, 0.05, 0.95), 2)
-
-    ml_prob = _safe_float(ml_prob, rule_prob)
-    hybrid = 0.35 * rule_prob + 0.65 * ml_prob
-    hybrid = 0.10 + 0.80 * hybrid
-
-    return round(_clip(hybrid, 0.05, 0.95), 2)
-
-
-def normalize_option_chain(option_chain, spot=None, valuation_time=None):
-    df = option_chain.copy()
-
-    rename_map = {
-        "strikePrice": "STRIKE_PR",
-        "openInterest": "OPEN_INT",
-        "impliedVolatility": "IV",
-        "totalTradedVolume": "VOLUME",
-        "lastPrice": "LAST_PRICE",
-        "changeinOI": "CHG_IN_OI",
-    }
-
-    for old, new in rename_map.items():
-        if old in df.columns and new not in df.columns:
-            df[new] = df[old]
-
-    if "STRIKE_PR" in df.columns and "strikePrice" not in df.columns:
-        df["strikePrice"] = df["STRIKE_PR"]
-
-    if "OPEN_INT" in df.columns and "openInterest" not in df.columns:
-        df["openInterest"] = df["OPEN_INT"]
-
-    if "IV" in df.columns and "impliedVolatility" not in df.columns:
-        df["impliedVolatility"] = df["IV"]
-
-    if "VOLUME" in df.columns and "totalTradedVolume" not in df.columns:
-        df["totalTradedVolume"] = df["VOLUME"]
-
-    if "LAST_PRICE" in df.columns and "lastPrice" not in df.columns:
-        df["lastPrice"] = df["LAST_PRICE"]
-
-    if "EXPIRY_DT" not in df.columns:
-        df["EXPIRY_DT"] = None
-
-    if spot is None:
-        spot = df["strikePrice"].median() if "strikePrice" in df.columns else None
-
-    greek_cols = ["DELTA", "GAMMA", "THETA", "VEGA", "RHO", "TTE"]
-    has_usable_greeks = all(col in df.columns for col in greek_cols)
-    if has_usable_greeks:
-        gamma_valid = pd.to_numeric(df["GAMMA"], errors="coerce").notna().any()
-        delta_valid = pd.to_numeric(df["DELTA"], errors="coerce").notna().any()
-        tte_valid = pd.to_numeric(df["TTE"], errors="coerce").notna().any()
-        has_usable_greeks = gamma_valid and delta_valid and tte_valid
-
-    if not has_usable_greeks:
-        df = enrich_chain_with_greeks(df, spot=spot, valuation_time=valuation_time)
-
-    return df
-
-
-def _call_first(module, candidate_names, *args, default=None, **kwargs):
-    for name in candidate_names:
-        fn = getattr(module, name, None)
-        if callable(fn):
-            try:
-                return fn(*args, **kwargs)
-            except TypeError:
-                continue
-            except Exception:
-                continue
-    return default
-
-
-def _to_python_number(x):
-    try:
-        if hasattr(x, "item"):
-            return x.item()
-    except Exception:
-        pass
-
-    try:
-        if isinstance(x, float) and x.is_integer():
-            return int(x)
-    except Exception:
-        pass
-
-    return x
-
-
-def _clean_zone_list(zones):
-    if not zones:
-        return []
-
-    cleaned = []
-
-    for zone in zones:
-        try:
-            low, high = zone
-            low = _to_python_number(low)
-            high = _to_python_number(high)
-            cleaned.append((low, high))
-        except Exception:
-            continue
-
-    return cleaned
-
-
-def _extract_nearest_vacuum_gap_pct(spot, vacuum_zones):
-    if not vacuum_zones:
-        return None
-
-    spot_val = _safe_float(spot, None)
-    if spot_val in (None, 0):
-        return None
-
-    min_gap = None
-
-    for zone in vacuum_zones:
-        try:
-            low, high = zone
-            low = float(low)
-            high = float(high)
-
-            if low <= spot_val <= high:
-                gap = 0.0
-            elif spot_val < low:
-                gap = low - spot_val
-            else:
-                gap = spot_val - high
-
-            if min_gap is None or gap < min_gap:
-                min_gap = gap
-        except Exception:
-            continue
-
-    if min_gap is None:
-        return None
-
-    return round((min_gap / spot_val) * 100.0, 4)
-
-
-def _extract_hedge_flow_value(hedging_flow):
-    if hedging_flow is None:
-        return None
-
-    if isinstance(hedging_flow, (float, int)):
-        return round(_clip(float(hedging_flow), -1.0, 1.0), 3)
-
-    if isinstance(hedging_flow, dict):
-        candidate_keys = [
-            "flow_ratio",
-            "net_flow_ratio",
-            "hedging_flow_ratio",
-            "normalized_flow",
-            "normalized_value",
-            "value",
-            "score",
-            "bias_score",
-        ]
-        for key in candidate_keys:
-            if key in hedging_flow:
-                try:
-                    return round(_clip(float(hedging_flow[key]), -1.0, 1.0), 3)
-                except Exception:
-                    continue
-
-    return None
-
-
-def _categorical_flow_score(value):
-    mapping = {
-        "BULLISH_FLOW": 0.75,
-        "BEARISH_FLOW": -0.75,
-        "MIXED_FLOW": 0.0,
-        "NEUTRAL_FLOW": 0.0,
-    }
-    return mapping.get(value, 0.0)
-
-
-def _normalize_validation_dict(validation):
-    return validation if isinstance(validation, dict) else {}
-
-
-def _compute_data_quality(
-    spot_validation,
-    option_chain_validation,
-    analytics_state,
-    probability_state
-):
-    spot_validation = _normalize_validation_dict(spot_validation)
-    option_chain_validation = _normalize_validation_dict(option_chain_validation)
-
-    score = 100
-    reasons = []
-    analytics_missing = []
-
-    if not spot_validation.get("is_valid", True):
-        score -= 50
-        reasons.append("invalid_spot_snapshot")
-
-    if spot_validation.get("is_stale", False):
-        score -= 25
-        reasons.append("stale_spot_snapshot")
-
-    age_minutes = _safe_float(spot_validation.get("age_minutes"), None)
-    if age_minutes is not None:
-        if age_minutes > 10:
-            score -= 8
-            reasons.append(f"spot_age_gt_10m:{age_minutes}")
-        elif age_minutes > 5:
-            score -= 4
-            reasons.append(f"spot_age_gt_5m:{age_minutes}")
-
-    for warning in spot_validation.get("warnings", []):
-        score -= 2
-        reasons.append(f"spot_warning:{warning}")
-
-    if not option_chain_validation.get("is_valid", True):
-        score -= 50
-        reasons.append("invalid_option_chain")
-
-    row_count = int(option_chain_validation.get("row_count", 0) or 0)
-    priced_rows = int(option_chain_validation.get("priced_rows", 0) or 0)
-
-    if row_count < 120:
-        score -= 8
-        reasons.append(f"low_option_chain_rows:{row_count}")
-    elif row_count < 180:
-        score -= 4
-        reasons.append(f"medium_option_chain_rows:{row_count}")
-
-    priced_ratio = _safe_div(priced_rows, row_count, 0.0)
-    if row_count > 0:
-        if priced_ratio < 0.35:
-            score -= 15
-            reasons.append(f"very_low_priced_ratio:{priced_rows}/{row_count}")
-        elif priced_ratio < 0.55:
-            score -= 8
-            reasons.append(f"low_priced_ratio:{priced_rows}/{row_count}")
-
-    for warning in option_chain_validation.get("warnings", []):
-        score -= 3
-        reasons.append(f"option_chain_warning:{warning}")
-
-    critical_analytics = [
-        "flip",
-        "dealer_pos",
-        "vol_regime",
-        "gamma_regime",
-        "final_flow_signal",
-        "hedging_bias",
-    ]
-
-    secondary_analytics = [
-        "atm_iv",
-        "support_wall",
-        "resistance_wall",
-        "market_gamma_summary",
-        "provider_health",
-    ]
-
-    for key in critical_analytics:
-        if analytics_state.get(key) in [None, "UNKNOWN"]:
-            analytics_missing.append(key)
-            score -= 5
-            reasons.append(f"missing_critical_analytics:{key}")
-
-    for key in secondary_analytics:
-        if analytics_state.get(key) is None:
-            score -= 2
-            reasons.append(f"missing_secondary_analytics:{key}")
-
-    if probability_state.get("rule_move_probability") is None and probability_state.get("ml_move_probability") is None:
-        score -= 10
-        reasons.append("missing_all_move_probabilities")
-    elif probability_state.get("hybrid_move_probability") is None:
-        score -= 5
-        reasons.append("missing_hybrid_move_probability")
-
-    score = int(_clip(score, 0, 100))
-
-    if score >= 85:
-        status = "STRONG"
-    elif score >= 70:
-        status = "GOOD"
-    elif score >= 55:
-        status = "CAUTION"
-    else:
-        status = "WEAK"
-
-    analytics_quality = {
-        "missing_critical": analytics_missing,
-        "critical_missing_count": len(analytics_missing),
-    }
-
-    return {
-        "score": score,
-        "status": status,
-        "reasons": reasons,
-        "analytics_quality": analytics_quality,
-        "fatal": (not spot_validation.get("is_valid", True)) or (not option_chain_validation.get("is_valid", True)),
-    }
-
-
-def classify_spot_vs_flip(spot, flip):
-    return classify_spot_vs_flip_for_symbol(None, spot, flip)
-
-
-def classify_spot_vs_flip_for_symbol(symbol, spot, flip):
-    if flip is None:
-        return "UNKNOWN"
-
-    flip_buffer = _safe_float(get_microstructure_config(symbol).get("flip_buffer_points"), 25.0)
-
-    if abs(spot - flip) <= flip_buffer:
-        return "AT_FLIP"
-
-    if spot > flip:
-        return "ABOVE_FLIP"
-
-    return "BELOW_FLIP"
-
-
-def classify_signal_quality(trade_strength):
-    if trade_strength >= STRONG_SIGNAL_THRESHOLD:
-        return "STRONG"
-    if trade_strength >= MEDIUM_SIGNAL_THRESHOLD:
-        return "MEDIUM"
-    if trade_strength >= WEAK_SIGNAL_THRESHOLD:
-        return "WEAK"
-    return "VERY_WEAK"
-
-
-def classify_signal_regime(
-    *,
-    direction,
-    adjusted_trade_strength,
-    final_flow_signal,
-    gamma_regime,
-    confirmation_status,
-    event_lockdown_flag,
-    data_quality_status,
-):
-    if event_lockdown_flag:
-        return "LOCKDOWN"
-    if direction is None:
-        return "NEUTRAL"
-
-    directional_flow = final_flow_signal in {"BULLISH_FLOW", "BEARISH_FLOW"}
-    unstable_gamma = gamma_regime in {"NEGATIVE_GAMMA", "SHORT_GAMMA_ZONE"}
-
-    if adjusted_trade_strength >= 75 and directional_flow and unstable_gamma and confirmation_status in {"STRONG_CONFIRMATION", "CONFIRMED"}:
-        return "EXPANSION_BIAS"
-    if adjusted_trade_strength >= 55 and directional_flow:
-        return "DIRECTIONAL_BIAS"
-    if data_quality_status in {"CAUTION", "WEAK"} or confirmation_status == "CONFLICT":
-        return "CONFLICTED"
-    return "BALANCED"
-
-
-def classify_execution_regime(*, trade_status, signal_regime, data_quality_score, macro_position_size_multiplier):
-    if trade_status in {"DATA_INVALID", "EVENT_LOCKDOWN", "BUDGET_FAIL"}:
-        return "BLOCKED"
-    if trade_status == "TRADE" and macro_position_size_multiplier < 1.0:
-        return "RISK_REDUCED"
-    if trade_status == "TRADE":
-        return "ACTIVE"
-    if signal_regime == "CONFLICTED" or data_quality_score < 70:
-        return "OBSERVE"
-    return "SETUP"
-
-
-def normalize_flow_signal(flow_signal_value, smart_money_signal_value):
-    bullish_votes = 0
-    bearish_votes = 0
-
-    if flow_signal_value == "BULLISH_FLOW":
-        bullish_votes += 1
-    elif flow_signal_value == "BEARISH_FLOW":
-        bearish_votes += 1
-
-    if smart_money_signal_value == "BULLISH_FLOW":
-        bullish_votes += 1
-    elif smart_money_signal_value == "BEARISH_FLOW":
-        bearish_votes += 1
-
-    if bullish_votes > bearish_votes:
-        return "BULLISH_FLOW"
-
-    if bearish_votes > bullish_votes:
-        return "BEARISH_FLOW"
-
-    return "NEUTRAL_FLOW"
-
-
-def decide_direction(
-    final_flow_signal,
-    dealer_pos,
-    vol_regime,
-    spot_vs_flip,
-    gamma_regime,
-    hedging_bias,
-    gamma_event,
-    vanna_regime=None,
-    charm_regime=None,
-    backtest_mode=False
-):
-    bullish_votes = []
-    bearish_votes = []
-
-    def add_vote(side, reason):
-        weight = float(DIRECTION_VOTE_WEIGHTS.get(reason, 1.0))
-        entry = (reason, round(weight, 2))
-        if side == "BULLISH":
-            bullish_votes.append(entry)
-        elif side == "BEARISH":
-            bearish_votes.append(entry)
-
-    if final_flow_signal == "BULLISH_FLOW":
-        add_vote("BULLISH", "FLOW")
-
-    if final_flow_signal == "BEARISH_FLOW":
-        add_vote("BEARISH", "FLOW")
-
-    if gamma_regime in ["NEGATIVE_GAMMA", "SHORT_GAMMA_ZONE"]:
-        if hedging_bias == "UPSIDE_ACCELERATION":
-            add_vote("BULLISH", "HEDGING_BIAS")
-        if hedging_bias == "DOWNSIDE_ACCELERATION":
-            add_vote("BEARISH", "HEDGING_BIAS")
-
-    if gamma_event == "GAMMA_SQUEEZE":
-        if spot_vs_flip == "ABOVE_FLIP":
-            add_vote("BULLISH", "GAMMA_SQUEEZE")
-        if spot_vs_flip == "BELOW_FLIP":
-            add_vote("BEARISH", "GAMMA_SQUEEZE")
-
-    if spot_vs_flip == "ABOVE_FLIP":
-        if dealer_pos == "Long Gamma":
-            add_vote("BULLISH", "GAMMA_FLIP")
-        if dealer_pos == "Short Gamma":
-            add_vote("BULLISH", "GAMMA_FLIP")
-
-    if spot_vs_flip == "BELOW_FLIP" and dealer_pos == "Short Gamma":
-        add_vote("BEARISH", "GAMMA_FLIP")
-
-    if dealer_pos == "Short Gamma" and vol_regime == "VOL_EXPANSION":
-        if spot_vs_flip == "ABOVE_FLIP":
-            add_vote("BULLISH", "DEALER_VOL")
-        elif spot_vs_flip == "BELOW_FLIP":
-            add_vote("BEARISH", "DEALER_VOL")
-
-    # Vanna and charm are treated as secondary structural votes that only
-    # activate when they reinforce the active spot/flip regime.
-    if vanna_regime == "POSITIVE_VANNA" and spot_vs_flip == "ABOVE_FLIP":
-        add_vote("BULLISH", "VANNA")
-    elif vanna_regime == "NEGATIVE_VANNA" and spot_vs_flip == "BELOW_FLIP":
-        add_vote("BEARISH", "VANNA")
-
-    if charm_regime == "POSITIVE_CHARM" and spot_vs_flip == "ABOVE_FLIP":
-        add_vote("BULLISH", "CHARM")
-    elif charm_regime == "NEGATIVE_CHARM" and spot_vs_flip == "BELOW_FLIP":
-        add_vote("BEARISH", "CHARM")
-
-    if backtest_mode:
-        if not bullish_votes and not bearish_votes:
-            if spot_vs_flip == "ABOVE_FLIP" and dealer_pos == "Long Gamma":
-                add_vote("BULLISH", "BACKTEST_FALLBACK")
-            elif spot_vs_flip == "BELOW_FLIP" and dealer_pos == "Short Gamma":
-                add_vote("BEARISH", "BACKTEST_FALLBACK")
-
-    bullish_score = round(sum(weight for _, weight in bullish_votes), 2)
-    bearish_score = round(sum(weight for _, weight in bearish_votes), 2)
-    score_margin = round(abs(bullish_score - bearish_score), 2)
-
-    def build_source(votes):
-        return "+".join(reason for reason, _ in votes)
-
-    if (
-        bullish_score >= DIRECTION_MIN_SCORE
-        and bullish_score > bearish_score
-        and score_margin >= DIRECTION_MIN_MARGIN
-    ):
-        return "CALL", build_source(bullish_votes)
-
-    if (
-        bearish_score >= DIRECTION_MIN_SCORE
-        and bearish_score > bullish_score
-        and score_margin >= DIRECTION_MIN_MARGIN
-    ):
-        return "PUT", build_source(bearish_votes)
-
-    return None, None
-
-
-def _summarize_market_gamma(market_gex):
-    if market_gex is None:
-        return None
-
-    if hasattr(market_gex, "sum"):
-        try:
-            return float(market_gex.sum())
-        except Exception:
-            return None
-
-    try:
-        return float(market_gex)
-    except Exception:
-        return None
-
-
-def _extract_probability(result):
-    if result is None:
-        return None
-
-    try:
-        if isinstance(result, (float, int)):
-            return float(result)
-    except Exception:
-        pass
-
-    if hasattr(result, "__len__") and not isinstance(result, str):
-        try:
-            if len(result) > 0:
-                return float(result[0])
-        except Exception:
-            pass
-
-    return None
-
-
-def _collect_market_state(df, spot, symbol=None, prev_df=None):
-    gamma = _call_first(
-        gamma_exposure_mod,
-        ["calculate_gamma_exposure", "calculate_gex"],
-        df,
-        spot,
-        default=0
-    )
-
-    flip = _call_first(
-        gamma_flip_mod,
-        ["gamma_flip_level", "find_gamma_flip"],
-        df,
-        spot=spot,
-        default=None
-    )
-
-    dealer_metrics = _call_first(
-        dealer_inventory_mod,
-        ["dealer_inventory_metrics"],
-        df,
-        default={}
-    ) or {}
-
-    dealer_pos = dealer_metrics.get("position") or _call_first(
-        dealer_inventory_mod,
-        ["dealer_inventory_position", "dealer_inventory"],
-        df,
-        default="Unknown"
-    )
-
-    vol_regime = _call_first(
-        volatility_regime_mod,
-        ["detect_volatility_regime", "volatility_regime"],
-        df,
-        default="UNKNOWN"
-    )
-
-    gamma_path_result = _call_first(
-        dealer_gamma_path_mod,
-        ["simulate_gamma_path"],
-        df,
-        spot,
-        default=([], [])
-    )
-    if isinstance(gamma_path_result, tuple) and len(gamma_path_result) == 2:
-        prices, gamma_curve = gamma_path_result
-    else:
-        prices, gamma_curve = [], []
-
-    gamma_event = _call_first(
-        dealer_gamma_path_mod,
-        ["detect_gamma_squeeze"],
-        prices,
-        gamma_curve,
-        default="NORMAL"
-    )
-
-    flow_signal_value = _call_first(
-        options_flow_imbalance_mod,
-        ["flow_signal", "calculate_flow_signal"],
-        df,
-        spot=spot,
-        default="NEUTRAL_FLOW"
-    )
-
-    smart_money_signal_value = _call_first(
-        smart_money_flow_mod,
-        ["smart_money_signal", "classify_flow"],
-        df,
-        spot=spot,
-        default="NEUTRAL_FLOW"
-    )
-
-    final_flow_signal = normalize_flow_signal(flow_signal_value, smart_money_signal_value)
-
-    liquidity_levels = _call_first(
-        liquidity_heatmap_mod,
-        ["strongest_liquidity_levels", "build_liquidity_heatmap"],
-        df,
-        default=[]
-    )
-    if isinstance(liquidity_levels, pd.Series):
-        liquidity_levels = list(liquidity_levels.index[:5])
-    elif isinstance(liquidity_levels, pd.Index):
-        liquidity_levels = list(liquidity_levels[:5])
-    elif liquidity_levels is None:
-        liquidity_levels = []
-    liquidity_levels = [_to_python_number(x) for x in liquidity_levels]
-
-    voids = _call_first(
-        liquidity_void_mod,
-        ["detect_liquidity_voids", "detect_liquidity_void"],
-        df,
-        default=[]
-    )
-    void_signal = _call_first(
-        liquidity_void_mod,
-        ["liquidity_void_signal"],
-        spot,
-        voids,
-        default=None
-    )
-
-    vacuum_zones = _call_first(
-        liquidity_vacuum_mod,
-        ["detect_liquidity_vacuum"],
-        df,
-        default=[]
-    )
-    vacuum_zones = _clean_zone_list(vacuum_zones)
-    vacuum_state = _call_first(
-        liquidity_vacuum_mod,
-        ["vacuum_direction"],
-        spot,
-        vacuum_zones,
-        default="NORMAL"
-    )
-
-    walls = _call_first(
-        gamma_walls_mod,
-        ["classify_walls"],
-        df,
-        default={}
-    ) or {}
-    support_wall = _to_python_number(walls.get("support_wall") if isinstance(walls, dict) else None)
-    resistance_wall = _to_python_number(walls.get("resistance_wall") if isinstance(walls, dict) else None)
-
-    market_gex = _call_first(
-        market_gamma_map_mod,
-        ["calculate_market_gamma"],
-        df,
-        default=None
-    )
-    market_gamma_summary = _summarize_market_gamma(market_gex)
-    gamma_regime = _call_first(
-        market_gamma_map_mod,
-        ["market_gamma_regime"],
-        market_gex,
-        default=None
-    )
-    gamma_clusters = _call_first(
-        market_gamma_map_mod,
-        ["largest_gamma_strikes"],
-        market_gex,
-        default=[]
-    )
-    gamma_clusters = [_to_python_number(x) for x in gamma_clusters] if gamma_clusters else []
-
-    greek_exposures = summarize_greek_exposures(df)
-    if gamma_regime is None:
-        if flip is None:
-            gamma_regime = "UNKNOWN"
-        elif spot > flip:
-            gamma_regime = "LONG_GAMMA_ZONE"
-        else:
-            gamma_regime = "SHORT_GAMMA_ZONE"
-
-    hedging_flow = _call_first(
-        dealer_hedging_flow_mod,
-        ["dealer_hedging_flow"],
-        df,
-        default=None
-    )
-    hedging_sim = _call_first(
-        dealer_hedging_simulator_mod,
-        ["simulate_dealer_hedging"],
-        df,
-        default={}
-    )
-    hedging_bias = _call_first(
-        dealer_hedging_simulator_mod,
-        ["hedging_bias"],
-        hedging_sim,
-        default=None
-    )
-
-    intraday_gamma_state = None
-    if prev_df is not None:
-        intraday_gamma_state = _call_first(
-            intraday_gamma_shift_mod,
-            ["gamma_shift_signal", "detect_gamma_shift"],
-            prev_df,
-            df,
-            spot,
-            default=None
-        )
-
-    atm_iv = _call_first(
-        volatility_surface_mod,
-        ["atm_vol"],
-        df,
-        spot,
-        default=None
-    )
-    surface_regime = None
-    if atm_iv is not None:
-        surface_regime = _call_first(
-            volatility_surface_mod,
-            ["vol_regime"],
-            atm_iv,
-            default=None
-        )
-
-    spot_vs_flip = classify_spot_vs_flip_for_symbol(symbol, spot, flip)
-    dealer_liquidity_map = build_dealer_liquidity_map(
-        spot=spot,
-        gamma_flip=flip,
-        liquidity_levels=liquidity_levels,
-        support_wall=support_wall,
-        resistance_wall=resistance_wall,
-        gamma_clusters=gamma_clusters,
-        vacuum_zones=vacuum_zones
-    )
-
-    return {
-        "gamma": gamma,
-        "flip": flip,
-        "dealer_metrics": dealer_metrics,
-        "dealer_pos": dealer_pos,
-        "vol_regime": vol_regime,
-        "gamma_event": gamma_event,
-        "flow_signal_value": flow_signal_value,
-        "smart_money_signal_value": smart_money_signal_value,
-        "final_flow_signal": final_flow_signal,
-        "liquidity_levels": liquidity_levels,
-        "voids": voids,
-        "void_signal": void_signal,
-        "vacuum_zones": vacuum_zones,
-        "vacuum_state": vacuum_state,
-        "support_wall": support_wall,
-        "resistance_wall": resistance_wall,
-        "market_gamma_summary": market_gamma_summary,
-        "gamma_regime": gamma_regime,
-        "gamma_clusters": gamma_clusters,
-        "greek_exposures": greek_exposures,
-        "hedging_flow": hedging_flow,
-        "hedging_bias": hedging_bias,
-        "intraday_gamma_state": intraday_gamma_state,
-        "atm_iv": atm_iv,
-        "surface_regime": surface_regime,
-        "spot_vs_flip": spot_vs_flip,
-        "dealer_liquidity_map": dealer_liquidity_map,
-    }
-
-
-def _compute_probability_state(
-    df,
-    *,
-    spot,
-    symbol,
-    market_state,
-    day_high=None,
-    day_low=None,
-    day_open=None,
-    prev_close=None,
-    lookback_avg_range_pct=None,
-):
-    model_features = _call_first(
-        feature_builder_mod,
-        ["build_features"],
-        df,
-        spot=spot,
-        gamma_regime=market_state["gamma_regime"],
-        final_flow_signal=market_state["final_flow_signal"],
-        vol_regime=market_state["vol_regime"],
-        hedging_bias=market_state["hedging_bias"],
-        spot_vs_flip=market_state["spot_vs_flip"],
-        vacuum_state=market_state["vacuum_state"],
-        atm_iv=market_state["atm_iv"],
-        default=None
-    )
-
-    nearest_vacuum_gap_pct = _extract_nearest_vacuum_gap_pct(
-        spot=spot,
-        vacuum_zones=market_state["vacuum_zones"]
-    )
-    hedge_flow_value = _extract_hedge_flow_value(market_state["hedging_flow"])
-    flow_imbalance = (
-        0.5 * _categorical_flow_score(market_state["flow_signal_value"])
-        + 0.5 * _categorical_flow_score(market_state["smart_money_signal_value"])
-    )
-    gamma_flip_distance_pct = _compute_gamma_flip_distance_pct(
-        spot_price=spot,
-        gamma_flip=market_state["flip"],
-    )
-    vacuum_strength = _map_vacuum_strength(
-        vacuum_state=market_state["vacuum_state"],
-        liquidity_voids=market_state["voids"],
-        nearest_vacuum_gap_pct=nearest_vacuum_gap_pct,
-    )
-    hedging_flow_ratio = _map_hedging_flow_ratio(
-        hedging_bias=market_state["hedging_bias"],
-        hedge_flow_value=hedge_flow_value,
-    )
-    smart_money_flow_score = _map_smart_money_flow_score(
-        smart_money_flow=market_state["smart_money_signal_value"],
-        flow_imbalance=flow_imbalance,
-    )
-    atm_iv_percentile = _compute_atm_iv_percentile(atm_iv=market_state["atm_iv"])
-    intraday_range_pct = _compute_intraday_range_pct(
-        symbol=symbol,
-        spot_price=spot,
-        day_high=day_high,
-        day_low=day_low,
-        day_open=day_open,
-        prev_close=prev_close,
-        lookback_avg_range_pct=lookback_avg_range_pct,
-    )
-
-    rule_move_probability = _call_first(
-        large_move_probability_mod,
-        ["large_move_probability", "predict_large_move_probability"],
-        market_state["gamma_regime"],
-        market_state["vacuum_state"],
-        market_state["hedging_bias"],
-        market_state["final_flow_signal"],
-        gamma_flip_distance_pct=gamma_flip_distance_pct,
-        vacuum_strength=vacuum_strength,
-        hedging_flow_ratio=hedging_flow_ratio,
-        smart_money_flow_score=smart_money_flow_score,
-        atm_iv_percentile=atm_iv_percentile,
-        intraday_range_pct=intraday_range_pct,
-        default=None
-    )
-    rule_move_probability = _extract_probability(rule_move_probability)
-
-    ml_move_probability = None
-    predictor_class = getattr(ml_move_predictor_mod, "MovePredictor", None)
-    if predictor_class is not None:
-        try:
-            predictor = predictor_class()
-            if model_features is not None:
-                ml_move_probability = predictor.predict_probability(model_features)
-            ml_move_probability = _extract_probability(ml_move_probability)
-            if ml_move_probability is not None:
-                ml_move_probability = round(_clip(float(ml_move_probability), 0.05, 0.95), 2)
-        except Exception:
-            ml_move_probability = None
-
-    hybrid_move_probability = _blend_move_probability(
-        rule_prob=rule_move_probability,
-        ml_prob=ml_move_probability
-    )
-
-    return {
-        "rule_move_probability": rule_move_probability,
-        "ml_move_probability": ml_move_probability,
-        "hybrid_move_probability": hybrid_move_probability,
-        "model_features": model_features,
-        "components": {
-            "gamma_flip_distance_pct": gamma_flip_distance_pct,
-            "nearest_vacuum_gap_pct": nearest_vacuum_gap_pct,
-            "vacuum_strength": vacuum_strength,
-            "hedging_flow_ratio": hedging_flow_ratio,
-            "smart_money_flow_score": smart_money_flow_score,
-            "atm_iv_percentile": atm_iv_percentile,
-            "intraday_range_pct": intraday_range_pct,
-            "flow_imbalance": round(flow_imbalance, 3),
-            "hedge_flow_value": hedge_flow_value,
-            "day_high": day_high,
-            "day_low": day_low,
-            "day_open": day_open,
-            "prev_close": prev_close,
-            "lookback_avg_range_pct": lookback_avg_range_pct,
-        },
-    }
-
-
-def _compute_signal_state(
-    *,
-    spot,
-    symbol,
-    day_open,
-    prev_close,
-    intraday_range_pct,
-    backtest_mode,
-    market_state,
-    probability_state,
-):
-    direction, direction_source = decide_direction(
-        final_flow_signal=market_state["final_flow_signal"],
-        dealer_pos=market_state["dealer_pos"],
-        vol_regime=market_state["vol_regime"],
-        spot_vs_flip=market_state["spot_vs_flip"],
-        gamma_regime=market_state["gamma_regime"],
-        hedging_bias=market_state["hedging_bias"],
-        gamma_event=market_state["gamma_event"],
-        vanna_regime=market_state["greek_exposures"].get("vanna_regime"),
-        charm_regime=market_state["greek_exposures"].get("charm_regime"),
-        backtest_mode=backtest_mode
-    )
-
-    if direction is None:
-        return {
-            "direction": None,
-            "direction_source": None,
-            "trade_strength": 0,
-            "scoring_breakdown": empty_scoring_breakdown(),
-            "confirmation": empty_confirmation_state(),
-        }
-
-    trade_strength, scoring_breakdown = compute_trade_strength(
-        direction=direction,
-        flow_signal_value=market_state["flow_signal_value"],
-        smart_money_signal_value=market_state["smart_money_signal_value"],
-        gamma_event=market_state["gamma_event"],
-        dealer_pos=market_state["dealer_pos"],
-        vol_regime=market_state["vol_regime"],
-        void_signal=market_state["void_signal"],
-        vacuum_state=market_state["vacuum_state"],
-        spot_vs_flip=market_state["spot_vs_flip"],
-        hedging_bias=market_state["hedging_bias"],
-        gamma_regime=market_state["gamma_regime"],
-        intraday_gamma_state=market_state["intraday_gamma_state"],
-        support_wall=market_state["support_wall"],
-        resistance_wall=market_state["resistance_wall"],
-        spot=spot,
-        next_support=market_state["dealer_liquidity_map"].get("next_support"),
-        next_resistance=market_state["dealer_liquidity_map"].get("next_resistance"),
-        squeeze_zone=market_state["dealer_liquidity_map"].get("gamma_squeeze_zone"),
-        large_move_probability=probability_state["hybrid_move_probability"],
-        ml_move_probability=probability_state["ml_move_probability"],
-        proximity_buffer=get_microstructure_config(symbol).get("wall_proximity_points", 50.0),
-    )
-
-    confirmation = compute_confirmation_filters(
-        direction=direction,
-        spot=spot,
-        symbol=symbol,
-        day_open=day_open,
-        prev_close=prev_close,
-        intraday_range_pct=intraday_range_pct,
-        final_flow_signal=market_state["final_flow_signal"],
-        hedging_bias=market_state["hedging_bias"],
-        gamma_event=market_state["gamma_event"],
-        hybrid_move_probability=probability_state["hybrid_move_probability"],
-        spot_vs_flip=market_state["spot_vs_flip"],
-    )
-
-    return {
-        "direction": direction,
-        "direction_source": direction_source,
-        "trade_strength": trade_strength,
-        "scoring_breakdown": scoring_breakdown,
-        "confirmation": confirmation,
-    }
+from risk import (
+    build_dealer_hedging_pressure_state,
+    build_gamma_vol_acceleration_state,
+    build_option_efficiency_state,
+)
+from risk.global_risk_layer import evaluate_global_risk_layer
+from risk.option_efficiency_layer import score_option_efficiency_candidate
+from strategy.budget_optimizer import optimize_lots
+from strategy.exit_model import calculate_exit
+from strategy.strike_selector import select_best_strike
 
 
 def generate_trade(
@@ -1222,7 +69,11 @@ def generate_trade(
     backtest_mode=False,
     macro_event_state=None,
     macro_news_state=None,
+    global_risk_state=None,
+    holding_profile="AUTO",
     valuation_time=None,
+    target_profit_percent=TARGET_PROFIT_PERCENT,
+    stop_loss_percent=STOP_LOSS_PERCENT,
 ):
     if option_chain is None or option_chain.empty:
         return None
@@ -1310,12 +161,95 @@ def generate_trade(
     scoring_breakdown["confirmation_filter_score"] = confirmation["score_adjustment"]
     scoring_breakdown["macro_event_score"] = macro_event_score_adjustment
     scoring_breakdown["macro_news_score"] = macro_news_adjustments["macro_adjustment_score"]
+    global_risk_trade_modifiers = derive_global_risk_trade_modifiers(global_risk_state)
+    global_risk_adjustment_score = global_risk_trade_modifiers["effective_adjustment_score"]
+    scoring_breakdown["global_risk_base_adjustment_score"] = global_risk_trade_modifiers["base_adjustment_score"]
+    scoring_breakdown["global_risk_feature_adjustment_score"] = global_risk_trade_modifiers["feature_adjustment_score"]
+    scoring_breakdown["global_risk_adjustment_score"] = global_risk_adjustment_score
+    gamma_vol_state = build_gamma_vol_acceleration_state(
+        gamma_regime=market_state["gamma_regime"],
+        spot_vs_flip=market_state["spot_vs_flip"],
+        gamma_flip_distance_pct=probability_state["components"].get("gamma_flip_distance_pct"),
+        dealer_hedging_bias=market_state["hedging_bias"],
+        liquidity_vacuum_state=market_state["vacuum_state"],
+        intraday_range_pct=intraday_range_pct,
+        volatility_compression_score=(
+            global_risk_state.get("global_risk_features", {}).get("volatility_compression_score")
+            if isinstance(global_risk_state, dict)
+            else 0.0
+        ),
+        volatility_shock_score=(
+            global_risk_state.get("global_risk_features", {}).get("volatility_shock_score")
+            if isinstance(global_risk_state, dict)
+            else 0.0
+        ),
+        macro_event_risk_score=macro_event_risk_score,
+        global_risk_state=global_risk_state,
+        volatility_explosion_probability=(
+            global_risk_state.get("global_risk_features", {}).get("volatility_explosion_probability")
+            if isinstance(global_risk_state, dict)
+            else 0.0
+        ),
+        holding_profile=holding_profile,
+        support_wall=market_state["support_wall"],
+        resistance_wall=market_state["resistance_wall"],
+    )
+    gamma_vol_trade_modifiers = derive_gamma_vol_trade_modifiers(gamma_vol_state, direction=direction)
+    gamma_vol_adjustment_score = gamma_vol_trade_modifiers["effective_adjustment_score"]
+    scoring_breakdown["gamma_vol_base_adjustment_score"] = gamma_vol_trade_modifiers["base_adjustment_score"]
+    scoring_breakdown["gamma_vol_alignment_adjustment_score"] = gamma_vol_trade_modifiers["alignment_adjustment_score"]
+    scoring_breakdown["gamma_vol_adjustment_score"] = gamma_vol_adjustment_score
+    dealer_pressure_state = build_dealer_hedging_pressure_state(
+        spot=spot,
+        gamma_regime=market_state["gamma_regime"],
+        spot_vs_flip=market_state["spot_vs_flip"],
+        gamma_flip_distance_pct=probability_state["components"].get("gamma_flip_distance_pct"),
+        dealer_position=market_state["dealer_pos"],
+        dealer_hedging_bias=market_state["hedging_bias"],
+        dealer_hedging_flow=market_state["hedging_flow"],
+        market_gamma=market_state["market_gamma_summary"],
+        gamma_clusters=market_state["gamma_clusters"],
+        liquidity_levels=market_state["liquidity_levels"],
+        support_wall=market_state["support_wall"],
+        resistance_wall=market_state["resistance_wall"],
+        liquidity_vacuum_state=market_state["vacuum_state"],
+        intraday_gamma_state=market_state["intraday_gamma_state"],
+        intraday_range_pct=intraday_range_pct,
+        flow_signal=market_state["flow_signal_value"],
+        smart_money_flow=market_state["smart_money_signal_value"],
+        macro_event_risk_score=macro_event_risk_score,
+        global_risk_state=global_risk_state,
+        volatility_explosion_probability=(
+            global_risk_state.get("global_risk_features", {}).get("volatility_explosion_probability")
+            if isinstance(global_risk_state, dict)
+            else 0.0
+        ),
+        gamma_vol_acceleration_score=gamma_vol_trade_modifiers["gamma_vol_acceleration_score"],
+        holding_profile=holding_profile,
+    )
+    dealer_pressure_trade_modifiers = derive_dealer_pressure_trade_modifiers(dealer_pressure_state, direction=direction)
+    dealer_pressure_adjustment_score = dealer_pressure_trade_modifiers["effective_adjustment_score"]
+    scoring_breakdown["dealer_pressure_base_adjustment_score"] = dealer_pressure_trade_modifiers["base_adjustment_score"]
+    scoring_breakdown["dealer_pressure_alignment_adjustment_score"] = dealer_pressure_trade_modifiers["alignment_adjustment_score"]
+    scoring_breakdown["dealer_pressure_adjustment_score"] = dealer_pressure_adjustment_score
+    global_risk_features = global_risk_state.get("global_risk_features", {}) if isinstance(global_risk_state, dict) else {}
+    option_efficiency_state = {}
+    option_efficiency_trade_modifiers = derive_option_efficiency_trade_modifiers(option_efficiency_state)
+    option_efficiency_adjustment_score = option_efficiency_trade_modifiers["option_efficiency_adjustment_score"]
+    scoring_breakdown["option_efficiency_adjustment_score"] = option_efficiency_adjustment_score
     adjusted_trade_strength = int(
         _clip(
             trade_strength
             + confirmation["score_adjustment"]
             + macro_event_score_adjustment
             + macro_news_adjustments["macro_adjustment_score"],
+            0,
+            100,
+        )
+    )
+    adjusted_trade_strength = int(
+        _clip(
+            adjusted_trade_strength + global_risk_adjustment_score + gamma_vol_adjustment_score + dealer_pressure_adjustment_score,
             0,
             100,
         )
@@ -1332,7 +266,12 @@ def generate_trade(
         data_quality_status=data_quality["status"],
     )
 
-    min_trade_strength = BACKTEST_MIN_TRADE_STRENGTH if backtest_mode else MIN_TRADE_STRENGTH
+    runtime_thresholds = get_trade_runtime_thresholds()
+    min_trade_strength = (
+        BACKTEST_MIN_TRADE_STRENGTH
+        if backtest_mode
+        else runtime_thresholds["min_trade_strength"]
+    )
 
     base_payload = {
         "symbol": symbol,
@@ -1410,33 +349,189 @@ def generate_trade(
         "macro_confirmation_adjustment": macro_news_adjustments["macro_confirmation_adjustment"],
         "macro_position_size_multiplier": macro_news_adjustments["macro_position_size_multiplier"],
         "macro_adjustment_reasons": macro_news_adjustments["macro_adjustment_reasons"],
+        "global_risk_state": global_risk_state.get("global_risk_state") if isinstance(global_risk_state, dict) else "GLOBAL_NEUTRAL",
+        "global_risk_score": global_risk_state.get("global_risk_score") if isinstance(global_risk_state, dict) else 0,
+        "overnight_gap_risk_score": global_risk_state.get("overnight_gap_risk_score") if isinstance(global_risk_state, dict) else 0,
+        "volatility_expansion_risk_score": global_risk_state.get("volatility_expansion_risk_score") if isinstance(global_risk_state, dict) else 0,
+        "overnight_hold_allowed": global_risk_trade_modifiers["overnight_hold_allowed"],
+        "overnight_hold_reason": global_risk_trade_modifiers["overnight_hold_reason"],
+        "overnight_risk_penalty": global_risk_trade_modifiers["overnight_risk_penalty"],
+        "overnight_trade_block": global_risk_trade_modifiers["overnight_trade_block"],
+        "global_risk_adjustment_score": global_risk_adjustment_score,
+        "gamma_vol_acceleration_score": gamma_vol_trade_modifiers["gamma_vol_acceleration_score"],
+        "squeeze_risk_state": gamma_vol_trade_modifiers["squeeze_risk_state"],
+        "directional_convexity_state": gamma_vol_trade_modifiers["directional_convexity_state"],
+        "upside_squeeze_risk": gamma_vol_trade_modifiers["upside_squeeze_risk"],
+        "downside_airpocket_risk": gamma_vol_trade_modifiers["downside_airpocket_risk"],
+        "overnight_convexity_risk": gamma_vol_trade_modifiers["overnight_convexity_risk"],
+        "overnight_convexity_penalty": gamma_vol_trade_modifiers["overnight_convexity_penalty"],
+        "overnight_convexity_boost": gamma_vol_trade_modifiers["overnight_convexity_boost"],
+        "gamma_vol_adjustment_score": gamma_vol_adjustment_score,
+        "dealer_hedging_pressure_score": dealer_pressure_trade_modifiers["dealer_hedging_pressure_score"],
+        "dealer_flow_state": dealer_pressure_trade_modifiers["dealer_flow_state"],
+        "upside_hedging_pressure": dealer_pressure_trade_modifiers["upside_hedging_pressure"],
+        "downside_hedging_pressure": dealer_pressure_trade_modifiers["downside_hedging_pressure"],
+        "pinning_pressure_score": dealer_pressure_trade_modifiers["pinning_pressure_score"],
+        "overnight_hedging_risk": dealer_pressure_trade_modifiers["overnight_hedging_risk"],
+        "overnight_dealer_pressure_penalty": dealer_pressure_trade_modifiers["overnight_dealer_pressure_penalty"],
+        "overnight_dealer_pressure_boost": dealer_pressure_trade_modifiers["overnight_dealer_pressure_boost"],
+        "dealer_pressure_adjustment_score": dealer_pressure_adjustment_score,
+        "oil_shock_score": global_risk_trade_modifiers["oil_shock_score"],
+        "market_volatility_shock_score": global_risk_trade_modifiers["volatility_shock_score"],
+        "commodity_risk_score": global_risk_trade_modifiers["commodity_risk_score"],
+        "risk_off_intensity": (
+            global_risk_state.get("global_risk_features", {}).get("risk_off_intensity")
+            if isinstance(global_risk_state, dict)
+            else 0.0
+        ),
+        "volatility_compression_score": (
+            global_risk_state.get("global_risk_features", {}).get("volatility_compression_score")
+            if isinstance(global_risk_state, dict)
+            else 0.0
+        ),
+        "volatility_explosion_probability": global_risk_trade_modifiers["volatility_explosion_probability"],
+        "global_risk_features": global_risk_state.get("global_risk_features") if isinstance(global_risk_state, dict) else {},
+        "global_risk_diagnostics": global_risk_state.get("global_risk_diagnostics") if isinstance(global_risk_state, dict) else {},
+        "gamma_vol_features": gamma_vol_state.get("gamma_vol_features") if isinstance(gamma_vol_state, dict) else {},
+        "gamma_vol_diagnostics": gamma_vol_state.get("gamma_vol_diagnostics") if isinstance(gamma_vol_state, dict) else {},
+        "dealer_pressure_features": dealer_pressure_state.get("dealer_pressure_features") if isinstance(dealer_pressure_state, dict) else {},
+        "dealer_pressure_diagnostics": dealer_pressure_state.get("dealer_pressure_diagnostics") if isinstance(dealer_pressure_state, dict) else {},
         "budget_constraint_applied": apply_budget_constraint,
         "lot_size": lot_size,
         "requested_lots": requested_lots,
         "max_capital_per_trade": max_capital,
-        "backtest_mode": backtest_mode
+        "backtest_mode": backtest_mode,
     }
+
+    global_risk = evaluate_global_risk_layer(
+        data_quality=data_quality,
+        confirmation=confirmation,
+        adjusted_trade_strength=adjusted_trade_strength,
+        min_trade_strength=min_trade_strength,
+        event_window_status=event_window_status,
+        macro_event_risk_score=macro_event_risk_score,
+        event_lockdown_flag=event_lockdown_flag,
+        next_event_name=next_event_name,
+        active_event_name=active_event_name,
+        macro_news_adjustments=macro_news_adjustments,
+        global_risk_state=global_risk_state,
+        holding_profile=holding_profile,
+    )
+    base_payload.update(
+        {
+            "global_risk_state": global_risk["global_risk_state"],
+            "global_risk_score": global_risk["global_risk_score"],
+            "overnight_gap_risk_score": global_risk["overnight_gap_risk_score"],
+            "volatility_expansion_risk_score": global_risk["volatility_expansion_risk_score"],
+            "overnight_hold_allowed": (
+                global_risk_trade_modifiers["overnight_hold_allowed"]
+                and gamma_vol_trade_modifiers["overnight_hold_allowed"]
+                and dealer_pressure_trade_modifiers["overnight_hold_allowed"]
+                and option_efficiency_trade_modifiers["overnight_hold_allowed"]
+            ),
+            "overnight_hold_reason": (
+                global_risk_trade_modifiers["overnight_hold_reason"]
+                if not global_risk_trade_modifiers["overnight_hold_allowed"]
+                else (
+                    gamma_vol_trade_modifiers["overnight_hold_reason"]
+                    if not gamma_vol_trade_modifiers["overnight_hold_allowed"]
+                    else (
+                        dealer_pressure_trade_modifiers["overnight_hold_reason"]
+                        if not dealer_pressure_trade_modifiers["overnight_hold_allowed"]
+                        else option_efficiency_trade_modifiers["overnight_hold_reason"]
+                    )
+                )
+            ),
+            "overnight_risk_penalty": (
+                global_risk_trade_modifiers["overnight_risk_penalty"]
+                + gamma_vol_trade_modifiers["overnight_convexity_penalty"]
+                + dealer_pressure_trade_modifiers["overnight_dealer_pressure_penalty"]
+                + option_efficiency_trade_modifiers["overnight_option_efficiency_penalty"]
+            ),
+            "overnight_trade_block": (
+                global_risk_trade_modifiers["overnight_trade_block"]
+                or not gamma_vol_trade_modifiers["overnight_hold_allowed"]
+                or not dealer_pressure_trade_modifiers["overnight_hold_allowed"]
+                or not option_efficiency_trade_modifiers["overnight_hold_allowed"]
+            ),
+            "global_risk_adjustment_score": global_risk_adjustment_score,
+            "gamma_vol_acceleration_score": gamma_vol_trade_modifiers["gamma_vol_acceleration_score"],
+            "squeeze_risk_state": gamma_vol_trade_modifiers["squeeze_risk_state"],
+            "directional_convexity_state": gamma_vol_trade_modifiers["directional_convexity_state"],
+            "upside_squeeze_risk": gamma_vol_trade_modifiers["upside_squeeze_risk"],
+            "downside_airpocket_risk": gamma_vol_trade_modifiers["downside_airpocket_risk"],
+            "overnight_convexity_risk": gamma_vol_trade_modifiers["overnight_convexity_risk"],
+            "overnight_convexity_penalty": gamma_vol_trade_modifiers["overnight_convexity_penalty"],
+            "overnight_convexity_boost": gamma_vol_trade_modifiers["overnight_convexity_boost"],
+            "gamma_vol_adjustment_score": gamma_vol_adjustment_score,
+            "dealer_hedging_pressure_score": dealer_pressure_trade_modifiers["dealer_hedging_pressure_score"],
+            "dealer_flow_state": dealer_pressure_trade_modifiers["dealer_flow_state"],
+            "upside_hedging_pressure": dealer_pressure_trade_modifiers["upside_hedging_pressure"],
+            "downside_hedging_pressure": dealer_pressure_trade_modifiers["downside_hedging_pressure"],
+            "pinning_pressure_score": dealer_pressure_trade_modifiers["pinning_pressure_score"],
+            "overnight_hedging_risk": dealer_pressure_trade_modifiers["overnight_hedging_risk"],
+            "overnight_dealer_pressure_penalty": dealer_pressure_trade_modifiers["overnight_dealer_pressure_penalty"],
+            "overnight_dealer_pressure_boost": dealer_pressure_trade_modifiers["overnight_dealer_pressure_boost"],
+            "dealer_pressure_adjustment_score": dealer_pressure_adjustment_score,
+            "expected_move_points": option_efficiency_trade_modifiers["expected_move_points"],
+            "expected_move_pct": option_efficiency_trade_modifiers["expected_move_pct"],
+            "expected_move_quality": option_efficiency_trade_modifiers["expected_move_quality"],
+            "target_reachability_score": option_efficiency_trade_modifiers["target_reachability_score"],
+            "premium_efficiency_score": option_efficiency_trade_modifiers["premium_efficiency_score"],
+            "strike_efficiency_score": option_efficiency_trade_modifiers["strike_efficiency_score"],
+            "option_efficiency_score": option_efficiency_trade_modifiers["option_efficiency_score"],
+            "option_efficiency_adjustment_score": option_efficiency_adjustment_score,
+            "overnight_option_efficiency_penalty": option_efficiency_trade_modifiers["overnight_option_efficiency_penalty"],
+            "strike_moneyness_bucket": option_efficiency_trade_modifiers["strike_moneyness_bucket"],
+            "strike_distance_from_spot": option_efficiency_trade_modifiers["strike_distance_from_spot"],
+            "payoff_efficiency_hint": option_efficiency_trade_modifiers["payoff_efficiency_hint"],
+            "oil_shock_score": global_risk_trade_modifiers["oil_shock_score"],
+            "market_volatility_shock_score": global_risk_trade_modifiers["volatility_shock_score"],
+            "commodity_risk_score": global_risk_trade_modifiers["commodity_risk_score"],
+            "risk_off_intensity": global_risk["global_risk_features"].get("risk_off_intensity", 0.0),
+            "volatility_compression_score": global_risk["global_risk_features"].get("volatility_compression_score", 0.0),
+            "volatility_explosion_probability": global_risk_trade_modifiers["volatility_explosion_probability"],
+            "global_risk_level": global_risk["global_risk_level"],
+            "global_risk_action": global_risk["global_risk_action"],
+            "global_risk_size_cap": global_risk["global_risk_size_cap"],
+            "global_risk_reasons": global_risk["global_risk_reasons"],
+            "global_risk_features": global_risk["global_risk_features"],
+            "global_risk_diagnostics": global_risk["global_risk_diagnostics"],
+            "gamma_vol_reasons": gamma_vol_state.get("gamma_vol_reasons", []) if isinstance(gamma_vol_state, dict) else [],
+            "gamma_vol_features": gamma_vol_state.get("gamma_vol_features", {}) if isinstance(gamma_vol_state, dict) else {},
+            "gamma_vol_diagnostics": gamma_vol_state.get("gamma_vol_diagnostics", {}) if isinstance(gamma_vol_state, dict) else {},
+            "dealer_pressure_reasons": dealer_pressure_state.get("dealer_pressure_reasons", []) if isinstance(dealer_pressure_state, dict) else [],
+            "dealer_pressure_features": dealer_pressure_state.get("dealer_pressure_features", {}) if isinstance(dealer_pressure_state, dict) else {},
+            "dealer_pressure_diagnostics": dealer_pressure_state.get("dealer_pressure_diagnostics", {}) if isinstance(dealer_pressure_state, dict) else {},
+            "option_efficiency_reasons": option_efficiency_state.get("option_efficiency_reasons", []) if isinstance(option_efficiency_state, dict) else [],
+            "option_efficiency_features": option_efficiency_state.get("option_efficiency_features", {}) if isinstance(option_efficiency_state, dict) else {},
+            "option_efficiency_diagnostics": option_efficiency_state.get("option_efficiency_diagnostics", {}) if isinstance(option_efficiency_state, dict) else {},
+        }
+    )
 
     def _finalize(payload, trade_status, message):
         payload["message"] = message
         payload["trade_status"] = trade_status
+        execution_size_multiplier = min(
+            _safe_float(macro_news_adjustments.get("macro_position_size_multiplier"), 1.0),
+            _safe_float(global_risk.get("global_risk_size_cap"), 1.0),
+        )
         payload["execution_regime"] = classify_execution_regime(
             trade_status=trade_status,
             signal_regime=signal_regime,
             data_quality_score=data_quality["score"],
-            macro_position_size_multiplier=macro_news_adjustments["macro_position_size_multiplier"],
+            macro_position_size_multiplier=execution_size_multiplier,
         )
         return payload
 
-    if data_quality["fatal"]:
-        return _finalize(base_payload, "DATA_INVALID", "Trade blocked due to invalid market data")
+    if global_risk["risk_trade_status"] == "DATA_INVALID":
+        return _finalize(base_payload, "DATA_INVALID", global_risk["risk_message"])
+
+    if global_risk_trade_modifiers["force_no_trade"] or global_risk["risk_trade_status"] == "EVENT_LOCKDOWN":
+        return _finalize(base_payload, "NO_TRADE", global_risk["risk_message"] or "Trade blocked due to global event lockdown")
 
     if direction is None:
         return _finalize(base_payload, "NO_SIGNAL", "No trade signal")
-
-    if event_lockdown_flag or macro_news_adjustments["event_lockdown_flag"]:
-        event_name = active_event_name or next_event_name or "scheduled macro event"
-        return _finalize(base_payload, "EVENT_LOCKDOWN", f"Trade blocked due to scheduled macro event lockdown: {event_name}")
 
     if (
         market_state["final_flow_signal"] == "NEUTRAL_FLOW"
@@ -1445,25 +540,36 @@ def generate_trade(
     ):
         return _finalize(base_payload, "NO_SIGNAL", "No trade signal: neutral flow and insufficient directional edge")
 
-    if confirmation["veto"]:
-        return _finalize(base_payload, "WATCHLIST", "Trade downgraded to watchlist due to confirmation conflict")
-
-    if event_window_status in {"PRE_EVENT_WATCH", "POST_EVENT_COOLDOWN"}:
-        if macro_event_risk_score >= MACRO_EVENT_STRONG_WATCH_RISK_THRESHOLD:
-            event_name = active_event_name or next_event_name or "scheduled macro event"
-            return _finalize(base_payload, "WATCHLIST", f"Trade downgraded to watchlist due to elevated macro event risk: {event_name}")
-
-        if (
-            macro_event_risk_score >= MACRO_EVENT_WATCH_RISK_THRESHOLD
-            and adjusted_trade_strength < (min_trade_strength + 10)
-        ):
-            event_name = active_event_name or next_event_name or "scheduled macro event"
-            return _finalize(base_payload, "WATCHLIST", f"Trade downgraded to watchlist due to nearby macro event risk: {event_name}")
-
     ranked_strikes = []
     strike = None
 
     if direction is not None:
+        def option_efficiency_candidate_hook(row):
+            return score_option_efficiency_candidate(
+                row,
+                spot=spot,
+                direction=direction,
+                atm_iv=market_state["atm_iv"],
+                selected_expiry=(
+                    option_chain_validation.get("selected_expiry")
+                    if isinstance(option_chain_validation, dict)
+                    else None
+                ),
+                valuation_time=valuation_time,
+                hybrid_move_probability=probability_state["hybrid_move_probability"],
+                gamma_regime=market_state["gamma_regime"],
+                volatility_regime=market_state["vol_regime"],
+                volatility_shock_score=global_risk_features.get("volatility_shock_score"),
+                volatility_compression_score=global_risk_features.get("volatility_compression_score"),
+                macro_event_risk_score=macro_event_risk_score,
+                global_risk_state=base_payload.get("global_risk_state"),
+                gamma_vol_acceleration_score=gamma_vol_trade_modifiers["gamma_vol_acceleration_score"],
+                dealer_hedging_pressure_score=dealer_pressure_trade_modifiers["dealer_hedging_pressure_score"],
+                liquidity_vacuum_state=market_state["vacuum_state"],
+                support_wall=market_state["support_wall"],
+                resistance_wall=market_state["resistance_wall"],
+            )
+
         strike, ranked_strikes = select_best_strike(
             option_chain=df,
             direction=direction,
@@ -1473,6 +579,7 @@ def generate_trade(
             gamma_clusters=market_state["gamma_clusters"],
             lot_size=lot_size,
             max_capital=max_capital if apply_budget_constraint else None,
+            candidate_score_hook=option_efficiency_candidate_hook,
         )
 
     base_payload["ranked_strike_candidates"] = ranked_strikes
@@ -1493,7 +600,63 @@ def generate_trade(
         return _finalize(base_payload, "NO_SIGNAL", "Selected strike/option type not available")
 
     entry_price = float(option_row.iloc[0]["lastPrice"])
-    target, stop_loss = calculate_exit(entry_price)
+    target, stop_loss = calculate_exit(
+        entry_price,
+        target_profit_percent=target_profit_percent,
+        stop_loss_percent=stop_loss_percent,
+    )
+    option_row_dict = option_row.iloc[0].to_dict()
+    option_efficiency_state = build_option_efficiency_state(
+        spot=spot,
+        atm_iv=market_state["atm_iv"],
+        fallback_iv=option_row_dict.get("impliedVolatility", option_row_dict.get("IV")),
+        expiry_value=option_row_dict.get(
+            "EXPIRY_DT",
+            option_chain_validation.get("selected_expiry") if isinstance(option_chain_validation, dict) else None,
+        ),
+        valuation_time=valuation_time,
+        time_to_expiry_years=option_row_dict.get("TTE"),
+        direction=direction,
+        strike=strike,
+        option_type=option_type,
+        entry_price=entry_price,
+        target=target,
+        stop_loss=stop_loss,
+        trade_strength=adjusted_trade_strength,
+        hybrid_move_probability=probability_state["hybrid_move_probability"],
+        rule_move_probability=probability_state["rule_move_probability"],
+        ml_move_probability=probability_state["ml_move_probability"],
+        gamma_regime=market_state["gamma_regime"],
+        volatility_regime=market_state["vol_regime"],
+        volatility_shock_score=global_risk_features.get("volatility_shock_score"),
+        volatility_compression_score=global_risk_features.get("volatility_compression_score"),
+        macro_event_risk_score=macro_event_risk_score,
+        global_risk_state=base_payload.get("global_risk_state"),
+        gamma_vol_acceleration_score=gamma_vol_trade_modifiers["gamma_vol_acceleration_score"],
+        dealer_hedging_pressure_score=dealer_pressure_trade_modifiers["dealer_hedging_pressure_score"],
+        liquidity_vacuum_state=market_state["vacuum_state"],
+        support_wall=market_state["support_wall"],
+        resistance_wall=market_state["resistance_wall"],
+        delta=option_row_dict.get("DELTA"),
+        holding_profile=holding_profile,
+    )
+    option_efficiency_trade_modifiers = derive_option_efficiency_trade_modifiers(option_efficiency_state)
+    option_efficiency_adjustment_score = option_efficiency_trade_modifiers["option_efficiency_adjustment_score"]
+    adjusted_trade_strength = int(_clip(adjusted_trade_strength + option_efficiency_adjustment_score, 0, 100))
+    scoring_breakdown["option_efficiency_adjustment_score"] = option_efficiency_adjustment_score
+    scoring_breakdown["total_score"] = adjusted_trade_strength
+    base_payload["trade_strength"] = adjusted_trade_strength
+    base_payload["signal_quality"] = classify_signal_quality(adjusted_trade_strength)
+    signal_regime = classify_signal_regime(
+        direction=direction,
+        adjusted_trade_strength=adjusted_trade_strength,
+        final_flow_signal=market_state["final_flow_signal"],
+        gamma_regime=market_state["gamma_regime"],
+        confirmation_status=confirmation["status"],
+        event_lockdown_flag=event_lockdown_flag or macro_news_adjustments["event_lockdown_flag"],
+        data_quality_status=data_quality["status"],
+    )
+    base_payload["signal_regime"] = signal_regime
 
     base_payload.update({
         "direction": direction,
@@ -1502,14 +665,64 @@ def generate_trade(
         "entry_price": round(entry_price, 2),
         "target": round(target, 2),
         "stop_loss": round(stop_loss, 2),
+        "expected_move_points": option_efficiency_trade_modifiers["expected_move_points"],
+        "expected_move_pct": option_efficiency_trade_modifiers["expected_move_pct"],
+        "expected_move_quality": option_efficiency_trade_modifiers["expected_move_quality"],
+        "target_reachability_score": option_efficiency_trade_modifiers["target_reachability_score"],
+        "premium_efficiency_score": option_efficiency_trade_modifiers["premium_efficiency_score"],
+        "strike_efficiency_score": option_efficiency_trade_modifiers["strike_efficiency_score"],
+        "option_efficiency_score": option_efficiency_trade_modifiers["option_efficiency_score"],
+        "option_efficiency_adjustment_score": option_efficiency_trade_modifiers["option_efficiency_adjustment_score"],
+        "overnight_option_efficiency_penalty": option_efficiency_trade_modifiers["overnight_option_efficiency_penalty"],
+        "strike_moneyness_bucket": option_efficiency_trade_modifiers["strike_moneyness_bucket"],
+        "strike_distance_from_spot": option_efficiency_trade_modifiers["strike_distance_from_spot"],
+        "payoff_efficiency_hint": option_efficiency_trade_modifiers["payoff_efficiency_hint"],
+        "option_efficiency_reasons": option_efficiency_state.get("option_efficiency_reasons", []),
+        "option_efficiency_features": option_efficiency_state.get("option_efficiency_features", {}),
+        "option_efficiency_diagnostics": option_efficiency_state.get("option_efficiency_diagnostics", {}),
     })
+    base_payload.update(
+        {
+            "overnight_hold_allowed": (
+                global_risk_trade_modifiers["overnight_hold_allowed"]
+                and gamma_vol_trade_modifiers["overnight_hold_allowed"]
+                and dealer_pressure_trade_modifiers["overnight_hold_allowed"]
+                and option_efficiency_trade_modifiers["overnight_hold_allowed"]
+            ),
+            "overnight_hold_reason": (
+                global_risk_trade_modifiers["overnight_hold_reason"]
+                if not global_risk_trade_modifiers["overnight_hold_allowed"]
+                else (
+                    gamma_vol_trade_modifiers["overnight_hold_reason"]
+                    if not gamma_vol_trade_modifiers["overnight_hold_allowed"]
+                    else (
+                        dealer_pressure_trade_modifiers["overnight_hold_reason"]
+                        if not dealer_pressure_trade_modifiers["overnight_hold_allowed"]
+                        else option_efficiency_trade_modifiers["overnight_hold_reason"]
+                    )
+                )
+            ),
+            "overnight_risk_penalty": (
+                global_risk_trade_modifiers["overnight_risk_penalty"]
+                + gamma_vol_trade_modifiers["overnight_convexity_penalty"]
+                + dealer_pressure_trade_modifiers["overnight_dealer_pressure_penalty"]
+                + option_efficiency_trade_modifiers["overnight_option_efficiency_penalty"]
+            ),
+            "overnight_trade_block": (
+                global_risk_trade_modifiers["overnight_trade_block"]
+                or not gamma_vol_trade_modifiers["overnight_hold_allowed"]
+                or not dealer_pressure_trade_modifiers["overnight_hold_allowed"]
+                or not option_efficiency_trade_modifiers["overnight_hold_allowed"]
+            ),
+        }
+    )
 
     if apply_budget_constraint:
         budget_info = optimize_lots(
             entry_price=entry_price,
             lot_size=lot_size,
             max_capital=max_capital,
-            requested_lots=requested_lots
+            requested_lots=requested_lots,
         )
 
         base_payload.update(budget_info)
@@ -1523,8 +736,9 @@ def generate_trade(
         base_payload["capital_per_lot"] = round(entry_price * lot_size, 2)
         base_payload["capital_required"] = round(entry_price * lot_size * requested_lots, 2)
 
-    suggested_lots = max(0, int(base_payload["number_of_lots"] * macro_news_adjustments["macro_position_size_multiplier"]))
-    if base_payload["number_of_lots"] > 0 and suggested_lots == 0 and macro_news_adjustments["macro_position_size_multiplier"] > 0:
+    risk_size_cap = global_risk["global_risk_size_cap"]
+    suggested_lots = max(0, int(base_payload["number_of_lots"] * risk_size_cap))
+    if base_payload["number_of_lots"] > 0 and suggested_lots == 0 and risk_size_cap > 0:
         suggested_lots = 1
     base_payload["macro_suggested_lots"] = suggested_lots
     base_payload["macro_size_applied"] = suggested_lots > 0 and suggested_lots < base_payload["number_of_lots"]
@@ -1533,29 +747,14 @@ def generate_trade(
 
     # Keep downstream execution, backtest, and PnL paths aligned on the
     # actual final lot decision after macro/news sizing is applied.
-    if "optimized_lots" in base_payload:
-        base_payload["optimized_lots"] = base_payload["number_of_lots"]
-    else:
-        base_payload["optimized_lots"] = base_payload["number_of_lots"]
+    base_payload["optimized_lots"] = base_payload["number_of_lots"]
 
     if "entry_price" in base_payload:
         base_payload["capital_per_lot"] = round(entry_price * lot_size, 2)
         base_payload["capital_required"] = round(entry_price * lot_size * base_payload["number_of_lots"], 2)
 
-    if adjusted_trade_strength < min_trade_strength:
-        return _finalize(base_payload, "WATCHLIST", "Trade filtered out due to low strength")
-
-    if data_quality["score"] < 55:
-        return _finalize(base_payload, "WATCHLIST", "Trade downgraded to watchlist due to weak data quality")
-
-    if data_quality["status"] == "CAUTION" and adjusted_trade_strength < (min_trade_strength + 8):
-        return _finalize(base_payload, "WATCHLIST", "Trade downgraded to watchlist due to cautionary data quality")
-
-    if confirmation["status"] == "CONFLICT" and adjusted_trade_strength < (min_trade_strength + 10):
-        return _finalize(base_payload, "WATCHLIST", "Trade downgraded to watchlist due to weak live confirmation")
-
-    if macro_news_adjustments["macro_position_size_multiplier"] < 0.75 and adjusted_trade_strength < (min_trade_strength + 12):
-        return _finalize(base_payload, "WATCHLIST", "Trade downgraded to watchlist due to macro/news risk adjustment")
+    if global_risk["risk_trade_status"] == "WATCHLIST":
+        return _finalize(base_payload, "WATCHLIST", global_risk["risk_message"])
 
     if apply_budget_constraint:
         base_payload["message"] = "Tradable signal generated with budget optimization"

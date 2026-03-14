@@ -1,0 +1,132 @@
+{
+  "scenarios": [
+    {
+      "name": "cheap_atm_reachable_target",
+      "inputs": {
+        "spot": 22000,
+        "atm_iv": 18.0,
+        "expiry_value": "2026-03-21",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
+        "direction": "CALL",
+        "strike": 22000,
+        "option_type": "CE",
+        "entry_price": 110,
+        "target": 145,
+        "stop_loss": 92,
+        "hybrid_move_probability": 0.72,
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "volatility_regime": "VOL_EXPANSION",
+        "gamma_vol_acceleration_score": 72,
+        "dealer_hedging_pressure_score": 66,
+        "liquidity_vacuum_state": "BREAKOUT_ZONE"
+      },
+      "expected": {
+        "expected_move_quality": "DIRECT"
+      }
+    },
+    {
+      "name": "expensive_option_unrealistic_target",
+      "inputs": {
+        "spot": 22000,
+        "atm_iv": 14.0,
+        "expiry_value": "2026-03-17",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
+        "direction": "CALL",
+        "strike": 22100,
+        "option_type": "CE",
+        "entry_price": 210,
+        "target": 320,
+        "stop_loss": 150,
+        "hybrid_move_probability": 0.54,
+        "gamma_regime": "LONG_GAMMA_ZONE",
+        "volatility_regime": "NORMAL_VOL"
+      },
+      "expected": {
+        "option_efficiency_score": 50
+      }
+    },
+    {
+      "name": "far_otm_weak_expected_move",
+      "inputs": {
+        "spot": 22000,
+        "atm_iv": 15.0,
+        "expiry_value": "2026-03-18",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
+        "direction": "CALL",
+        "strike": 22500,
+        "option_type": "CE",
+        "entry_price": 32,
+        "target": 52,
+        "stop_loss": 20,
+        "hybrid_move_probability": 0.48,
+        "gamma_regime": "LONG_GAMMA_ZONE",
+        "volatility_regime": "NORMAL_VOL"
+      },
+      "expected": {
+        "strike_moneyness_bucket": "OTM"
+      }
+    },
+    {
+      "name": "strong_move_efficient_premium_supportive_convexity",
+      "inputs": {
+        "spot": 22000,
+        "atm_iv": 22.0,
+        "expiry_value": "2026-03-21",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
+        "direction": "PUT",
+        "strike": 21900,
+        "option_type": "PE",
+        "entry_price": 118,
+        "target": 158,
+        "stop_loss": 94,
+        "hybrid_move_probability": 0.78,
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "volatility_regime": "VOL_EXPANSION",
+        "gamma_vol_acceleration_score": 80,
+        "dealer_hedging_pressure_score": 74,
+        "liquidity_vacuum_state": "NEAR_VACUUM"
+      },
+      "expected": {
+        "option_efficiency_score": 70
+      }
+    },
+    {
+      "name": "overnight_poor_efficiency",
+      "inputs": {
+        "spot": 22000,
+        "atm_iv": 13.0,
+        "expiry_value": "2026-03-17",
+        "valuation_time": "2026-03-14T15:10:00+05:30",
+        "direction": "CALL",
+        "strike": 22300,
+        "option_type": "CE",
+        "entry_price": 145,
+        "target": 210,
+        "stop_loss": 105,
+        "hybrid_move_probability": 0.60,
+        "global_risk_state": {
+          "global_risk_state": "GLOBAL_NEUTRAL",
+          "holding_context": {"holding_profile": "OVERNIGHT", "overnight_relevant": true}
+        },
+        "holding_profile": "OVERNIGHT"
+      },
+      "expected": {
+        "overnight_hold_allowed": false
+      }
+    },
+    {
+      "name": "neutral_missing_data",
+      "inputs": {
+        "spot": 22000,
+        "direction": "CALL",
+        "strike": 22000,
+        "option_type": "CE",
+        "entry_price": 110,
+        "target": 140
+      },
+      "expected": {
+        "expected_move_quality": "UNAVAILABLE"
+      }
+    }
+  ]
+}

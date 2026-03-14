@@ -1,0 +1,240 @@
+[
+  {
+    "name": "neutral_environment",
+    "symbol": "NIFTY",
+    "as_of": "2026-03-16T11:00:00+05:30",
+    "holding_profile": "AUTO",
+    "macro_event_state": {
+      "macro_event_risk_score": 5,
+      "event_window_status": "NO_EVENT_DATA",
+      "event_lockdown_flag": false,
+      "event_data_available": true
+    },
+    "macro_news_state": {
+      "macro_regime": "MACRO_NEUTRAL",
+      "macro_sentiment_score": 2,
+      "news_confidence_score": 65,
+      "headline_velocity": 0.1,
+      "global_risk_bias": 0.0,
+      "neutral_fallback": false
+    },
+    "global_market_snapshot": {
+      "provider": "SCENARIO",
+      "data_available": true,
+      "neutral_fallback": false,
+      "stale": false,
+      "issues": [],
+      "warnings": [],
+      "market_inputs": {
+        "oil_change_24h": 0.8,
+        "gold_change_24h": 0.4,
+        "copper_change_24h": -0.5,
+        "vix_change_24h": 1.5,
+        "sp500_change_24h": -0.2,
+        "nasdaq_change_24h": 0.1,
+        "us10y_change_bp": 2.0,
+        "usdinr_change_24h": 0.1,
+        "realized_vol_5d": 0.18,
+        "realized_vol_30d": 0.20
+      }
+    },
+    "expected": {
+      "global_risk_state": "GLOBAL_NEUTRAL",
+      "overnight_hold_allowed": true,
+      "oil_shock_score": 0.0,
+      "volatility_shock_score": 0.0,
+      "volatility_explosion_probability": 0.0
+    }
+  },
+  {
+    "name": "oil_shock",
+    "symbol": "NIFTY",
+    "as_of": "2026-03-17T15:10:00+05:30",
+    "holding_profile": "OVERNIGHT",
+    "macro_event_state": {
+      "macro_event_risk_score": 15,
+      "event_window_status": "NO_EVENT_DATA",
+      "event_lockdown_flag": false,
+      "event_data_available": true
+    },
+    "macro_news_state": {
+      "macro_regime": "MACRO_NEUTRAL",
+      "macro_sentiment_score": -4,
+      "news_confidence_score": 70,
+      "headline_velocity": 0.25,
+      "global_risk_bias": -0.1,
+      "neutral_fallback": false
+    },
+    "global_market_snapshot": {
+      "provider": "SCENARIO",
+      "data_available": true,
+      "neutral_fallback": false,
+      "stale": false,
+      "issues": [],
+      "warnings": [],
+      "market_inputs": {
+        "oil_change_24h": 8.4,
+        "gold_change_24h": 2.4,
+        "copper_change_24h": -4.1,
+        "vix_change_24h": 4.0,
+        "sp500_change_24h": -2.2,
+        "nasdaq_change_24h": -1.1,
+        "us10y_change_bp": 5.0,
+        "usdinr_change_24h": 0.3,
+        "realized_vol_5d": 0.20,
+        "realized_vol_30d": 0.22
+      }
+    },
+    "expected": {
+      "global_risk_state": "GLOBAL_NEUTRAL",
+      "overnight_hold_allowed": true,
+      "overnight_hold_reason": "oil_shock_elevated",
+      "overnight_risk_penalty": 6,
+      "oil_shock_score": 1.0,
+      "commodity_risk_score": 0.53
+    }
+  },
+  {
+    "name": "volatility_spike",
+    "symbol": "NIFTY",
+    "as_of": "2026-03-18T14:20:00+05:30",
+    "holding_profile": "AUTO",
+    "macro_event_state": {
+      "macro_event_risk_score": 10,
+      "event_window_status": "NO_EVENT_DATA",
+      "event_lockdown_flag": false,
+      "event_data_available": true
+    },
+    "macro_news_state": {
+      "macro_regime": "MACRO_NEUTRAL",
+      "macro_sentiment_score": -6,
+      "news_confidence_score": 72,
+      "headline_velocity": 0.2,
+      "global_risk_bias": -0.2,
+      "neutral_fallback": false
+    },
+    "global_market_snapshot": {
+      "provider": "SCENARIO",
+      "data_available": true,
+      "neutral_fallback": false,
+      "stale": false,
+      "issues": [],
+      "warnings": [],
+      "market_inputs": {
+        "oil_change_24h": 1.0,
+        "gold_change_24h": 0.6,
+        "copper_change_24h": -0.8,
+        "vix_change_24h": 18.0,
+        "sp500_change_24h": -2.3,
+        "nasdaq_change_24h": -2.0,
+        "us10y_change_bp": 6.0,
+        "usdinr_change_24h": 0.4,
+        "realized_vol_5d": 0.21,
+        "realized_vol_30d": 0.22
+      }
+    },
+    "expected": {
+      "global_risk_state": "GLOBAL_NEUTRAL",
+      "volatility_shock_score": 1.0,
+      "volatility_explosion_probability": 0.0,
+      "overnight_hold_allowed": true
+    }
+  },
+  {
+    "name": "macro_event_lockdown",
+    "symbol": "NIFTY",
+    "as_of": "2026-03-19T09:35:00+05:30",
+    "holding_profile": "OVERNIGHT",
+    "macro_event_state": {
+      "macro_event_risk_score": 88,
+      "event_window_status": "PRE_EVENT_LOCKDOWN",
+      "event_lockdown_flag": true,
+      "event_data_available": true,
+      "next_event_name": "RBI Policy Decision"
+    },
+    "macro_news_state": {
+      "macro_regime": "EVENT_LOCKDOWN",
+      "macro_sentiment_score": 0,
+      "news_confidence_score": 60,
+      "headline_velocity": 0.0,
+      "global_risk_bias": 0.0,
+      "neutral_fallback": false,
+      "event_lockdown_flag": true,
+      "next_event_name": "RBI Policy Decision"
+    },
+    "global_market_snapshot": {
+      "provider": "SCENARIO",
+      "data_available": true,
+      "neutral_fallback": false,
+      "stale": false,
+      "issues": [],
+      "warnings": [],
+      "market_inputs": {
+        "oil_change_24h": 0.5,
+        "gold_change_24h": 0.2,
+        "copper_change_24h": -0.3,
+        "vix_change_24h": 2.0,
+        "sp500_change_24h": -0.4,
+        "nasdaq_change_24h": -0.2,
+        "us10y_change_bp": 1.0,
+        "usdinr_change_24h": 0.1,
+        "realized_vol_5d": 0.18,
+        "realized_vol_30d": 0.20
+      }
+    },
+    "expected": {
+      "global_risk_state": "EVENT_LOCKDOWN",
+      "overnight_hold_allowed": false,
+      "overnight_hold_reason": "event_lockdown_block",
+      "overnight_risk_penalty": 10
+    }
+  },
+  {
+    "name": "volatility_compression_breakout",
+    "symbol": "NIFTY",
+    "as_of": "2026-03-20T15:20:00+05:30",
+    "holding_profile": "OVERNIGHT",
+    "macro_event_state": {
+      "macro_event_risk_score": 65,
+      "event_window_status": "PRE_EVENT_WATCH",
+      "event_lockdown_flag": false,
+      "event_data_available": true
+    },
+    "macro_news_state": {
+      "macro_regime": "MACRO_NEUTRAL",
+      "macro_sentiment_score": -8,
+      "news_confidence_score": 78,
+      "headline_velocity": 0.35,
+      "global_risk_bias": -0.25,
+      "neutral_fallback": false
+    },
+    "global_market_snapshot": {
+      "provider": "SCENARIO",
+      "data_available": true,
+      "neutral_fallback": false,
+      "stale": false,
+      "issues": [],
+      "warnings": [],
+      "market_inputs": {
+        "oil_change_24h": 2.0,
+        "gold_change_24h": 0.6,
+        "copper_change_24h": -1.0,
+        "vix_change_24h": 12.0,
+        "sp500_change_24h": -1.4,
+        "nasdaq_change_24h": -1.0,
+        "us10y_change_bp": 7.0,
+        "usdinr_change_24h": 0.2,
+        "realized_vol_5d": 0.10,
+        "realized_vol_30d": 0.25
+      }
+    },
+    "expected": {
+      "global_risk_state": "VOL_SHOCK",
+      "overnight_hold_allowed": false,
+      "overnight_hold_reason": "vol_shock_block",
+      "overnight_risk_penalty": 10,
+      "volatility_shock_score": 0.7,
+      "volatility_explosion_probability": 1.0
+    }
+  }
+]

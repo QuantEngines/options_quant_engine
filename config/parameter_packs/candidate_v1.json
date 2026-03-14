@@ -1,0 +1,14 @@
+{
+  "name": "candidate_v1",
+  "version": "1.0.0",
+  "description": "Reserved candidate slot for promotion workflow.",
+  "parent": "baseline_v1",
+  "tags": [
+    "candidate"
+  ],
+  "metadata": {
+    "state": "candidate",
+    "owner": "research"
+  },
+  "overrides": {}
+}

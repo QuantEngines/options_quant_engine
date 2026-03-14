@@ -89,3 +89,27 @@ HEADLINE_CLASSIFICATION_CONFIG = HeadlineClassificationConfig()
 MACRO_NEWS_AGGREGATION_CONFIG = MacroNewsAggregationConfig()
 MACRO_NEWS_REGIME_CONFIG = MacroNewsRegimeConfig()
 MACRO_NEWS_ADJUSTMENT_CONFIG = MacroNewsAdjustmentConfig()
+
+
+def get_headline_classification_config() -> HeadlineClassificationConfig:
+    from tuning.runtime import resolve_dataclass_config
+
+    return resolve_dataclass_config("macro_news.headline_classification", HeadlineClassificationConfig())
+
+
+def get_macro_news_aggregation_config() -> MacroNewsAggregationConfig:
+    from tuning.runtime import resolve_dataclass_config
+
+    return resolve_dataclass_config("macro_news.aggregation", MacroNewsAggregationConfig())
+
+
+def get_macro_news_regime_config() -> MacroNewsRegimeConfig:
+    from tuning.runtime import resolve_dataclass_config
+
+    return resolve_dataclass_config("macro_news.regime", MacroNewsRegimeConfig())
+
+
+def get_macro_news_adjustment_config() -> MacroNewsAdjustmentConfig:
+    from tuning.runtime import resolve_dataclass_config
+
+    return resolve_dataclass_config("macro_news.adjustment", MacroNewsAdjustmentConfig())

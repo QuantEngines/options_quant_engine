@@ -1,0 +1,14 @@
+{
+  "name": "baseline_v1",
+  "version": "1.0.0",
+  "description": "Registry-default baseline pack that preserves current engine behavior.",
+  "tags": [
+    "baseline",
+    "live_safe"
+  ],
+  "metadata": {
+    "state": "baseline",
+    "owner": "research"
+  },
+  "overrides": {}
+}

@@ -1,10 +1,28 @@
 # Options Quant Engine
 
-Options Quant Engine is a live options analytics, signal-generation, and research-evaluation system focused on Indian index and stock options. It combines live option-chain ingestion, dealer/gamma/liquidity analytics, macro/news overlays, terminal and Streamlit interfaces, replay tooling, and a canonical signal research dataset that can be enriched over time with realized market outcomes.
+`options_quant_engine` is a live + research derivatives engine for Indian index and stock options. It combines live option-chain ingestion, dealer/gamma/liquidity analytics, macro/news risk controls, convexity overlays, option-efficiency evaluation, replay tooling, and a canonical signal research dataset.
+
+The system is designed to be signal-evaluation-first:
+
+- it generates signals from market data
+- it evaluates those signals against subsequent market behavior
+- it tunes and validates from the signal evaluation dataset
+- it does not depend on your manually executed trades for research, tuning, or promotion
+
+The system is designed as a layered trade engine, not a single-factor signal script:
+
+1. build microstructure state
+2. infer direction conservatively
+3. estimate move quality and path risk
+4. apply overlay/risk layers
+5. rank strikes and size exposure
+6. log the signal into a research-safe canonical dataset
+
+The current repository does not contain a live order-routing engine. Broker integrations here are used for market data access, not for automatic execution.
 
 ## Quick Start
 
-### 1. Set up the environment
+### Environment
 
 ```bash
 python3 -m venv .venv
@@ -13,223 +31,189 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in provider credentials in `.env` if you want to use Zerodha or ICICI.
+Fill in provider credentials only for the routes you want to use.
 
-### 2. Run the terminal engine
+### Terminal Engine
 
 ```bash
 python main.py
 ```
 
-### 3. Run the Streamlit app
+### Streamlit App
 
 ```bash
 streamlit run app/streamlit_app.py
 ```
 
-### 4. Refresh realized signal outcomes
+### Refresh Research Outcomes
 
 ```bash
 python scripts/update_signal_outcomes.py
 ```
 
-### 5. Run research reports
+### Research Reporting
 
 ```bash
 python scripts/signal_evaluation_report.py
 ```
 
-## Status
+## Current System Shape
 
-- Beta phase
-- ICICI live flow is currently the most exercised broker path
-- Zerodha integration exists, but is less exercised end to end
-- NSE public-data mode is useful for research and lightweight monitoring, but remains inherently brittle
+The engine now has four important overlay packages sitting on top of the core microstructure signal path:
 
-## What The System Does
+- `macro/` and `news/`: scheduled event risk, headline classification, macro/news aggregation
+- `risk/global_risk_*`: external/global regime classification, overnight gap risk, volatility expansion risk
+- `risk/gamma_vol_acceleration_*`: convexity and acceleration overlay
+- `risk/dealer_hedging_pressure_*`: dealer-flow and pinning/acceleration overlay
+- `risk/option_efficiency_*`: expected move and option-buying efficiency overlay
+- `tuning/`: parameter registry, named packs, experiment runner, search, promotion, and reporting
+  plus walk-forward and regime-aware validation
 
-The repository supports three practical workflows:
+These layers are intentionally modifiers and filters. They do not replace the core directional engine.
 
-1. Live signal generation
-   - Terminal loop via `main.py`
-   - Streamlit app via `app/streamlit_app.py`
-2. Replay and validation
-   - Snapshot replay via `main.py --replay`
-   - Replay regression tooling under `backtest/`
-3. Research dataset and evaluation
-   - Canonical signal capture into `research/signal_evaluation/signals_dataset.csv`
-   - Realized outcome enrichment
-   - Signal evaluation scoring
-   - Grouped research reporting
+## Main Workflows
 
-## Main Entry Points
+### 1. Live Signal Generation
 
-- `main.py`: interactive terminal engine
-- `app/streamlit_app.py`: Streamlit interface for live or replay snapshots
-- `backtest/backtest_runner.py`: historical backtest runner
-- `scripts/update_signal_outcomes.py`: refresh pending realized outcomes in the canonical signal dataset
-- `scripts/signal_evaluation_report.py`: grouped research reporting over the canonical signal dataset
-- `config/generate_token.py`: helper for Zerodha token generation
+- terminal loop in [main.py](/Users/pramitdutta/Desktop/options_quant_engine/main.py)
+- Streamlit app in [streamlit_app.py](/Users/pramitdutta/Desktop/options_quant_engine/app/streamlit_app.py)
+- shared orchestration in [engine_runner.py](/Users/pramitdutta/Desktop/options_quant_engine/app/engine_runner.py)
+
+### 2. Replay and Validation
+
+- replay through `main.py --replay`
+- snapshot-based validation under [backtest/](/Users/pramitdutta/Desktop/options_quant_engine/backtest)
+- deterministic scenario runners for global risk, gamma-vol, dealer pressure, and option efficiency
+
+### 3. Historical Backtesting
+
+- runner in [backtest_runner.py](/Users/pramitdutta/Desktop/options_quant_engine/backtest/backtest_runner.py)
+- default historical builder is bar-based and uses synthetic option-chain reconstruction unless richer data is provided
+- performance conclusions should be interpreted in the context of the available bar granularity
+
+### 4. Research Dataset and Evaluation
+
+- canonical dataset in [signals_dataset.csv](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/signals_dataset.csv)
+- schema and upsert rules in [dataset.py](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/dataset.py)
+- row-building and outcome enrichment in [evaluator.py](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/evaluator.py)
+- this dataset is the primary calibration and validation source for tuning, walk-forward analysis, and promotion decisions
+
+### 5. Parameter Research and Governance
+
+- central parameter registry in [registry.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/registry.py)
+- named packs in [parameter_packs](/Users/pramitdutta/Desktop/options_quant_engine/config/parameter_packs)
+- runtime pack activation in [runtime.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/runtime.py)
+- objective evaluation and experiments in [objectives.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/objectives.py) and [experiments.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/experiments.py)
+- search, promotion, and ledger inspection in [search.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/search.py), [promotion.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/promotion.py), and [reporting.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/reporting.py)
+- walk-forward split engine and regime-aware validation in [walk_forward.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/walk_forward.py), [regimes.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/regimes.py), and [validation.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/validation.py)
+- live shadow comparison and rollout logging in [shadow.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/shadow.py)
 
 ## Architecture
 
-### Live Engine Flow
+### Core Live Flow
 
-1. Spot price and intraday spot context are fetched from `data/spot_downloader.py`
-2. Option-chain data is loaded through `data/data_source_router.py`
-3. Provider output is normalized in `data/provider_normalization.py`
-4. Market data is validated through `data/option_chain_validation.py`
-5. `engine/trading_engine.py` computes analytics, direction, scoring, exits, sizing, and final trade status
-6. Macro/news overlays are applied through `macro/` and `news/`
-7. Terminal or Streamlit views render the result
-8. Signal snapshots are captured into the canonical research dataset
+1. spot data and intraday context are loaded from `data/spot_downloader.py`
+2. option-chain data is routed through broker/public adapters in `data/`
+3. provider output is normalized and validated
+4. expiry selection is resolved before trade generation
+5. [trading_engine.py](/Users/pramitdutta/Desktop/options_quant_engine/engine/trading_engine.py) builds:
+   - market state
+   - probability state
+   - directional vote
+   - trade strength
+   - strike selection
+   - trade payload
+6. overlay layers modify risk, ranking, confirmation, and overnight handling
+7. the result is rendered in the terminal or Streamlit and optionally written into the research dataset
 
-### Research Evaluation Flow
+### Overlay Stack
 
-1. A signal snapshot is converted into a canonical row by `research/signal_evaluation/evaluator.py`
-2. The row is upserted into `research/signal_evaluation/signals_dataset.csv`
-3. Later, realized spot outcomes are merged into the same row by `scripts/update_signal_outcomes.py`
-4. Evaluation scores and grouped reports are produced from the canonical dataset
+The engine currently applies overlays in this order:
 
-## Key Features
+1. macro/news adjustments
+2. global risk regime
+3. gamma-vol acceleration
+4. dealer hedging pressure
+5. option efficiency
 
-- Live option-chain support:
-  - NSE
-  - Zerodha
-  - ICICI Breeze
-- Market structure analytics:
-  - gamma exposure
-  - gamma flip
-  - dealer inventory
-  - dealer hedging flow
-  - dealer hedging simulator
-  - gamma walls
-  - gamma path and squeeze detection
-  - intraday gamma shift
-  - volatility regime
-  - volatility surface
-- Flow and liquidity analytics:
-  - options flow imbalance
-  - smart money flow
-  - liquidity heatmap
-  - liquidity voids
-  - liquidity vacuum zones
-  - dealer liquidity map
-- Macro/news overlay:
-  - scheduled event risk
-  - deterministic headline classification
-  - macro/news regime aggregation
-  - conservative confirmation and sizing adjustments
-- Signal policy:
-  - weighted directional consensus
-  - configurable scoring
-  - symbol-aware intraday thresholds
-  - signal regime and execution regime classification
-- Research system:
-  - canonical one-row-per-signal dataset
-  - dedupe-safe upsert by `signal_id`
-  - realized outcome enrichment
-  - evaluation scoring
-  - regime fingerprinting
-  - grouped research reporting
+That order matters:
+
+- macro/global layers handle exogenous regime stress
+- gamma-vol and dealer pressure handle convexity and path amplification
+- option efficiency asks whether the option itself is worth buying relative to the expected move
+
+### Research Flow
+
+1. each captured signal is assigned a stable `signal_id`
+2. one signal maps to one canonical row
+3. rows are updated as realized outcomes arrive
+4. no-direction rows remain neutral during enrichment rather than being forced bearish
+5. the dataset can be grouped by regime fingerprints, score buckets, probability buckets, and overlay states
+6. actual broker fills or discretionary trades are intentionally outside this calibration loop
 
 ## Repository Guide
 
 ```text
 options_quant_engine/
-├── app/
-├── analytics/
-├── backtest/
-├── config/
-├── data/
-├── engine/
-├── macro/
-├── models/
-├── news/
-├── research/
-├── scripts/
-├── strategy/
-├── tests/
-├── visualization/
+├── analytics/          # dealer/gamma/liquidity/volatility analytics
+├── app/                # shared runner + Streamlit app
+├── backtest/           # backtests, replay helpers, scenario runners
+├── backtests/          # generated backtest output directory
+├── config/             # runtime, scoring, and overlay policies
+│   └── parameter_packs/# versioned parameter pack overrides
+├── data/               # provider adapters, validation, historical loaders
+├── engine/             # orchestration and runtime metadata
+├── macro/              # scheduled-event and macro/news logic
+├── models/             # move probability and ML support
+├── news/               # deterministic news classification
+├── research/           # research note + signal evaluation dataset
+├── risk/               # overlay layers and regime models
+├── scripts/            # operational helpers
+├── strategy/           # confirmation, strike selection, exits, sizing
+├── tests/              # regression and scenario coverage
+├── tuning/             # registry, packs, experiments, search, promotion
 ├── main.py
-├── requirements.txt
 └── README.md
 ```
 
-### Important Directories
+## Key Files
 
-- `analytics/`: market-structure analytics used by live and research flows
-- `app/`: app-facing wrappers and the Streamlit UI
-- `backtest/`: historical replay and evaluation stack
-- `config/`: environment, thresholds, scoring policy, symbol microstructure settings
-- `data/`: broker adapters, validation, replay helpers, and spot/chain loaders
-- `engine/`: main signal-generation pipeline
-- `research/signal_evaluation/`: canonical signal dataset, enrichment, scoring, reporting
-- `scripts/`: operational helpers for dataset refresh and reporting
-- `tests/`: unit coverage for macro/news, live engine policy, and signal evaluation
-
-## Installation
-
-### 1. Create a virtual environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 2. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
+- [trading_engine.py](/Users/pramitdutta/Desktop/options_quant_engine/engine/trading_engine.py): live trade orchestration
+- [trading_engine_support.py](/Users/pramitdutta/Desktop/options_quant_engine/engine/trading_engine_support.py): internal helpers and modifier extraction
+- [strike_selector.py](/Users/pramitdutta/Desktop/options_quant_engine/strategy/strike_selector.py): strike ranking and optional candidate hooks
+- [global_risk_layer.py](/Users/pramitdutta/Desktop/options_quant_engine/risk/global_risk_layer.py): global risk facade
+- [gamma_vol_acceleration_layer.py](/Users/pramitdutta/Desktop/options_quant_engine/risk/gamma_vol_acceleration_layer.py): convexity acceleration overlay
+- [dealer_hedging_pressure_layer.py](/Users/pramitdutta/Desktop/options_quant_engine/risk/dealer_hedging_pressure_layer.py): dealer pressure overlay
+- [option_efficiency_layer.py](/Users/pramitdutta/Desktop/options_quant_engine/risk/option_efficiency_layer.py): expected move / option efficiency overlay
+- [dataset.py](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/dataset.py): canonical schema
+- [evaluator.py](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/evaluator.py): research row builder and outcome enrichment
+- [registry.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/registry.py): parameter registry and metadata
+- [experiments.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/experiments.py): experiment runner and ledger
+- [promotion.py](/Users/pramitdutta/Desktop/options_quant_engine/tuning/promotion.py): baseline/candidate/live workflow
 
 ## Configuration
 
-Environment variables are loaded automatically from `.env` if present.
+Environment variables are loaded from `.env` when present.
 
-### Recommended setup
-
-```bash
-cp .env.example .env
-```
-
-Then fill in the credentials for the provider you want to use.
-
-### Important environment variables
+### Common Provider Settings
 
 Zerodha:
 
 ```bash
-ZERODHA_API_KEY=your_api_key
-ZERODHA_API_SECRET=your_api_secret
-ZERODHA_ACCESS_TOKEN=your_access_token
+ZERODHA_API_KEY=
+ZERODHA_API_SECRET=
+ZERODHA_ACCESS_TOKEN=
 ```
 
 ICICI Breeze:
 
 ```bash
-ICICI_BREEZE_API_KEY=your_api_key
-ICICI_BREEZE_SECRET_KEY=your_secret_key
-ICICI_BREEZE_SESSION_TOKEN=your_session_token
+ICICI_BREEZE_API_KEY=
+ICICI_BREEZE_SECRET_KEY=
+ICICI_BREEZE_SESSION_TOKEN=
 ```
 
-Optional ICICI expiry overrides:
-
-```bash
-ICICI_DEFAULT_EXPIRY_DATE=
-ICICI_NIFTY_EXPIRIES=
-ICICI_BANKNIFTY_EXPIRIES=
-ICICI_FINNIFTY_EXPIRIES=
-```
-
-Optional provider debug flags:
-
-```bash
-NSE_DEBUG=false
-ICICI_DEBUG=false
-```
-
-Optional macro/news settings:
+### Macro / News Settings
 
 ```bash
 MACRO_EVENT_FILTER_ENABLED=true
@@ -239,247 +223,113 @@ HEADLINE_MOCK_FILE=config/mock_headlines.example.json
 HEADLINE_RSS_URLS=
 ```
 
-### Important config modules
-
-- `config/settings.py`: runtime defaults, broker config, backtest settings, paths
-- `config/signal_policy.py`: direction/scoring calibration for live signals
-- `config/symbol_microstructure.py`: symbol-aware live thresholds
-- `config/signal_evaluation_scoring.py`: evaluation scoring weights and thresholds
-
-## How To Run
-
-### Terminal live engine
+### Global Market Overlay Settings
 
 ```bash
-python main.py
+GLOBAL_MARKET_DATA_ENABLED=true
+GLOBAL_MARKET_LOOKBACK_DAYS=40
+GLOBAL_MARKET_STALE_DAYS=2
 ```
 
-You will be prompted for:
+## Parameter Packs
 
-- symbol
-- source
-- broker credentials when needed
-- budget constraints and lot settings
+Named packs currently live under [parameter_packs](/Users/pramitdutta/Desktop/options_quant_engine/config/parameter_packs):
 
-The terminal loop prints:
+- `baseline_v1`: registry-default pack, intended to preserve current behavior
+- `macro_overlay_v1`: stronger macro/global caution candidate
+- `overnight_focus_v1`: more conservative overnight selection candidate
+- `experimental_v1`: research-only pack for offline experiments
+- `candidate_v1`: reserved promotion slot
 
-- spot validation
-- option-chain validation
-- macro/news regime
-- trader view
-- dealer positioning dashboard
-- diagnostics
-- ranked strikes
+Pack format is JSON and supports inheritance through `parent` plus a flat `overrides` map keyed by stable parameter ids such as `trade_strength.scoring.flow_call_bullish` or `global_risk.core.risk_adjustment_extreme`.
 
-Stop with `Ctrl+C`.
+## Promotion And Shadow Mode
 
-### Streamlit app interface
+The production-governance layer now supports four explicit pack roles:
 
-Run the Streamlit UI with:
+- `baseline`: trusted comparison reference
+- `candidate`: pack under review
+- `shadow`: pack evaluated in live conditions without controlling execution
+- `live`: pack currently authoritative for real-time engine decisions
+
+Promotion state and audit files live under `research/parameter_tuning/`:
+
+- `promotion_state.json`
+- `promotion_ledger.jsonl`
+- `shadow_mode_log.jsonl`
+
+These are generated runtime artifacts and are intentionally excluded from source control.
+
+Shadow mode is conservative:
+
+- the authoritative/live pack remains the only pack allowed to control the returned trade decision
+- the shadow pack runs in parallel on the same live snapshot
+- candidate outputs are compared and logged side by side
+- canonical signal capture remains tied to the authoritative path only
+
+## Tuning Workflow
+
+The tuning subsystem is designed for controlled research, not naive profit chasing:
+
+1. baseline defaults are registered with metadata and safety flags
+2. a named parameter pack overrides only the keys under study
+3. experiments evaluate packs against the canonical signal dataset with time-based train/validation splitting
+4. objective scores combine hit rate, composite quality, tradeability, target reachability, drawdown proxy, stability, and frequency sanity checks
+5. walk-forward validation adds explicit out-of-sample split metrics, regime summaries, and robustness scoring
+6. promotion from `baseline` to `candidate` to `live` can now consume out-of-sample and robustness hooks in addition to sample-count, stability, and signal-frequency checks
+
+Structured research outputs are written under `research/parameter_tuning/` when experiment persistence is enabled.
+
+## Signal-Evaluation-First Policy
+
+Research, tuning, validation, and promotion are designed around one principle:
+
+- compare the engine's generated signal with what the market actually did afterward
+
+That means:
+
+- parameter tuning is based on the canonical signal evaluation dataset
+- walk-forward and regime-aware validation are based on signal outcomes, not personal trade history
+- promotion and shadow-mode comparisons are based on signal behavior and robustness
+- manual or real broker trades may still be logged operationally later, but they are not a learning source for this system
+
+## Research Note
+
+The maintained research note source is:
+
+- [quant_note_trade_signal_logic.md](/Users/pramitdutta/Desktop/options_quant_engine/research/quant_note_trade_signal_logic.md)
+
+The polished export is:
+
+- [quant_note_trade_signal_logic_polished.pdf](/Users/pramitdutta/Desktop/options_quant_engine/documentation/research_notes/quant_note_trade_signal_logic_polished.pdf)
+
+Published research-note artifacts live under:
+
+- [research_notes](/Users/pramitdutta/Desktop/options_quant_engine/documentation/research_notes)
+
+## Testing
+
+Targeted regression:
 
 ```bash
-streamlit run app/streamlit_app.py
+pytest -q tests/test_live_engine_policy.py tests/test_signal_evaluation_dataset.py
 ```
 
-The app supports:
-
-- live mode
-- replay mode
-- budget-aware inputs
-- provider credentials
-- snapshot saving
-- trade summary
-- signal research dashboard
-- ranked strikes
-- macro/news diagnostics
-- provider and validation diagnostics
-
-The Streamlit workspace includes a dedicated `Signal Research` tab that reads from the canonical dataset at `research/signal_evaluation/signals_dataset.csv` and summarizes:
-
-- signal counts and scoring coverage
-- average composite score and move probability
-- hit rate by trade strength and macro regime
-- realized return by horizon
-- move-probability calibration
-- top-performing regime fingerprints
-
-If `streamlit` is installed from `requirements.txt`, the app should be available immediately after environment setup.
-
-### Replay mode
-
-Replay a saved snapshot pair:
+Full suite:
 
 ```bash
-python main.py --replay \
-  --replay-spot debug_samples/NIFTY_spot_snapshot_2026-03-13T15-25-00+05-30.json \
-  --replay-chain debug_samples/NIFTY_ICICI_option_chain_snapshot_2026-03-13T17-53-29.968000+05-30.csv
+pytest -q
 ```
 
-### Replay regression
+Parameter tuning framework:
 
 ```bash
-python -m backtest.replay_regression --symbol NIFTY --source ICICI --replay-dir debug_samples
+pytest -q tests/test_parameter_tuning_framework.py
 ```
-
-### Backtesting
-
-```bash
-python backtest/backtest_runner.py
-```
-
-Supports:
-
-- single backtest
-- parameter sweep
-
-## Canonical Signal Research Dataset
-
-The system treats the signal dataset as a canonical research dataset, not an append-only log.
-
-Dataset path:
-
-```text
-research/signal_evaluation/signals_dataset.csv
-```
-
-Rules:
-
-- one signal = one row
-- primary key = `signal_id`
-- rows are updated over time
-- duplicates are removed on canonical write
-- schema is kept stable and normalized
-
-### Signal capture policy
-
-Signal capture can be filtered using these policies:
-
-- `TRADE_ONLY`
-- `ACTIONABLE`
-- `ALL_SIGNALS`
-
-Terminal usage:
-
-```bash
-python main.py --signal-capture-policy TRADE_ONLY
-```
-
-Default behavior remains `ALL_SIGNALS`.
-
-## Research Dataset Operations
-
-### Refresh pending realized outcomes
-
-```bash
-python scripts/update_signal_outcomes.py
-```
-
-Optional cutoff:
-
-```bash
-python scripts/update_signal_outcomes.py --as-of "2026-03-14T15:25:00+05:30"
-```
-
-### Run grouped research reports
-
-```bash
-python scripts/signal_evaluation_report.py
-```
-
-## What The Research Dataset Stores
-
-The canonical dataset includes:
-
-- signal identity and timestamp
-- signal context:
-  - symbol
-  - direction
-  - trade status
-  - signal regime
-  - execution regime
-  - macro regime
-  - gamma regime
-  - flow state
-  - quality scores
-  - probabilities
-- provider and data quality diagnostics
-- realized outcomes:
-  - 5m
-  - 15m
-  - 30m
-  - 60m
-  - same-day close
-  - next-day open
-  - next-day close
-- evaluation scores:
-  - direction score
-  - magnitude score
-  - timing score
-  - tradeability score
-  - composite signal score
-- regime fingerprint fields for later condition-cluster analysis
-
-## Research Reporting Layer
-
-The reporting layer provides grouped analysis such as:
-
-- hit rate by trade strength
-- hit rate by macro regime
-- average score by signal quality
-- average realized return by horizon
-- signal count by regime
-- move-probability calibration
-- regime fingerprint performance
-
-This is designed to help answer:
-
-- which signals work
-- which regimes work best
-- whether move probability calibrates to realized outcomes
-- which market-condition fingerprints produce the best signals
-
-## Tests
-
-Run the main targeted suite:
-
-```bash
-python -m unittest \
-  tests/test_signal_evaluation_reports.py \
-  tests/test_signal_evaluation_dataset.py \
-  tests/test_macro_news_layer.py \
-  tests/test_option_chain_validation.py \
-  tests/test_live_engine_policy.py
-```
-
-## Historical Data Notes
-
-Backtests rely on `data/historical_option_chain.py`.
-
-Behavior:
-
-- if a cached CSV exists in `data_store/`, it is loaded
-- otherwise the system downloads spot history and builds a synthetic option-chain approximation
-
-This means historical testing can run without a paid historical option-chain vendor, but synthetic-chain assumptions still matter.
-
-## Installed Dependencies
-
-Main dependencies include:
-
-- `pandas`
-- `numpy`
-- `matplotlib`
-- `scikit-learn`
-- `yfinance`
-- `requests`
-- `scipy`
-- `kiteconnect`
-- `breeze-connect`
-- `python-dotenv`
-- `streamlit`
 
 ## Notes
 
-- The Streamlit app and terminal engine both use the same core signal-generation path
-- The research dataset is canonical by design and should be treated as a research table, not a log file
-- The best next step after live-market accumulation is calibration review on the captured dataset rather than more rule growth by default
+- The engine is intentionally conservative about missing or stale inputs and should degrade to neutral rather than inventing state.
+- Global risk, gamma-vol, dealer pressure, and option efficiency are overlays, not standalone direction engines.
+- The system is intentionally decoupled from actual executed trades; the canonical signal dataset is the research truth source.
+- The next major research step should be calibration and tuning against the canonical dataset rather than adding hidden rule complexity first.

@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from macro.macro_news_config import HEADLINE_CLASSIFICATION_CONFIG
+from macro.macro_news_config import get_headline_classification_config
 from news.keyword_rules import HEADLINE_RULES, NEGATIVE_KEYWORDS, POSITIVE_KEYWORDS
 from news.models import HeadlineRecord
 
@@ -38,7 +38,7 @@ class HeadlineClassification:
 
 
 def classify_headline(record: HeadlineRecord) -> HeadlineClassification:
-    cfg = HEADLINE_CLASSIFICATION_CONFIG
+    cfg = get_headline_classification_config()
     text = record.headline.lower()
     matched_rules = []
     matched_categories = []

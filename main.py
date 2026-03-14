@@ -4,7 +4,6 @@ import time
 import warnings
 from getpass import getpass
 
-import pandas as pd
 from urllib3.exceptions import NotOpenSSLWarning
 
 
@@ -22,59 +21,16 @@ from config.settings import (
     DATA_SOURCE_OPTIONS,
 )
 
-from data.spot_downloader import get_spot_snapshot, save_spot_snapshot
+from app.engine_runner import run_engine_snapshot
 from data.data_source_router import DataSourceRouter
-from data.replay_loader import (
-    latest_replay_snapshot_paths,
-    load_option_chain_snapshot,
-    load_spot_snapshot,
-    save_option_chain_snapshot,
-)
-from data.option_chain_validation import validate_option_chain
-from data.expiry_resolver import (
-    filter_option_chain_by_expiry,
-    resolve_selected_expiry,
-)
-from macro.scheduled_event_risk import evaluate_scheduled_event_risk
-from macro.macro_news_aggregator import build_macro_news_state
+from data.replay_loader import save_option_chain_snapshot
+from data.spot_downloader import save_spot_snapshot
 from news.service import build_default_headline_service
-
-from engine.trading_engine import generate_trade
 from engine.runtime_metadata import TRADER_VIEW_KEYS
 from research.signal_evaluation import (
     CAPTURE_POLICY_ALL,
-    SIGNAL_DATASET_PATH,
     normalize_capture_policy,
-    save_signal_evaluation,
-    should_capture_signal,
 )
-
-from analytics.gamma_exposure import calculate_gamma_exposure
-from analytics.gamma_flip import gamma_flip_level
-from analytics.dealer_inventory import dealer_inventory_metrics, dealer_inventory_position
-from analytics.volatility_regime import detect_volatility_regime
-from analytics.dealer_gamma_path import simulate_gamma_path, detect_gamma_squeeze
-from analytics.options_flow_imbalance import flow_signal
-from analytics.liquidity_heatmap import strongest_liquidity_levels
-from analytics.liquidity_void import detect_liquidity_voids, liquidity_void_signal
-from analytics.smart_money_flow import smart_money_signal
-from analytics.liquidity_vacuum import detect_liquidity_vacuum, vacuum_direction
-from analytics.market_gamma_map import (
-    calculate_market_gamma,
-    market_gamma_regime,
-    largest_gamma_strikes
-)
-from analytics.gamma_walls import classify_walls
-from analytics.dealer_hedging_flow import dealer_hedging_flow
-from analytics.dealer_hedging_simulator import (
-    simulate_dealer_hedging,
-    hedging_bias
-)
-from analytics.volatility_surface import atm_vol, vol_regime
-from analytics.intraday_gamma_shift import gamma_shift_signal
-from analytics.greeks_engine import enrich_chain_with_greeks, summarize_greek_exposures
-
-from visualization.dealer_dashboard import print_dealer_dashboard
 
 
 def _refresh_interval_for_source(source: str) -> int:
@@ -209,13 +165,6 @@ def get_budget_inputs(apply_budget_constraint: bool):
     return lot_size, requested_lots, max_capital
 
 
-def safe_call(func, *args, default=None, **kwargs):
-    try:
-        return func(*args, **kwargs)
-    except Exception:
-        return default
-
-
 def print_trader_view(trade):
     print("\nTRADER VIEW")
     print("---------------------------")
@@ -223,16 +172,6 @@ def print_trader_view(trade):
     for key in TRADER_VIEW_KEYS:
         if key in trade:
             print(f"{key:26}: {trade.get(key)}")
-
-
-def build_non_overlapping_trade_output(trade):
-    filtered = {}
-
-    for key, value in trade.items():
-        if key not in TRADER_VIEW_KEYS:
-            filtered[key] = value
-
-    return filtered
 
 
 def print_validation_block(title, validation):
@@ -287,6 +226,86 @@ def _format_output_value(value, max_items=8):
     return value
 
 
+def print_dealer_dashboard(summary: dict):
+    print("\nDEALER POSITIONING DASHBOARD")
+    print("--------------------------------------------------")
+    ordered_keys = [
+        ("Spot Price", "spot"),
+        ("Gamma Exposure", "gamma_exposure"),
+        ("Market Gamma", "market_gamma"),
+        ("Delta Exposure", "delta_exposure"),
+        ("Greek Gamma Exp", "gamma_exposure_greeks"),
+        ("Theta Exposure", "theta_exposure"),
+        ("Vega Exposure", "vega_exposure"),
+        ("Rho Exposure", "rho_exposure"),
+        ("Vanna Exposure", "vanna_exposure"),
+        ("Charm Exposure", "charm_exposure"),
+        ("Gamma Flip Level", "gamma_flip"),
+        ("Spot vs Flip", "spot_vs_flip"),
+        ("Gamma Regime", "gamma_regime"),
+        ("Vanna Regime", "vanna_regime"),
+        ("Charm Regime", "charm_regime"),
+        ("Gamma Clusters", "gamma_clusters"),
+        ("Dealer Inventory", "dealer_position"),
+        ("Dealer Inv Basis", "dealer_inventory_basis"),
+        ("Call OI Change", "call_oi_change"),
+        ("Put OI Change", "put_oi_change"),
+        ("Net OI Bias", "net_oi_change_bias"),
+        ("Dealer Hedging Flow", "dealer_hedging_flow"),
+        ("Dealer Hedging Bias", "dealer_hedging_bias"),
+        ("Intraday Gamma State", "intraday_gamma_state"),
+        ("Volatility Regime", "volatility_regime"),
+        ("Vol Surface Regime", "vol_surface_regime"),
+        ("ATM IV", "atm_iv"),
+        ("Flow Signal", "flow_signal"),
+        ("Smart Money Flow", "smart_money_flow"),
+        ("Final Flow Signal", "final_flow_signal"),
+        ("Signal Regime", "signal_regime"),
+        ("Execution Regime", "execution_regime"),
+        ("Macro Event Risk", "macro_event_risk_score"),
+        ("Event Window", "event_window_status"),
+        ("Event Lockdown", "event_lockdown_flag"),
+        ("Min To Next Event", "minutes_to_next_event"),
+        ("Next Event", "next_event_name"),
+        ("Macro Regime", "macro_regime"),
+        ("Macro Sentiment", "macro_sentiment_score"),
+        ("Vol Shock Score", "volatility_shock_score"),
+        ("News Confidence", "news_confidence_score"),
+        ("Headline Velocity", "headline_velocity"),
+        ("Macro Adj Score", "macro_adjustment_score"),
+        ("Macro Size Mult", "macro_position_size_multiplier"),
+        ("Macro Lots Hook", "macro_suggested_lots"),
+        ("Gamma Event", "gamma_event"),
+        ("Support Wall", "support_wall"),
+        ("Resistance Wall", "resistance_wall"),
+        ("Liquidity Levels", "liquidity_levels"),
+        ("Liquidity Voids", "liquidity_voids"),
+        ("Liquidity Void Signal", "liquidity_void_signal"),
+        ("Liquidity Vacuum Zones", "liquidity_vacuum_zones"),
+        ("Liquidity Vacuum State", "liquidity_vacuum_state"),
+        ("Provider Health", "provider_health"),
+    ]
+
+    for label, key in ordered_keys:
+        print(f"{label:22}: {_format_output_value(summary.get(key))}")
+
+    dealer_map = summary.get("dealer_liquidity_map")
+    if dealer_map:
+        print(f"{'Dealer Liquidity Map':22}: {_format_output_value(dealer_map)}")
+
+    print(f"{'Large Move Probability':22}: {_format_output_value(summary.get('large_move_probability'))}")
+    print(f"{'ML Move Probability':22}: {_format_output_value(summary.get('ml_move_probability'))}")
+    print("--------------------------------------------------")
+
+    scoring_breakdown = summary.get("scoring_breakdown")
+    if scoring_breakdown:
+        print("SCORING BREAKDOWN")
+        print("--------------------------------------------------")
+        for key, value in scoring_breakdown.items():
+            print(f"{key:22}: {_format_output_value(value)}")
+        print("--------------------------------------------------")
+
+
 def print_signal_summary(trade):
     compact = {
         "symbol": trade.get("symbol"),
@@ -318,6 +337,24 @@ def print_signal_summary(trade):
         "macro_adjustment_score": trade.get("macro_adjustment_score"),
         "macro_position_size_multiplier": trade.get("macro_position_size_multiplier"),
         "macro_suggested_lots": trade.get("macro_suggested_lots"),
+        "global_risk_state": trade.get("global_risk_state"),
+        "global_risk_score": trade.get("global_risk_score"),
+        "gamma_vol_acceleration_score": trade.get("gamma_vol_acceleration_score"),
+        "squeeze_risk_state": trade.get("squeeze_risk_state"),
+        "directional_convexity_state": trade.get("directional_convexity_state"),
+        "dealer_hedging_pressure_score": trade.get("dealer_hedging_pressure_score"),
+        "dealer_flow_state": trade.get("dealer_flow_state"),
+        "expected_move_points": trade.get("expected_move_points"),
+        "expected_move_pct": trade.get("expected_move_pct"),
+        "expected_move_quality": trade.get("expected_move_quality"),
+        "target_reachability_score": trade.get("target_reachability_score"),
+        "premium_efficiency_score": trade.get("premium_efficiency_score"),
+        "strike_efficiency_score": trade.get("strike_efficiency_score"),
+        "option_efficiency_score": trade.get("option_efficiency_score"),
+        "overnight_gap_risk_score": trade.get("overnight_gap_risk_score"),
+        "overnight_hold_allowed": trade.get("overnight_hold_allowed"),
+        "overnight_hold_reason": trade.get("overnight_hold_reason"),
+        "overnight_risk_penalty": trade.get("overnight_risk_penalty"),
         "atm_iv": trade.get("atm_iv"),
         "vol_surface_regime": trade.get("vol_surface_regime"),
         "capital_required": trade.get("capital_required"),
@@ -368,6 +405,18 @@ def print_diagnostics(trade):
         "confirmation_veto",
         "confirmation_reasons",
         "confirmation_breakdown",
+        "global_risk_reasons",
+        "global_risk_diagnostics",
+        "global_risk_features",
+        "gamma_vol_reasons",
+        "gamma_vol_diagnostics",
+        "gamma_vol_features",
+        "dealer_pressure_reasons",
+        "dealer_pressure_diagnostics",
+        "dealer_pressure_features",
+        "option_efficiency_reasons",
+        "option_efficiency_diagnostics",
+        "option_efficiency_features",
         "scoring_breakdown",
     ]
 
@@ -404,20 +453,6 @@ def main():
     print("Budget Constraint Applied:", apply_budget_constraint)
 
     if args.replay:
-        spot_replay_path = args.replay_spot
-        chain_replay_path = args.replay_chain
-        if not spot_replay_path or not chain_replay_path:
-            discovered_spot, discovered_chain = latest_replay_snapshot_paths(symbol, replay_dir=args.replay_dir)
-            spot_replay_path = spot_replay_path or discovered_spot
-            chain_replay_path = chain_replay_path or discovered_chain
-
-        if not spot_replay_path or not chain_replay_path:
-            print("\nReplay mode requires both a spot snapshot and an option-chain snapshot.")
-            print("Use --replay-spot / --replay-chain, or keep snapshots in debug_samples for auto-discovery.")
-            return
-
-        print(f"Replay Spot Snapshot       : {spot_replay_path}")
-        print(f"Replay Option Chain File  : {chain_replay_path}")
         data_router = None
     else:
         try:
@@ -430,233 +465,210 @@ def main():
     previous_chain = None
     saved_one_spot_snapshot = False
     saved_one_option_chain_snapshot = False
-    latest_saved_spot_path = None
-    latest_saved_chain_path = None
+    replay_paths_printed = False
 
     try:
         while True:
-            try:
+            result = run_engine_snapshot(
+                symbol=symbol,
+                mode="REPLAY" if args.replay else "LIVE",
+                source=source,
+                apply_budget_constraint=apply_budget_constraint,
+                requested_lots=requested_lots,
+                lot_size=lot_size,
+                max_capital=max_capital,
+                replay_spot=args.replay_spot,
+                replay_chain=args.replay_chain,
+                replay_dir=args.replay_dir,
+                capture_signal_evaluation=True,
+                signal_capture_policy=signal_capture_policy,
+                previous_chain=previous_chain,
+                holding_profile="AUTO",
+                headline_service=headline_service,
+                data_router=data_router,
+            )
+
+            if not result.get("ok"):
+                print("\nEngine error:", result.get("error", "Unknown engine error"))
                 if args.replay:
-                    spot_snapshot = load_spot_snapshot(spot_replay_path)
-                else:
-                    spot_snapshot = get_spot_snapshot(symbol)
-                spot_validation = spot_snapshot.get("validation", {})
+                    break
+                time.sleep(refresh_interval)
+                continue
 
-                if not args.replay and not saved_one_spot_snapshot:
-                    try:
-                        saved_path = save_spot_snapshot(spot_snapshot)
-                        latest_saved_spot_path = saved_path
-                        print(f"\nSaved one live spot snapshot to: {saved_path}")
-                    except Exception as save_err:
-                        print(f"\nCould not save spot snapshot: {save_err}")
-                    saved_one_spot_snapshot = True
+            replay_paths = result.get("replay_paths") or {}
+            if args.replay and replay_paths and not replay_paths_printed:
+                print(f"Replay Spot Snapshot       : {replay_paths.get('spot')}")
+                print(f"Replay Option Chain File  : {replay_paths.get('chain')}")
+                replay_paths_printed = True
 
-                print_validation_block("SPOT VALIDATION", spot_validation)
+            spot_snapshot = result.get("spot_snapshot", {})
+            spot_validation = result.get("spot_validation", {})
+            spot_summary = result.get("spot_summary", {})
+            macro_event_state = result.get("macro_event_state", {})
+            headline_state = result.get("headline_state", {})
+            macro_news_state = result.get("macro_news_state", {})
+            global_market_snapshot = result.get("global_market_snapshot", {})
+            global_risk_state = result.get("global_risk_state", {})
+            option_chain_validation = result.get("option_chain_validation", {})
+            option_chain_frame = result.get("option_chain_frame")
+            trade = result.get("trade")
 
-                if not spot_validation.get("is_valid", False):
-                    print("\nSpot snapshot invalid. Skipping this cycle.")
-                    if args.replay:
-                        break
-                    time.sleep(refresh_interval)
-                    continue
+            if not args.replay and not saved_one_spot_snapshot:
+                try:
+                    saved_path = save_spot_snapshot(spot_snapshot)
+                    print(f"\nSaved one live spot snapshot to: {saved_path}")
+                except Exception as save_err:
+                    print(f"\nCould not save spot snapshot: {save_err}")
+                saved_one_spot_snapshot = True
 
-                spot = float(spot_snapshot["spot"])
-                day_open = spot_snapshot.get("day_open")
-                day_high = spot_snapshot.get("day_high")
-                day_low = spot_snapshot.get("day_low")
-                prev_close = spot_snapshot.get("prev_close")
-                spot_timestamp = spot_snapshot.get("timestamp")
-                lookback_avg_range_pct = spot_snapshot.get("lookback_avg_range_pct")
+            print_validation_block("SPOT VALIDATION", spot_validation)
 
-                print_key_value_block("SPOT SNAPSHOT", {
-                    "spot": spot,
-                    "day_open": day_open,
-                    "day_high": day_high,
-                    "day_low": day_low,
-                    "prev_close": prev_close,
-                    "timestamp": spot_timestamp,
-                    "lookback_avg_range_pct": lookback_avg_range_pct,
-                })
+            if not spot_validation.get("is_valid", False):
+                print("\nSpot snapshot invalid. Skipping this cycle.")
+                if args.replay:
+                    break
+                time.sleep(refresh_interval)
+                continue
 
-                macro_event_state = evaluate_scheduled_event_risk(
-                    symbol=symbol,
-                    as_of=spot_timestamp,
+            print_key_value_block("SPOT SNAPSHOT", {
+                "spot": spot_summary.get("spot"),
+                "day_open": spot_summary.get("day_open"),
+                "day_high": spot_summary.get("day_high"),
+                "day_low": spot_summary.get("day_low"),
+                "prev_close": spot_summary.get("prev_close"),
+                "timestamp": spot_summary.get("timestamp"),
+                "lookback_avg_range_pct": spot_summary.get("lookback_avg_range_pct"),
+            })
+
+            print_key_value_block("MACRO EVENT RISK", {
+                "macro_event_risk_score": macro_event_state.get("macro_event_risk_score"),
+                "event_window_status": macro_event_state.get("event_window_status"),
+                "event_lockdown_flag": macro_event_state.get("event_lockdown_flag"),
+                "minutes_to_next_event": macro_event_state.get("minutes_to_next_event"),
+                "next_event_name": macro_event_state.get("next_event_name"),
+            })
+
+            print_key_value_block("MACRO / NEWS REGIME", {
+                "macro_regime": macro_news_state.get("macro_regime"),
+                "macro_regime_reasons": macro_news_state.get("macro_regime_reasons"),
+                "macro_event_risk_score": macro_news_state.get("macro_event_risk_score"),
+                "macro_sentiment_score": macro_news_state.get("macro_sentiment_score"),
+                "volatility_shock_score": macro_news_state.get("volatility_shock_score"),
+                "event_lockdown_flag": macro_news_state.get("event_lockdown_flag"),
+                "news_confidence_score": macro_news_state.get("news_confidence_score"),
+                "headline_velocity": macro_news_state.get("headline_velocity"),
+                "headline_count": macro_news_state.get("headline_count"),
+                "classified_headline_count": macro_news_state.get("classified_headline_count"),
+                "next_event_name": macro_news_state.get("next_event_name"),
+                "neutral_fallback": macro_news_state.get("neutral_fallback"),
+            })
+            print_key_value_block("GLOBAL RISK STATE", {
+                "global_risk_state": global_risk_state.get("global_risk_state"),
+                "global_risk_score": global_risk_state.get("global_risk_score"),
+                "overnight_gap_risk_score": global_risk_state.get("overnight_gap_risk_score"),
+                "volatility_expansion_risk_score": global_risk_state.get("volatility_expansion_risk_score"),
+                "overnight_hold_allowed": global_risk_state.get("overnight_hold_allowed"),
+                "overnight_hold_reason": global_risk_state.get("overnight_hold_reason"),
+                "overnight_risk_penalty": global_risk_state.get("overnight_risk_penalty"),
+                "global_risk_adjustment_score": global_risk_state.get("global_risk_adjustment_score"),
+                "global_risk_reasons": global_risk_state.get("global_risk_reasons"),
+            })
+            print_key_value_block("GLOBAL MARKET SNAPSHOT", {
+                "provider": global_market_snapshot.get("provider"),
+                "data_available": global_market_snapshot.get("data_available"),
+                "stale": global_market_snapshot.get("stale"),
+                "oil_change_24h": global_market_snapshot.get("market_inputs", {}).get("oil_change_24h"),
+                "vix_change_24h": global_market_snapshot.get("market_inputs", {}).get("vix_change_24h"),
+                "sp500_change_24h": global_market_snapshot.get("market_inputs", {}).get("sp500_change_24h"),
+                "us10y_change_bp": global_market_snapshot.get("market_inputs", {}).get("us10y_change_bp"),
+                "usdinr_change_24h": global_market_snapshot.get("market_inputs", {}).get("usdinr_change_24h"),
+                "warnings": global_market_snapshot.get("warnings"),
+            })
+
+            macro_news_details = {
+                "headline_provider": headline_state.get("provider_name"),
+                "headline_data_available": headline_state.get("data_available"),
+                "headline_is_stale": headline_state.get("is_stale"),
+                "headline_warnings": headline_state.get("warnings"),
+                "headline_issues": headline_state.get("issues"),
+                "provider_metadata": headline_state.get("provider_metadata"),
+                "classification_preview": macro_news_state.get("classification_preview"),
+            }
+            if (
+                headline_state.get("warnings")
+                or headline_state.get("issues")
+                or headline_state.get("provider_metadata")
+                or macro_news_state.get("classification_preview")
+            ):
+                print_key_value_block(
+                    "MACRO / NEWS DETAILS",
+                    {key: _format_output_value(value) for key, value in macro_news_details.items()},
                 )
 
-                print_key_value_block("MACRO EVENT RISK", {
-                    "macro_event_risk_score": macro_event_state.get("macro_event_risk_score"),
-                    "event_window_status": macro_event_state.get("event_window_status"),
-                    "event_lockdown_flag": macro_event_state.get("event_lockdown_flag"),
-                    "minutes_to_next_event": macro_event_state.get("minutes_to_next_event"),
-                    "next_event_name": macro_event_state.get("next_event_name"),
-                })
+            print_validation_block("OPTION CHAIN VALIDATION", option_chain_validation)
 
-                headline_state = headline_service.fetch(
-                    symbol=symbol,
-                    as_of=spot_timestamp,
-                    replay_mode=args.replay,
-                )
-                macro_news_state = build_macro_news_state(
-                    event_state=macro_event_state,
-                    headline_state=headline_state,
-                    as_of=spot_timestamp,
-                ).to_dict()
+            if not option_chain_validation.get("is_valid", False):
+                print("\nOption chain invalid. Skipping this cycle.")
+                if args.replay:
+                    break
+                time.sleep(refresh_interval)
+                continue
 
-                print_key_value_block("MACRO / NEWS REGIME", {
+            print(f"\n{'option_chain_rows':26}: {result.get('option_chain_rows')}")
+
+            if not args.replay and not saved_one_option_chain_snapshot:
+                try:
+                    saved_chain_path = save_option_chain_snapshot(
+                        option_chain_frame,
+                        symbol=symbol,
+                        source=source,
+                    )
+                    print(f"Saved one live option chain snapshot to: {saved_chain_path}")
+                except Exception as save_err:
+                    print(f"Could not save option chain snapshot: {save_err}")
+                saved_one_option_chain_snapshot = True
+
+            if trade:
+                signal_capture_status = result.get("signal_capture_status", "SKIPPED")
+                if signal_capture_status == "CAPTURED":
+                    print(f"\n{'signal_capture':26}: CAPTURED -> {result.get('signal_dataset_path')}")
+                elif signal_capture_status.startswith("FAILED:"):
+                    print(
+                        f"\n{'signal_capture':26}: {signal_capture_status}"
+                        f" ({result.get('signal_capture_error', 'unknown error')})"
+                    )
+                elif signal_capture_status.startswith("SKIPPED_POLICY:"):
+                    print(f"\n{'signal_capture':26}: {signal_capture_status}")
+
+                print_trader_view(trade)
+
+                dashboard_for_print = dict(trade)
+                dashboard_for_print.update({
+                    "spot": spot_summary.get("spot"),
+                    "spot_timestamp": spot_summary.get("timestamp"),
+                    "day_open": spot_summary.get("day_open"),
+                    "day_high": spot_summary.get("day_high"),
+                    "day_low": spot_summary.get("day_low"),
+                    "prev_close": spot_summary.get("prev_close"),
+                    "lookback_avg_range_pct": spot_summary.get("lookback_avg_range_pct"),
+                    "spot_validation": spot_validation,
+                    "option_chain_validation": option_chain_validation,
                     "macro_regime": macro_news_state.get("macro_regime"),
-                    "macro_regime_reasons": macro_news_state.get("macro_regime_reasons"),
-                    "macro_event_risk_score": macro_news_state.get("macro_event_risk_score"),
                     "macro_sentiment_score": macro_news_state.get("macro_sentiment_score"),
                     "volatility_shock_score": macro_news_state.get("volatility_shock_score"),
-                    "event_lockdown_flag": macro_news_state.get("event_lockdown_flag"),
                     "news_confidence_score": macro_news_state.get("news_confidence_score"),
                     "headline_velocity": macro_news_state.get("headline_velocity"),
-                    "headline_count": macro_news_state.get("headline_count"),
-                    "classified_headline_count": macro_news_state.get("classified_headline_count"),
-                    "next_event_name": macro_news_state.get("next_event_name"),
-                    "neutral_fallback": macro_news_state.get("neutral_fallback"),
                 })
 
-                macro_news_details = {
-                    "headline_provider": headline_state.provider_name,
-                    "headline_data_available": headline_state.data_available,
-                    "headline_is_stale": headline_state.is_stale,
-                    "headline_warnings": headline_state.warnings,
-                    "headline_issues": headline_state.issues,
-                    "provider_metadata": headline_state.provider_metadata,
-                    "classification_preview": macro_news_state.get("classification_preview"),
-                }
-                if (
-                    headline_state.warnings
-                    or headline_state.issues
-                    or headline_state.provider_metadata
-                    or macro_news_state.get("classification_preview")
-                ):
-                    print_key_value_block(
-                        "MACRO / NEWS DETAILS",
-                        {key: _format_output_value(value) for key, value in macro_news_details.items()},
-                    )
+                print_dealer_dashboard(dashboard_for_print)
 
-                if args.replay:
-                    option_chain = load_option_chain_snapshot(chain_replay_path)
-                else:
-                    option_chain = data_router.get_option_chain(symbol)
-                resolved_expiry = resolve_selected_expiry(option_chain)
-                option_chain = filter_option_chain_by_expiry(option_chain, resolved_expiry)
-                option_chain_validation = validate_option_chain(option_chain)
-                print_validation_block("OPTION CHAIN VALIDATION", option_chain_validation)
+                print_signal_summary(trade)
+                print_diagnostics(trade)
+            else:
+                print("\nNo trade signal")
+                print_key_value_block("ENGINE STATUS", {"message": "No trade payload returned"})
 
-                if not option_chain_validation.get("is_valid", False):
-                    print("\nOption chain invalid. Skipping this cycle.")
-                    if args.replay:
-                        break
-                    time.sleep(refresh_interval)
-                    continue
-
-                print(f"\n{'option_chain_rows':26}: {len(option_chain)}")
-
-                if not args.replay and not saved_one_option_chain_snapshot:
-                    try:
-                        saved_chain_path = save_option_chain_snapshot(
-                            option_chain,
-                            symbol=symbol,
-                            source=source,
-                        )
-                        latest_saved_chain_path = saved_chain_path
-                        print(f"Saved one live option chain snapshot to: {saved_chain_path}")
-                    except Exception as save_err:
-                        print(f"Could not save option chain snapshot: {save_err}")
-                    saved_one_option_chain_snapshot = True
-
-                trade = generate_trade(
-                    symbol=symbol,
-                    spot=spot,
-                    option_chain=option_chain,
-                    previous_chain=previous_chain,
-                    day_high=day_high,
-                    day_low=day_low,
-                    day_open=day_open,
-                    prev_close=prev_close,
-                    lookback_avg_range_pct=lookback_avg_range_pct,
-                    spot_validation=spot_validation,
-                    option_chain_validation=option_chain_validation,
-                    apply_budget_constraint=apply_budget_constraint,
-                    requested_lots=requested_lots,
-                    lot_size=lot_size,
-                    max_capital=max_capital,
-                    macro_event_state=macro_event_state,
-                    macro_news_state=macro_news_state,
-                    valuation_time=spot_timestamp,
-                )
-
-                if trade:
-                    trade["selected_expiry"] = option_chain_validation.get("selected_expiry")
-
-                    signal_capture_payload = {
-                        "ok": True,
-                        "mode": "REPLAY" if args.replay else "LIVE",
-                        "source": source,
-                        "symbol": symbol,
-                        "saved_paths": {
-                            "spot": latest_saved_spot_path,
-                            "chain": latest_saved_chain_path,
-                        },
-                        "spot_snapshot": spot_snapshot,
-                        "spot_summary": {
-                            "spot": spot,
-                            "day_open": day_open,
-                            "day_high": day_high,
-                            "day_low": day_low,
-                            "prev_close": prev_close,
-                            "timestamp": spot_timestamp,
-                            "lookback_avg_range_pct": lookback_avg_range_pct,
-                            "ticker": spot_snapshot.get("ticker"),
-                        },
-                        "option_chain_validation": option_chain_validation,
-                        "trade": trade,
-                    }
-
-                    if should_capture_signal(trade, signal_capture_policy):
-                        try:
-                            save_signal_evaluation(signal_capture_payload)
-                            print(f"\n{'signal_capture':26}: CAPTURED -> {SIGNAL_DATASET_PATH}")
-                        except Exception as capture_err:
-                            print(f"\n{'signal_capture':26}: FAILED ({type(capture_err).__name__}: {capture_err})")
-                    else:
-                        print(f"\n{'signal_capture':26}: SKIPPED_POLICY ({signal_capture_policy})")
-
-                    print_trader_view(trade)
-
-                    dashboard_for_print = dict(trade)
-                    dashboard_for_print.update({
-                        "spot": round(spot, 2),
-                        "spot_timestamp": spot_timestamp,
-                        "day_open": day_open,
-                        "day_high": day_high,
-                        "day_low": day_low,
-                        "prev_close": prev_close,
-                        "lookback_avg_range_pct": lookback_avg_range_pct,
-                        "spot_validation": spot_validation,
-                        "option_chain_validation": option_chain_validation,
-                        "macro_regime": macro_news_state.get("macro_regime"),
-                        "macro_sentiment_score": macro_news_state.get("macro_sentiment_score"),
-                        "volatility_shock_score": macro_news_state.get("volatility_shock_score"),
-                        "news_confidence_score": macro_news_state.get("news_confidence_score"),
-                        "headline_velocity": macro_news_state.get("headline_velocity"),
-                    })
-
-                    print_dealer_dashboard(dashboard_for_print)
-
-                    print_signal_summary(trade)
-                    print_diagnostics(trade)
-                else:
-                    print("\nNo trade signal")
-                    print_key_value_block("ENGINE STATUS", {"message": "No trade payload returned"})
-
-                previous_chain = option_chain.copy()
-
-            except Exception as e:
-                print("\nEngine error:", e)
+            previous_chain = option_chain_frame.copy()
 
             if args.replay:
                 break

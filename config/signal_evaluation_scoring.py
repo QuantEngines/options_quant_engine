@@ -33,3 +33,43 @@ SIGNAL_EVALUATION_THRESHOLDS = {
     "tradeability_ratio_good": 1.50,
     "tradeability_ratio_strong": 2.50,
 }
+
+SIGNAL_EVALUATION_SELECTION_POLICY = {
+    "trade_strength_floor": 45.0,
+    "composite_signal_score_floor": 55.0,
+    "tradeability_score_floor": 50.0,
+    "move_probability_floor": 0.40,
+    "option_efficiency_score_floor": 35.0,
+    "global_risk_score_cap": 85.0,
+    "require_overnight_hold_allowed": False,
+}
+
+
+def get_signal_evaluation_score_weights():
+    from tuning.runtime import resolve_mapping
+
+    return resolve_mapping("evaluation_thresholds.score_weights", SIGNAL_EVALUATION_SCORE_WEIGHTS)
+
+
+def get_signal_evaluation_direction_weights():
+    from tuning.runtime import resolve_mapping
+
+    return resolve_mapping("evaluation_thresholds.direction_weights", SIGNAL_EVALUATION_DIRECTION_WEIGHTS)
+
+
+def get_signal_evaluation_timing_weights():
+    from tuning.runtime import resolve_mapping
+
+    return resolve_mapping("evaluation_thresholds.timing_weights", SIGNAL_EVALUATION_TIMING_WEIGHTS)
+
+
+def get_signal_evaluation_thresholds():
+    from tuning.runtime import resolve_mapping
+
+    return resolve_mapping("evaluation_thresholds.core", SIGNAL_EVALUATION_THRESHOLDS)
+
+
+def get_signal_evaluation_selection_policy():
+    from tuning.runtime import resolve_mapping
+
+    return resolve_mapping("evaluation_thresholds.selection", SIGNAL_EVALUATION_SELECTION_POLICY)

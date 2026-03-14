@@ -17,6 +17,8 @@ def _run_one_sweep(args):
         years=years,
         signal_persistence=signal_persistence,
         max_hold_bars=max_hold_bars,
+        target_profit_percent=tp,
+        stop_loss_percent=sl,
     )
     result.update({
         "signal_persistence": signal_persistence,

@@ -1,0 +1,177 @@
+{
+  "scenarios": [
+    {
+      "name": "short_gamma_upside_breakout",
+      "inputs": {
+        "spot": 22000,
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "ABOVE_FLIP",
+        "gamma_flip_distance_pct": 0.08,
+        "dealer_position": "Short Gamma",
+        "dealer_hedging_bias": "UPSIDE_ACCELERATION",
+        "dealer_hedging_flow": "BUY_FUTURES",
+        "gamma_clusters": [21940, 22040],
+        "liquidity_levels": [21920, 22060],
+        "support_wall": 21950,
+        "resistance_wall": 22180,
+        "liquidity_vacuum_state": "BREAKOUT_ZONE",
+        "intraday_gamma_state": "VOL_EXPANSION",
+        "intraday_range_pct": 0.9,
+        "flow_signal": "BULLISH_FLOW",
+        "smart_money_flow": "BULLISH_FLOW",
+        "macro_event_risk_score": 15,
+        "global_risk_state": {"global_risk_state": "GLOBAL_NEUTRAL"},
+        "volatility_explosion_probability": 0.45,
+        "gamma_vol_acceleration_score": 72
+      },
+      "expected": {
+        "dealer_flow_state": "UPSIDE_HEDGING_ACCELERATION"
+      }
+    },
+    {
+      "name": "short_gamma_downside_weak_support",
+      "inputs": {
+        "spot": 22000,
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "BELOW_FLIP",
+        "gamma_flip_distance_pct": 0.10,
+        "dealer_position": "Short Gamma",
+        "dealer_hedging_bias": "DOWNSIDE_ACCELERATION",
+        "dealer_hedging_flow": "SELL_FUTURES",
+        "gamma_clusters": [22090],
+        "liquidity_levels": [22120],
+        "support_wall": 21780,
+        "resistance_wall": 22140,
+        "liquidity_vacuum_state": "NEAR_VACUUM",
+        "intraday_gamma_state": "VOL_EXPANSION",
+        "intraday_range_pct": 1.0,
+        "flow_signal": "BEARISH_FLOW",
+        "smart_money_flow": "BEARISH_FLOW",
+        "macro_event_risk_score": 22,
+        "global_risk_state": {"global_risk_state": "RISK_OFF"},
+        "volatility_explosion_probability": 0.62,
+        "gamma_vol_acceleration_score": 78
+      },
+      "expected": {
+        "dealer_flow_state": "DOWNSIDE_HEDGING_ACCELERATION"
+      }
+    },
+    {
+      "name": "long_gamma_pinning_regime",
+      "inputs": {
+        "spot": 22000,
+        "gamma_regime": "LONG_GAMMA_ZONE",
+        "spot_vs_flip": "ABOVE_FLIP",
+        "gamma_flip_distance_pct": 0.35,
+        "dealer_position": "Long Gamma",
+        "dealer_hedging_bias": "PINNING",
+        "dealer_hedging_flow": "BUY_FUTURES",
+        "gamma_clusters": [21980, 22020, 22040],
+        "liquidity_levels": [21990, 22010, 22030],
+        "support_wall": 21985,
+        "resistance_wall": 22025,
+        "liquidity_vacuum_state": "NO_VACUUM",
+        "intraday_gamma_state": "VOL_SUPPRESSION",
+        "intraday_range_pct": 0.24,
+        "flow_signal": "NEUTRAL_FLOW",
+        "smart_money_flow": "NEUTRAL_FLOW",
+        "macro_event_risk_score": 6,
+        "global_risk_state": {"global_risk_state": "GLOBAL_NEUTRAL"},
+        "volatility_explosion_probability": 0.08,
+        "gamma_vol_acceleration_score": 18
+      },
+      "expected": {
+        "dealer_flow_state": "PINNING_DOMINANT"
+      }
+    },
+    {
+      "name": "near_flip_two_sided_instability",
+      "inputs": {
+        "spot": 22000,
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "AT_FLIP",
+        "gamma_flip_distance_pct": 0.05,
+        "dealer_position": "Short Gamma",
+        "dealer_hedging_bias": "PINNING",
+        "dealer_hedging_flow": "BUY_FUTURES",
+        "gamma_clusters": [21995, 22010],
+        "liquidity_levels": [21990, 22015],
+        "support_wall": 21980,
+        "resistance_wall": 22030,
+        "liquidity_vacuum_state": "NEAR_VACUUM",
+        "intraday_gamma_state": "VOL_EXPANSION",
+        "intraday_range_pct": 0.82,
+        "flow_signal": "BULLISH_FLOW",
+        "smart_money_flow": "BEARISH_FLOW",
+        "macro_event_risk_score": 18,
+        "global_risk_state": {"global_risk_state": "GLOBAL_NEUTRAL"},
+        "volatility_explosion_probability": 0.38,
+        "gamma_vol_acceleration_score": 64
+      },
+      "expected": {
+        "dealer_flow_state": "TWO_SIDED_INSTABILITY"
+      }
+    },
+    {
+      "name": "macro_global_shock_amplifies_pressure",
+      "inputs": {
+        "spot": 22000,
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "BELOW_FLIP",
+        "gamma_flip_distance_pct": 0.09,
+        "dealer_position": "Short Gamma",
+        "dealer_hedging_bias": "DOWNSIDE_ACCELERATION",
+        "dealer_hedging_flow": "SELL_FUTURES",
+        "gamma_clusters": [22120],
+        "liquidity_levels": [22140],
+        "support_wall": 21750,
+        "resistance_wall": 22080,
+        "liquidity_vacuum_state": "BREAKOUT_ZONE",
+        "intraday_gamma_state": "VOL_EXPANSION",
+        "intraday_range_pct": 1.05,
+        "flow_signal": "BEARISH_FLOW",
+        "smart_money_flow": "BEARISH_FLOW",
+        "macro_event_risk_score": 82,
+        "global_risk_state": {
+          "global_risk_state": "VOL_SHOCK",
+          "holding_context": {"holding_profile": "OVERNIGHT", "overnight_relevant": true}
+        },
+        "volatility_explosion_probability": 0.86,
+        "gamma_vol_acceleration_score": 84,
+        "holding_profile": "OVERNIGHT"
+      },
+      "expected": {
+        "dealer_flow_state": "DOWNSIDE_HEDGING_ACCELERATION",
+        "overnight_hold_allowed": false
+      }
+    },
+    {
+      "name": "neutral_environment",
+      "inputs": {
+        "spot": 22000,
+        "gamma_regime": "LONG_GAMMA_ZONE",
+        "spot_vs_flip": "ABOVE_FLIP",
+        "gamma_flip_distance_pct": 1.1,
+        "dealer_position": "Long Gamma",
+        "dealer_hedging_bias": "PINNING",
+        "dealer_hedging_flow": "BUY_FUTURES",
+        "gamma_clusters": [21800, 22200],
+        "liquidity_levels": [21780, 22220],
+        "support_wall": 21850,
+        "resistance_wall": 22160,
+        "liquidity_vacuum_state": "NO_VACUUM",
+        "intraday_gamma_state": "NEUTRAL",
+        "intraday_range_pct": 0.2,
+        "flow_signal": "NEUTRAL_FLOW",
+        "smart_money_flow": "NEUTRAL_FLOW",
+        "macro_event_risk_score": 4,
+        "global_risk_state": {"global_risk_state": "RISK_ON"},
+        "volatility_explosion_probability": 0.03,
+        "gamma_vol_acceleration_score": 14
+      },
+      "expected": {
+        "dealer_flow_state": "HEDGING_NEUTRAL"
+      }
+    }
+  ]
+}

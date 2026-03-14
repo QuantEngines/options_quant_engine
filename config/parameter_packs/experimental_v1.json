@@ -1,0 +1,21 @@
+{
+  "name": "experimental_v1",
+  "version": "1.0.0",
+  "description": "Research-only pack for offline experiments and pack search.",
+  "parent": "baseline_v1",
+  "tags": [
+    "experimental",
+    "research_only"
+  ],
+  "metadata": {
+    "state": "candidate",
+    "owner": "research"
+  },
+  "overrides": {
+    "trade_strength.direction_thresholds.min_score": 1.6,
+    "trade_strength.runtime_thresholds.min_trade_strength": 42,
+    "option_efficiency.core.good_efficiency_threshold": 60,
+    "evaluation_thresholds.selection.trade_strength_floor": 42.0,
+    "evaluation_thresholds.selection.composite_signal_score_floor": 52.0
+  }
+}

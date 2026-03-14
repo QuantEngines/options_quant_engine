@@ -36,11 +36,22 @@ def calculate_trade_pnl(trade: dict, exit_snapshot):
 
     strike = trade.get("strike")
     option_type = trade.get("option_type")
+    selected_expiry = trade.get("selected_expiry")
     raw_entry_price = float(trade.get("entry_price", 0))
     target = float(trade.get("target", 0))
     stop_loss = float(trade.get("stop_loss", 0))
     lot_size = int(trade.get("lot_size", 1))
     number_of_lots = int(trade.get("optimized_lots", trade.get("number_of_lots", 1)))
+
+    if (
+        selected_expiry
+        and exit_snapshot is not None
+        and "EXPIRY_DT" in exit_snapshot.columns
+    ):
+        expiry_values = exit_snapshot["EXPIRY_DT"].astype(str).str.strip()
+        filtered_snapshot = exit_snapshot.loc[expiry_values.eq(str(selected_expiry).strip())].copy()
+        if not filtered_snapshot.empty:
+            exit_snapshot = filtered_snapshot
 
     row = _find_option_row(exit_snapshot, strike, option_type)
     if row is None:

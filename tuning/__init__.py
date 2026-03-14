@@ -1,0 +1,54 @@
+"""
+Parameter registry and tuning framework for controlled research iteration.
+"""
+
+from tuning.experiments import run_parameter_experiment
+from tuning.packs import load_parameter_pack, list_parameter_packs
+from tuning.promotion import (
+    evaluate_promotion,
+    get_active_live_pack,
+    get_active_shadow_pack,
+    get_promotion_runtime_context,
+    move_candidate_to_shadow,
+    promote_candidate,
+    record_manual_approval,
+    rollback_live_pack,
+    update_pack_state,
+)
+from tuning.registry import get_parameter_registry
+from tuning.reporting import summarize_promotion_workflow
+from tuning.runtime import (
+    get_active_parameter_pack,
+    get_parameter_value,
+    set_active_parameter_pack,
+    temporary_parameter_pack,
+)
+from tuning.shadow import compare_shadow_trade_outputs, summarize_shadow_log
+from tuning.validation import compare_validation_results, run_walk_forward_validation
+from tuning.walk_forward import build_walk_forward_splits
+
+__all__ = [
+    "build_walk_forward_splits",
+    "compare_validation_results",
+    "compare_shadow_trade_outputs",
+    "evaluate_promotion",
+    "get_active_live_pack",
+    "get_active_parameter_pack",
+    "get_parameter_registry",
+    "get_parameter_value",
+    "get_active_shadow_pack",
+    "get_promotion_runtime_context",
+    "list_parameter_packs",
+    "load_parameter_pack",
+    "move_candidate_to_shadow",
+    "promote_candidate",
+    "record_manual_approval",
+    "rollback_live_pack",
+    "run_parameter_experiment",
+    "run_walk_forward_validation",
+    "set_active_parameter_pack",
+    "summarize_promotion_workflow",
+    "summarize_shadow_log",
+    "temporary_parameter_pack",
+    "update_pack_state",
+]

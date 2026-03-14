@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +13,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from research.signal_evaluation.dataset import ensure_signals_dataset_exists, load_signals_dataset
+from research.signal_evaluation.dataset import write_signals_dataset
 from research.signal_evaluation.evaluator import (
     build_signal_evaluation_row,
     build_regime_fingerprint,
@@ -76,6 +78,32 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                 "gamma_regime": "SHORT_GAMMA_ZONE",
                 "spot_vs_flip": "ABOVE_FLIP",
                 "macro_regime": "MACRO_NEUTRAL",
+                "global_risk_state": "GLOBAL_NEUTRAL",
+                "global_risk_score": 24,
+                "gamma_vol_acceleration_score": 68,
+                "squeeze_risk_state": "HIGH_ACCELERATION_RISK",
+                "directional_convexity_state": "UPSIDE_SQUEEZE_RISK",
+                "upside_squeeze_risk": 0.74,
+                "downside_airpocket_risk": 0.41,
+                "overnight_convexity_risk": 0.52,
+                "gamma_vol_adjustment_score": 4,
+                "dealer_hedging_pressure_score": 66,
+                "dealer_flow_state": "UPSIDE_HEDGING_ACCELERATION",
+                "upside_hedging_pressure": 0.81,
+                "downside_hedging_pressure": 0.32,
+                "pinning_pressure_score": 0.18,
+                "dealer_pressure_adjustment_score": 3,
+                "expected_move_points": 165.4,
+                "expected_move_pct": 0.7518,
+                "target_reachability_score": 78,
+                "premium_efficiency_score": 74,
+                "strike_efficiency_score": 78,
+                "option_efficiency_score": 77,
+                "option_efficiency_adjustment_score": 4,
+                "oil_shock_score": 0.7,
+                "commodity_risk_score": 0.53,
+                "market_volatility_shock_score": 0.7,
+                "volatility_explosion_probability": 0.45,
                 "dealer_position": "Short Gamma",
                 "dealer_hedging_bias": "UPSIDE_ACCELERATION",
                 "volatility_regime": "VOL_EXPANSION",
@@ -100,6 +128,32 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(row_a["provider_health_status"], "GOOD")
         self.assertEqual(row_a["move_probability"], 0.72)
         self.assertEqual(row_a["rule_move_probability"], 0.61)
+        self.assertEqual(row_a["global_risk_state"], "GLOBAL_NEUTRAL")
+        self.assertEqual(row_a["global_risk_score"], 24)
+        self.assertEqual(row_a["gamma_vol_acceleration_score"], 68)
+        self.assertEqual(row_a["squeeze_risk_state"], "HIGH_ACCELERATION_RISK")
+        self.assertEqual(row_a["directional_convexity_state"], "UPSIDE_SQUEEZE_RISK")
+        self.assertEqual(row_a["upside_squeeze_risk"], 0.74)
+        self.assertEqual(row_a["downside_airpocket_risk"], 0.41)
+        self.assertEqual(row_a["overnight_convexity_risk"], 0.52)
+        self.assertEqual(row_a["gamma_vol_adjustment_score"], 4)
+        self.assertEqual(row_a["dealer_hedging_pressure_score"], 66)
+        self.assertEqual(row_a["dealer_flow_state"], "UPSIDE_HEDGING_ACCELERATION")
+        self.assertEqual(row_a["upside_hedging_pressure"], 0.81)
+        self.assertEqual(row_a["downside_hedging_pressure"], 0.32)
+        self.assertEqual(row_a["pinning_pressure_score"], 0.18)
+        self.assertEqual(row_a["dealer_pressure_adjustment_score"], 3)
+        self.assertEqual(row_a["expected_move_points"], 165.4)
+        self.assertEqual(row_a["expected_move_pct"], 0.7518)
+        self.assertEqual(row_a["target_reachability_score"], 78)
+        self.assertEqual(row_a["premium_efficiency_score"], 74)
+        self.assertEqual(row_a["strike_efficiency_score"], 78)
+        self.assertEqual(row_a["option_efficiency_score"], 77)
+        self.assertEqual(row_a["option_efficiency_adjustment_score"], 4)
+        self.assertEqual(row_a["oil_shock_score"], 0.7)
+        self.assertEqual(row_a["commodity_risk_score"], 0.53)
+        self.assertEqual(row_a["volatility_shock_score"], 0.7)
+        self.assertEqual(row_a["volatility_explosion_probability"], 0.45)
         self.assertTrue(str(row_a["regime_fingerprint"]).startswith("signal_regime="))
         self.assertEqual(len(str(row_a["regime_fingerprint_id"])), 16)
         self.assertEqual(row_a["signal_calibration_bucket"], "80_100")
@@ -122,7 +176,58 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
             frame = load_signals_dataset(dataset_path)
             self.assertIn("signal_id", frame.columns)
             self.assertIn("move_probability", frame.columns)
+            self.assertIn("global_risk_state", frame.columns)
+            self.assertIn("gamma_vol_acceleration_score", frame.columns)
+            self.assertIn("squeeze_risk_state", frame.columns)
+            self.assertIn("directional_convexity_state", frame.columns)
+            self.assertIn("upside_squeeze_risk", frame.columns)
+            self.assertIn("downside_airpocket_risk", frame.columns)
+            self.assertIn("overnight_convexity_risk", frame.columns)
+            self.assertIn("gamma_vol_adjustment_score", frame.columns)
+            self.assertIn("dealer_hedging_pressure_score", frame.columns)
+            self.assertIn("dealer_flow_state", frame.columns)
+            self.assertIn("upside_hedging_pressure", frame.columns)
+            self.assertIn("downside_hedging_pressure", frame.columns)
+            self.assertIn("pinning_pressure_score", frame.columns)
+            self.assertIn("dealer_pressure_adjustment_score", frame.columns)
+            self.assertIn("expected_move_points", frame.columns)
+            self.assertIn("expected_move_pct", frame.columns)
+            self.assertIn("target_reachability_score", frame.columns)
+            self.assertIn("premium_efficiency_score", frame.columns)
+            self.assertIn("strike_efficiency_score", frame.columns)
+            self.assertIn("option_efficiency_score", frame.columns)
+            self.assertIn("option_efficiency_adjustment_score", frame.columns)
+            self.assertIn("oil_shock_score", frame.columns)
+            self.assertIn("commodity_risk_score", frame.columns)
+            self.assertIn("volatility_shock_score", frame.columns)
+            self.assertIn("volatility_explosion_probability", frame.columns)
             self.assertEqual(len(frame), 0)
+
+    def test_sparse_frame_normalization_does_not_emit_fragmentation_warning(self):
+        sparse_frame = pd.DataFrame(
+            [
+                {
+                    "signal_id": "sig-1",
+                    "signal_timestamp": "2026-03-14T10:00:00+05:30",
+                    "symbol": "NIFTY",
+                    "trade_status": "TRADE",
+                }
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dataset_path = Path(tmp_dir) / "signals_dataset.csv"
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                write_signals_dataset(sparse_frame, dataset_path)
+
+            performance_warnings = [
+                warning
+                for warning in caught
+                if issubclass(warning.category, pd.errors.PerformanceWarning)
+            ]
+
+            self.assertEqual(performance_warnings, [])
 
     def test_evaluate_signal_outcomes_enriches_row_without_duplication(self):
         row = build_signal_evaluation_row(self._sample_result())
@@ -180,6 +285,43 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
             self.assertEqual(len(frame), 1)
             self.assertEqual(frame.iloc[0]["signal_id"], build_signal_evaluation_row(result)["signal_id"])
             self.assertEqual(frame.iloc[0]["outcome_status"], "PARTIAL")
+
+    def test_no_direction_signal_does_not_force_directional_scoring(self):
+        result = self._sample_result()
+        result["trade"] = dict(result["trade"])
+        result["trade"]["direction"] = None
+        result["trade"]["option_type"] = None
+        result["trade"]["strike"] = None
+        result["trade"]["entry_price"] = None
+        result["trade"]["target"] = None
+        result["trade"]["stop_loss"] = None
+        result["trade"]["trade_status"] = "NO_SIGNAL"
+
+        row = build_signal_evaluation_row(result)
+        realized_path = pd.DataFrame(
+            {
+                "timestamp": [
+                    "2026-03-14T10:05:00+05:30",
+                    "2026-03-14T10:15:00+05:30",
+                    "2026-03-14T15:25:00+05:30",
+                ],
+                "spot": [22020, 22035, 22080],
+            }
+        )
+
+        enriched = evaluate_signal_outcomes(row, realized_path, as_of="2026-03-14T15:25:00+05:30")
+
+        self.assertEqual(enriched["outcome_status"], "PARTIAL")
+        self.assertEqual(enriched["spot_5m"], 22020)
+        self.assertGreater(enriched["realized_return_5m"], 0)
+        self.assertTrue(pd.isna(enriched["signed_return_5m_bps"]))
+        self.assertTrue(pd.isna(enriched["correct_5m"]))
+        self.assertTrue(pd.isna(enriched["signed_return_session_close_bps"]))
+        self.assertTrue(pd.isna(enriched["directional_consistency_score"]))
+        self.assertTrue(pd.isna(enriched["direction_score"]))
+        self.assertTrue(pd.isna(enriched["magnitude_score"]))
+        self.assertTrue(pd.isna(enriched["timing_score"]))
+        self.assertTrue(pd.isna(enriched["tradeability_score"]))
 
     def test_update_dataset_outcomes_merges_updated_rows(self):
         result = self._sample_result()

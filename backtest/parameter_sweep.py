@@ -11,9 +11,6 @@ from config.settings import (
 def build_parameter_grid():
     """
     Build parameter combinations for sweep.
-    Note:
-    tp/sl are currently recorded in results for ranking/logging.
-    They are not yet wired into live exit override logic.
     """
     return list(product(
         SWEEP_SIGNAL_PERSISTENCE_GRID,

@@ -237,6 +237,7 @@ def _build_candidate_record(
     gamma_clusters=None,
     max_capital=None,
     lot_size=None,
+    candidate_score_hook=None,
 ):
     strike = _safe_float(row.get("strikePrice"), None)
     if strike is None:
@@ -262,9 +263,26 @@ def _build_candidate_record(
         "iv_score": _score_iv(iv),
     }
 
+    hook_payload = {}
+    if callable(candidate_score_hook):
+        try:
+            hook_payload = candidate_score_hook(row, {
+                "strike": _to_python_number(strike),
+                "last_price": round(premium, 2),
+                "volume": int(volume),
+                "open_interest": int(oi),
+                "iv": round(iv, 2) if iv else 0,
+            }) or {}
+        except Exception:
+            hook_payload = {}
+
+    efficiency_score_adjustment = int(_safe_float(hook_payload.get("score_adjustment"), 0.0))
+    if efficiency_score_adjustment:
+        score_breakdown["option_efficiency_score_adjustment"] = efficiency_score_adjustment
+
     total_score = int(sum(score_breakdown.values()))
 
-    return {
+    record = {
         "strike": _to_python_number(strike),
         "last_price": round(premium, 2),
         "volume": int(volume),
@@ -274,6 +292,9 @@ def _build_candidate_record(
         "score": total_score,
         "score_breakdown": score_breakdown,
     }
+    if hook_payload:
+        record.update({key: value for key, value in hook_payload.items() if key != "score_adjustment"})
+    return record
 
 
 def rank_strike_candidates(
@@ -287,6 +308,7 @@ def rank_strike_candidates(
     max_capital=None,
     top_n=5,
     strike_window_steps=STRIKE_WINDOW_STEPS,
+    candidate_score_hook=None,
 ):
     if option_chain is None or len(option_chain) == 0:
         return []
@@ -311,6 +333,7 @@ def rank_strike_candidates(
             gamma_clusters=gamma_clusters,
             max_capital=max_capital,
             lot_size=lot_size,
+            candidate_score_hook=candidate_score_hook,
         )
         if record is not None:
             candidates.append(record)
@@ -336,6 +359,7 @@ def select_best_strike(
     lot_size=None,
     max_capital=None,
     strike_window_steps=STRIKE_WINDOW_STEPS,
+    candidate_score_hook=None,
 ):
     ranked = rank_strike_candidates(
         option_chain=option_chain,
@@ -348,6 +372,7 @@ def select_best_strike(
         max_capital=max_capital,
         top_n=5,
         strike_window_steps=strike_window_steps,
+        candidate_score_hook=candidate_score_hook,
     )
 
     if not ranked:

@@ -54,9 +54,9 @@ def large_move_probability(
     prob = 0.22
 
     # --- Categorical regime effects ---
-    if gamma_regime == "NEGATIVE_GAMMA":
+    if gamma_regime in {"NEGATIVE_GAMMA", "SHORT_GAMMA_ZONE"}:
         prob += 0.14
-    elif gamma_regime == "POSITIVE_GAMMA":
+    elif gamma_regime in {"POSITIVE_GAMMA", "LONG_GAMMA_ZONE"}:
         prob -= 0.08
     elif gamma_regime == "NEUTRAL_GAMMA":
         prob += 0.0

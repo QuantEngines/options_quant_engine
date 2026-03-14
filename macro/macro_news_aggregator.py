@@ -10,8 +10,8 @@ from typing import Any
 import pandas as pd
 
 from macro.macro_news_config import (
-    MACRO_NEWS_AGGREGATION_CONFIG,
-    MACRO_NEWS_REGIME_CONFIG,
+    get_macro_news_aggregation_config,
+    get_macro_news_regime_config,
 )
 from news.classifier import HeadlineClassification, classify_headlines
 from news.models import HeadlineIngestionState
@@ -82,7 +82,7 @@ def _neutral_macro_news_state(event_state: dict | None = None, issues=None, warn
 
 
 def _weighted_headline_aggregates(classified: list[HeadlineClassification], as_of=None):
-    cfg = MACRO_NEWS_AGGREGATION_CONFIG
+    cfg = get_macro_news_aggregation_config()
     if not classified:
         return {
             "macro_sentiment_score": 0.0,
@@ -166,7 +166,7 @@ def _weighted_headline_aggregates(classified: list[HeadlineClassification], as_o
 
 
 def _derive_macro_regime(*, event_lockdown_flag: bool, macro_sentiment_score: float, global_risk_bias: float, india_macro_bias: float, volatility_shock_score: float):
-    cfg = MACRO_NEWS_REGIME_CONFIG
+    cfg = get_macro_news_regime_config()
     reasons = []
     if event_lockdown_flag:
         return "EVENT_LOCKDOWN", ["event_lockdown"]

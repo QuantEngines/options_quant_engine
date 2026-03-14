@@ -1,0 +1,140 @@
+{
+  "scenarios": [
+    {
+      "name": "short_gamma_flip_vacuum_break",
+      "inputs": {
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "AT_FLIP",
+        "gamma_flip_distance_pct": 0.08,
+        "dealer_hedging_bias": "UPSIDE_ACCELERATION",
+        "liquidity_vacuum_state": "BREAKOUT_ZONE",
+        "intraday_range_pct": 0.92,
+        "volatility_compression_score": 0.72,
+        "volatility_shock_score": 0.28,
+        "macro_event_risk_score": 18,
+        "global_risk_state": {
+          "global_risk_state": "GLOBAL_NEUTRAL",
+          "holding_context": {"holding_profile": "AUTO", "overnight_relevant": false}
+        },
+        "volatility_explosion_probability": 0.55
+      },
+      "expected": {
+        "squeeze_risk_state": "EXTREME_ACCELERATION_RISK",
+        "directional_convexity_state": "UPSIDE_SQUEEZE_RISK"
+      }
+    },
+    {
+      "name": "short_gamma_downside_shock",
+      "inputs": {
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "BELOW_FLIP",
+        "gamma_flip_distance_pct": 0.12,
+        "dealer_hedging_bias": "DOWNSIDE_ACCELERATION",
+        "liquidity_vacuum_state": "NEAR_VACUUM",
+        "intraday_range_pct": 1.15,
+        "volatility_compression_score": 0.20,
+        "volatility_shock_score": 0.85,
+        "macro_event_risk_score": 30,
+        "global_risk_state": {
+          "global_risk_state": "RISK_OFF",
+          "holding_context": {"holding_profile": "AUTO", "overnight_relevant": false}
+        },
+        "volatility_explosion_probability": 0.68
+      },
+      "expected": {
+        "squeeze_risk_state": "HIGH_ACCELERATION_RISK",
+        "directional_convexity_state": "DOWNSIDE_AIRPOCKET_RISK"
+      }
+    },
+    {
+      "name": "long_gamma_pinned_low_vol",
+      "inputs": {
+        "gamma_regime": "LONG_GAMMA_ZONE",
+        "spot_vs_flip": "ABOVE_FLIP",
+        "gamma_flip_distance_pct": 0.95,
+        "dealer_hedging_bias": "PINNING",
+        "liquidity_vacuum_state": "NO_VACUUM",
+        "intraday_range_pct": 0.18,
+        "volatility_compression_score": 0.12,
+        "volatility_shock_score": 0.05,
+        "macro_event_risk_score": 5,
+        "global_risk_state": {
+          "global_risk_state": "RISK_ON",
+          "holding_context": {"holding_profile": "AUTO", "overnight_relevant": false}
+        },
+        "volatility_explosion_probability": 0.04
+      },
+      "expected": {
+        "squeeze_risk_state": "LOW_ACCELERATION_RISK",
+        "directional_convexity_state": "NO_CONVEXITY_EDGE"
+      }
+    },
+    {
+      "name": "macro_global_shock_short_gamma_vacuum",
+      "inputs": {
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "AT_FLIP",
+        "gamma_flip_distance_pct": 0.05,
+        "dealer_hedging_bias": "UPSIDE_ACCELERATION",
+        "liquidity_vacuum_state": "BREAKOUT_ZONE",
+        "intraday_range_pct": 1.05,
+        "volatility_compression_score": 0.48,
+        "volatility_shock_score": 0.62,
+        "macro_event_risk_score": 78,
+        "global_risk_state": {
+          "global_risk_state": "VOL_SHOCK",
+          "holding_context": {"holding_profile": "AUTO", "overnight_relevant": false}
+        },
+        "volatility_explosion_probability": 0.88
+      },
+      "expected": {
+        "squeeze_risk_state": "EXTREME_ACCELERATION_RISK"
+      }
+    },
+    {
+      "name": "overnight_convexity_risk_spike",
+      "inputs": {
+        "gamma_regime": "SHORT_GAMMA_ZONE",
+        "spot_vs_flip": "AT_FLIP",
+        "gamma_flip_distance_pct": 0.06,
+        "dealer_hedging_bias": "DOWNSIDE_ACCELERATION",
+        "liquidity_vacuum_state": "BREAKOUT_ZONE",
+        "intraday_range_pct": 0.88,
+        "volatility_compression_score": 0.70,
+        "volatility_shock_score": 0.78,
+        "macro_event_risk_score": 64,
+        "global_risk_state": {
+          "global_risk_state": "RISK_OFF",
+          "holding_context": {"holding_profile": "OVERNIGHT", "overnight_relevant": true}
+        },
+        "volatility_explosion_probability": 0.81
+      },
+      "expected": {
+        "overnight_hold_allowed": false
+      }
+    },
+    {
+      "name": "neutral_environment",
+      "inputs": {
+        "gamma_regime": "LONG_GAMMA_ZONE",
+        "spot_vs_flip": "ABOVE_FLIP",
+        "gamma_flip_distance_pct": 1.2,
+        "dealer_hedging_bias": "PINNING",
+        "liquidity_vacuum_state": "NO_VACUUM",
+        "intraday_range_pct": 0.22,
+        "volatility_compression_score": 0.10,
+        "volatility_shock_score": 0.02,
+        "macro_event_risk_score": 6,
+        "global_risk_state": {
+          "global_risk_state": "GLOBAL_NEUTRAL",
+          "holding_context": {"holding_profile": "AUTO", "overnight_relevant": false}
+        },
+        "volatility_explosion_probability": 0.03
+      },
+      "expected": {
+        "squeeze_risk_state": "LOW_ACCELERATION_RISK",
+        "directional_convexity_state": "NO_CONVEXITY_EDGE"
+      }
+    }
+  ]
+}

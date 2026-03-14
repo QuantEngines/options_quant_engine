@@ -11,10 +11,10 @@ import pandas as pd
 import yfinance as yf
 
 from config.signal_evaluation_scoring import (
-    SIGNAL_EVALUATION_DIRECTION_WEIGHTS,
-    SIGNAL_EVALUATION_SCORE_WEIGHTS,
-    SIGNAL_EVALUATION_THRESHOLDS,
-    SIGNAL_EVALUATION_TIMING_WEIGHTS,
+    get_signal_evaluation_direction_weights,
+    get_signal_evaluation_score_weights,
+    get_signal_evaluation_thresholds,
+    get_signal_evaluation_timing_weights,
 )
 from config.settings import BASE_DIR
 from data.spot_downloader import normalize_underlying_symbol
@@ -43,7 +43,12 @@ def _coerce_ts(value) -> pd.Timestamp:
 
 
 def _signal_direction_multiplier(direction: str | None) -> int:
-    return 1 if str(direction or "").upper() == "CALL" else -1
+    normalized = str(direction or "").upper().strip()
+    if normalized == "CALL":
+        return 1
+    if normalized == "PUT":
+        return -1
+    return 0
 
 
 def _bucket_trade_strength(value) -> str | None:
@@ -180,6 +185,38 @@ def build_signal_evaluation_row(result: dict, *, notes: str | None = None) -> di
         "gamma_regime": trade.get("gamma_regime"),
         "spot_vs_flip": trade.get("spot_vs_flip"),
         "macro_regime": trade.get("macro_regime"),
+        "global_risk_state": trade.get("global_risk_state"),
+        "global_risk_score": trade.get("global_risk_score"),
+        "oil_shock_score": trade.get("oil_shock_score"),
+        "commodity_risk_score": trade.get("commodity_risk_score"),
+        "volatility_shock_score": trade.get("market_volatility_shock_score", trade.get("volatility_shock_score")),
+        "volatility_explosion_probability": trade.get("volatility_explosion_probability"),
+        "overnight_gap_risk_score": trade.get("overnight_gap_risk_score"),
+        "volatility_expansion_risk_score": trade.get("volatility_expansion_risk_score"),
+        "overnight_hold_allowed": trade.get("overnight_hold_allowed"),
+        "overnight_hold_reason": trade.get("overnight_hold_reason"),
+        "overnight_risk_penalty": trade.get("overnight_risk_penalty"),
+        "global_risk_adjustment_score": trade.get("global_risk_adjustment_score"),
+        "gamma_vol_acceleration_score": trade.get("gamma_vol_acceleration_score"),
+        "squeeze_risk_state": trade.get("squeeze_risk_state"),
+        "directional_convexity_state": trade.get("directional_convexity_state"),
+        "upside_squeeze_risk": trade.get("upside_squeeze_risk"),
+        "downside_airpocket_risk": trade.get("downside_airpocket_risk"),
+        "overnight_convexity_risk": trade.get("overnight_convexity_risk"),
+        "gamma_vol_adjustment_score": trade.get("gamma_vol_adjustment_score"),
+        "dealer_hedging_pressure_score": trade.get("dealer_hedging_pressure_score"),
+        "dealer_flow_state": trade.get("dealer_flow_state"),
+        "upside_hedging_pressure": trade.get("upside_hedging_pressure"),
+        "downside_hedging_pressure": trade.get("downside_hedging_pressure"),
+        "pinning_pressure_score": trade.get("pinning_pressure_score"),
+        "dealer_pressure_adjustment_score": trade.get("dealer_pressure_adjustment_score"),
+        "expected_move_points": trade.get("expected_move_points"),
+        "expected_move_pct": trade.get("expected_move_pct"),
+        "target_reachability_score": trade.get("target_reachability_score"),
+        "premium_efficiency_score": trade.get("premium_efficiency_score"),
+        "strike_efficiency_score": trade.get("strike_efficiency_score"),
+        "option_efficiency_score": trade.get("option_efficiency_score"),
+        "option_efficiency_adjustment_score": trade.get("option_efficiency_adjustment_score"),
         "dealer_position": trade.get("dealer_position"),
         "dealer_hedging_bias": trade.get("dealer_hedging_bias"),
         "volatility_regime": trade.get("volatility_regime"),
@@ -293,15 +330,21 @@ def _clip_score(value: float) -> float:
 
 def compute_signal_evaluation_scores(row: dict) -> dict:
     updated = dict(row)
+    has_direction = _signal_direction_multiplier(updated.get("direction")) != 0
+    direction_weights = get_signal_evaluation_direction_weights()
+    thresholds = get_signal_evaluation_thresholds()
+    timing_weights = get_signal_evaluation_timing_weights()
+    score_weights = get_signal_evaluation_score_weights()
 
     direction_numerator = 0.0
     direction_denominator = 0.0
-    for field_name, weight in SIGNAL_EVALUATION_DIRECTION_WEIGHTS.items():
-        value = updated.get(field_name)
-        if pd.isna(value):
-            continue
-        direction_numerator += float(value) * float(weight)
-        direction_denominator += float(weight)
+    if has_direction:
+        for field_name, weight in direction_weights.items():
+            value = updated.get(field_name)
+            if pd.isna(value):
+                continue
+            direction_numerator += float(value) * float(weight)
+            direction_denominator += float(weight)
 
     direction_score = None
     if direction_denominator > 0:
@@ -311,14 +354,14 @@ def compute_signal_evaluation_scores(row: dict) -> dict:
     mfe_points = _safe_float(updated.get("mfe_points"), None)
     spot_at_signal = _safe_float(updated.get("spot_at_signal"), None)
     magnitude_score = None
-    if mfe_points is not None and spot_at_signal not in (None, 0):
+    if has_direction and mfe_points is not None and spot_at_signal not in (None, 0):
         favorable_move_pct = abs(mfe_points) / spot_at_signal * 100.0
         baseline_range_pct = lookback_avg_range_pct if lookback_avg_range_pct not in (None, 0) else 1.0
         magnitude_vs_range = favorable_move_pct / max(baseline_range_pct, 0.1)
 
-        weak = SIGNAL_EVALUATION_THRESHOLDS["magnitude_vs_range_weak"]
-        good = SIGNAL_EVALUATION_THRESHOLDS["magnitude_vs_range_good"]
-        strong = SIGNAL_EVALUATION_THRESHOLDS["magnitude_vs_range_strong"]
+        weak = thresholds["magnitude_vs_range_weak"]
+        good = thresholds["magnitude_vs_range_good"]
+        strong = thresholds["magnitude_vs_range_strong"]
 
         if magnitude_vs_range <= weak:
             magnitude_score = _clip_score((magnitude_vs_range / max(weak, 1e-6)) * 35.0)
@@ -333,14 +376,15 @@ def compute_signal_evaluation_scores(row: dict) -> dict:
 
     timing_numerator = 0.0
     timing_denominator = 0.0
-    return_floor = SIGNAL_EVALUATION_THRESHOLDS["timing_positive_return_floor"]
-    for field_name, weight in SIGNAL_EVALUATION_TIMING_WEIGHTS.items():
-        value = _safe_float(updated.get(field_name), None)
-        if value is None:
-            continue
-        horizon_score = max(0.0, min(1.0, value / max(return_floor, 1e-6)))
-        timing_numerator += horizon_score * float(weight)
-        timing_denominator += float(weight)
+    return_floor = thresholds["timing_positive_return_floor"]
+    if has_direction:
+        for field_name, weight in timing_weights.items():
+            value = _safe_float(updated.get(field_name), None)
+            if value is None:
+                continue
+            horizon_score = max(0.0, min(1.0, value / max(return_floor, 1e-6)))
+            timing_numerator += horizon_score * float(weight)
+            timing_denominator += float(weight)
 
     timing_score = None
     if timing_denominator > 0:
@@ -348,16 +392,16 @@ def compute_signal_evaluation_scores(row: dict) -> dict:
 
     tradeability_score = None
     mae_points = _safe_float(updated.get("mae_points"), None)
-    if mfe_points is not None and mae_points is not None:
+    if has_direction and mfe_points is not None and mae_points is not None:
         adverse_points = abs(min(mae_points, 0.0))
         if adverse_points == 0:
             tradeability_ratio = float("inf")
         else:
             tradeability_ratio = abs(mfe_points) / adverse_points
 
-        floor = SIGNAL_EVALUATION_THRESHOLDS["tradeability_ratio_floor"]
-        good = SIGNAL_EVALUATION_THRESHOLDS["tradeability_ratio_good"]
-        strong = SIGNAL_EVALUATION_THRESHOLDS["tradeability_ratio_strong"]
+        floor = thresholds["tradeability_ratio_floor"]
+        good = thresholds["tradeability_ratio_good"]
+        strong = thresholds["tradeability_ratio_strong"]
 
         if tradeability_ratio == float("inf"):
             tradeability_score = 100.0
@@ -385,7 +429,7 @@ def compute_signal_evaluation_scores(row: dict) -> dict:
     }
     if all(score is not None for score in component_scores.values()):
         composite = sum(
-            component_scores[name] * SIGNAL_EVALUATION_SCORE_WEIGHTS[name]
+            component_scores[name] * score_weights[name]
             for name in component_scores
         )
         updated["composite_signal_score"] = _clip_score(composite)
@@ -428,6 +472,7 @@ def evaluate_signal_outcomes(row: dict, realized_spot_path: pd.DataFrame, *, as_
         updated["spot_at_signal"] = round(entry_spot, 4)
 
     direction_mult = _signal_direction_multiplier(updated.get("direction"))
+    has_direction = direction_mult != 0
 
     completed_checkpoints = 0
     for horizon in HORIZON_MINUTES:
@@ -436,40 +481,43 @@ def evaluate_signal_outcomes(row: dict, realized_spot_path: pd.DataFrame, *, as_
         if horizon_spot is None:
             continue
 
-        signed_return_bps = ((horizon_spot - entry_spot) / max(entry_spot, 1e-9)) * 10000.0 * direction_mult
         updated[f"spot_{horizon}m"] = round(horizon_spot, 4)
         updated[f"realized_return_{horizon}m"] = _raw_return(entry_spot, horizon_spot)
-        updated[f"signed_return_{horizon}m_bps"] = round(float(signed_return_bps), 2)
-        updated[f"correct_{horizon}m"] = int(signed_return_bps > 0)
+        if has_direction:
+            signed_return_bps = ((horizon_spot - entry_spot) / max(entry_spot, 1e-9)) * 10000.0 * direction_mult
+            updated[f"signed_return_{horizon}m_bps"] = round(float(signed_return_bps), 2)
+            updated[f"correct_{horizon}m"] = int(signed_return_bps > 0)
         completed_checkpoints += 1
 
-    for window_minutes in [60, 120]:
-        stats = _window_stats(
-            path=path,
-            entry_ts=signal_ts,
-            end_ts=signal_ts + pd.Timedelta(minutes=window_minutes),
-            direction_mult=direction_mult,
-            entry_spot=entry_spot,
-        )
-        if stats is None:
-            continue
-        updated[f"mfe_{window_minutes}m_bps"] = stats["mfe_bps"]
-        updated[f"mae_{window_minutes}m_bps"] = stats["mae_bps"]
-        updated[f"realized_range_{window_minutes}m_bps"] = stats["range_bps"]
+    if has_direction:
+        for window_minutes in [60, 120]:
+            stats = _window_stats(
+                path=path,
+                entry_ts=signal_ts,
+                end_ts=signal_ts + pd.Timedelta(minutes=window_minutes),
+                direction_mult=direction_mult,
+                entry_spot=entry_spot,
+            )
+            if stats is None:
+                continue
+            updated[f"mfe_{window_minutes}m_bps"] = stats["mfe_bps"]
+            updated[f"mae_{window_minutes}m_bps"] = stats["mae_bps"]
+            updated[f"realized_range_{window_minutes}m_bps"] = stats["range_bps"]
 
-    full_window = path[path["timestamp"] >= signal_ts].copy()
-    if not full_window.empty:
-        directional_moves_points = (full_window["spot"].astype(float) - entry_spot) * direction_mult
-        updated["mfe_points"] = round(float(directional_moves_points.max()), 4)
-        updated["mae_points"] = round(float(directional_moves_points.min()), 4)
+        full_window = path[path["timestamp"] >= signal_ts].copy()
+        if not full_window.empty:
+            directional_moves_points = (full_window["spot"].astype(float) - entry_spot) * direction_mult
+            updated["mfe_points"] = round(float(directional_moves_points.max()), 4)
+            updated["mae_points"] = round(float(directional_moves_points.min()), 4)
 
     close_spot = _session_close_spot(path, signal_ts)
     if close_spot is not None:
-        signed_close_return = ((close_spot - entry_spot) / max(entry_spot, 1e-9)) * 10000.0 * direction_mult
         updated["spot_close_same_day"] = round(close_spot, 4)
         updated["spot_session_close"] = round(close_spot, 4)
-        updated["signed_return_session_close_bps"] = round(float(signed_close_return), 2)
-        updated["correct_session_close"] = int(signed_close_return > 0)
+        if has_direction:
+            signed_close_return = ((close_spot - entry_spot) / max(entry_spot, 1e-9)) * 10000.0 * direction_mult
+            updated["signed_return_session_close_bps"] = round(float(signed_close_return), 2)
+            updated["correct_session_close"] = int(signed_close_return > 0)
         completed_checkpoints += 1
 
     next_open_spot = _next_day_open_spot(path, signal_ts)
@@ -482,16 +530,17 @@ def evaluate_signal_outcomes(row: dict, realized_spot_path: pd.DataFrame, *, as_
         updated["spot_next_close"] = round(next_close_spot, 4)
         completed_checkpoints += 1
 
-    correctness_fields = [updated.get(f"correct_{horizon}m") for horizon in HORIZON_MINUTES]
-    correctness_fields.append(updated.get("correct_session_close"))
-    correctness_values = []
-    for value in correctness_fields:
-        if pd.isna(value):
-            continue
-        if value in (0, 1):
-            correctness_values.append(float(value))
-    if correctness_values:
-        updated["directional_consistency_score"] = round(sum(correctness_values) / len(correctness_values), 4)
+    if has_direction:
+        correctness_fields = [updated.get(f"correct_{horizon}m") for horizon in HORIZON_MINUTES]
+        correctness_fields.append(updated.get("correct_session_close"))
+        correctness_values = []
+        for value in correctness_fields:
+            if pd.isna(value):
+                continue
+            if value in (0, 1):
+                correctness_values.append(float(value))
+        if correctness_values:
+            updated["directional_consistency_score"] = round(sum(correctness_values) / len(correctness_values), 4)
 
     updated = compute_signal_evaluation_scores(updated)
 

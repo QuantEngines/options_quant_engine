@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <meta name="author" content="Research Architecture Note" />
+  <meta name="dcterms.date" content="2026-03-14" />
+  <title>Options Quant Engine</title>
+  <style>
+
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+</style>
+  <style type="text/css">:root {
+--ink: #16202a;
+--muted: #5d6b79;
+--accent: #0e7490;
+--accent-dark: #0b5c73;
+--accent-soft: #e6f4f7;
+--paper-soft: #f8fbfc;
+--cover-bg: #0f1720;
+--cover-glow: rgba(14, 116, 144, 0.22);
+--rule: #d7e2e8;
+--paper: #ffffff;
+--code-bg: #f6f8fa;
+}
+@page {
+size: A4;
+margin: 20mm 16mm 18mm 16mm;
+}
+html {
+background: var(--paper);
+color: var(--ink);
+font-size: 15px;
+line-height: 1.58;
+}
+body {
+margin: 0 auto;
+max-width: 780px;
+padding: 28px 20px 42px;
+font-family: "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+text-rendering: optimizeLegibility;
+counter-reset: section;
+}
+header#title-block-header {
+display: none;
+}
+.title {
+margin: 0;
+font-size: 2.5rem;
+line-height: 1.03;
+letter-spacing: -0.03em;
+}
+.subtitle {
+margin: 12px 0 0;
+color: var(--accent);
+font-size: 1rem;
+font-weight: 700;
+letter-spacing: 0.12em;
+text-transform: uppercase;
+}
+.author,
+.date {
+margin-top: 8px;
+color: var(--muted);
+font-size: 0.92rem;
+}
+.author::before {
+content: "Prepared as: ";
+color: var(--accent-dark);
+font-weight: 600;
+}
+.date::before {
+content: "Updated: ";
+color: var(--accent-dark);
+font-weight: 600;
+}
+h1,
+h2,
+h3,
+h4 {
+color: var(--ink);
+page-break-after: avoid;
+break-after: avoid-page;
+}
+h1 {
+margin: 2.2rem 0 0.8rem;
+font-size: 1.85rem;
+letter-spacing: -0.02em;
+}
+h2 {
+margin: 2rem 0 0.75rem;
+padding-top: 0.35rem;
+font-size: 1.28rem;
+border-top: 1px solid var(--rule);
+}
+h3 {
+margin: 1.35rem 0 0.55rem;
+font-size: 1.02rem;
+color: var(--accent);
+text-transform: uppercase;
+letter-spacing: 0.05em;
+}
+p,
+ul,
+ol,
+table,
+blockquote,
+pre {
+margin-top: 0.72rem;
+margin-bottom: 0.72rem;
+}
+ul,
+ol {
+padding-left: 1.4rem;
+}
+li {
+margin: 0.18rem 0;
+}
+a {
+color: var(--accent);
+text-decoration: none;
+}
+strong {
+color: #0f1720;
+}
+code {
+background: var(--code-bg);
+border-radius: 4px;
+padding: 0.08rem 0.34rem;
+font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+font-size: 0.9em;
+}
+pre {
+background: var(--code-bg);
+border: 1px solid var(--rule);
+border-radius: 8px;
+padding: 12px 14px;
+overflow-x: auto;
+}
+pre code {
+padding: 0;
+background: transparent;
+border-radius: 0;
+}
+blockquote {
+margin-left: 0;
+padding: 10px 14px;
+border-left: 4px solid var(--accent);
+background: var(--accent-soft);
+color: var(--ink);
+}
+table {
+width: 100%;
+border-collapse: collapse;
+display: table;
+font-size: 0.95rem;
+}
+th,
+td {
+padding: 8px 10px;
+border-bottom: 1px solid var(--rule);
+vertical-align: top;
+text-align: left;
+}
+th {
+color: var(--muted);
+font-size: 0.82rem;
+font-weight: 700;
+letter-spacing: 0.06em;
+text-transform: uppercase;
+}
+#TOC {
+margin: 20px 0 28px;
+padding: 16px 18px;
+border: 1px solid var(--rule);
+border-radius: 10px;
+background: var(--paper-soft);
+page-break-inside: avoid;
+}
+#TOC::before {
+content: "Contents";
+display: block;
+margin-bottom: 8px;
+color: var(--muted);
+font-size: 0.82rem;
+font-weight: 700;
+letter-spacing: 0.08em;
+text-transform: uppercase;
+}
+#TOC ul {
+margin: 0;
+padding-left: 1.1rem;
+}
+#TOC li {
+margin: 0.15rem 0;
+}
+hr {
+border: none;
+border-top: 1px solid var(--rule);
+margin: 1.2rem 0;
+}
+img,
+svg {
+max-width: 100%;
+}
+.executive-summary {
+margin: 0 0 22px;
+padding: 16px 18px 18px;
+border: 1px solid var(--rule);
+border-radius: 12px;
+background: linear-gradient(180deg, #fcfeff 0%, #f3fafc 100%);
+box-shadow: 0 10px 24px rgba(16, 32, 42, 0.05);
+page-break-inside: avoid;
+}
+.summary-label {
+margin-bottom: 10px;
+color: var(--accent-dark);
+font-size: 0.78rem;
+font-weight: 800;
+letter-spacing: 0.12em;
+text-transform: uppercase;
+}
+.summary-grid {
+display: grid;
+grid-template-columns: repeat(3, minmax(0, 1fr));
+gap: 12px;
+margin: 18px 0 8px;
+}
+.summary-card {
+padding: 12px 13px;
+border: 1px solid var(--rule);
+border-radius: 10px;
+background: rgba(255, 255, 255, 0.86);
+font-size: 0.95rem;
+}
+.summary-card-title {
+margin-bottom: 6px;
+color: var(--ink);
+font-size: 0.8rem;
+font-weight: 800;
+letter-spacing: 0.08em;
+text-transform: uppercase;
+}
+.memo-cover {
+min-height: 240mm;
+padding: 34mm 20mm 22mm;
+color: #f4f8fb;
+background:
+radial-gradient(circle at top right, var(--cover-glow), transparent 34%),
+linear-gradient(160deg, #0b1220 0%, #102635 48%, #10323d 100%);
+border-radius: 16px;
+box-sizing: border-box;
+page-break-after: always;
+break-after: page;
+}
+.cover-kicker {
+margin-bottom: 24px;
+color: #9fd7e5;
+font-size: 0.82rem;
+font-weight: 800;
+letter-spacing: 0.18em;
+text-transform: uppercase;
+}
+.cover-title {
+margin: 0;
+color: #ffffff;
+font-size: 3.3rem;
+line-height: 0.98;
+letter-spacing: -0.045em;
+}
+.cover-subtitle {
+margin-top: 14px;
+max-width: 12ch;
+color: #d9eef4;
+font-size: 1.28rem;
+font-weight: 600;
+line-height: 1.15;
+}
+.cover-rule {
+width: 120px;
+height: 4px;
+margin: 28px 0 24px;
+background: linear-gradient(90deg, #44bdd6 0%, #d9eef4 100%);
+border-radius: 999px;
+}
+.cover-summary {
+max-width: 34em;
+color: #e4eef2;
+font-size: 1.02rem;
+line-height: 1.7;
+}
+.cover-meta {
+display: grid;
+grid-template-columns: repeat(2, minmax(0, 1fr));
+gap: 14px 24px;
+margin-top: 40px;
+padding-top: 22px;
+border-top: 1px solid rgba(217, 238, 244, 0.18);
+font-size: 0.94rem;
+}
+.cover-meta span {
+display: block;
+margin-bottom: 5px;
+color: #8fbdc8;
+font-size: 0.74rem;
+font-weight: 700;
+letter-spacing: 0.08em;
+text-transform: uppercase;
+}
+.page-break {
+page-break-before: always;
+break-before: page;
+height: 0;
+}
+.appendix-note {
+margin: 0 0 18px;
+padding: 12px 14px;
+border: 1px solid var(--rule);
+border-radius: 10px;
+background: var(--paper-soft);
+color: var(--muted);
+}
+@media print {
+html {
+font-size: 11.5pt;
+}
+body {
+max-width: none;
+padding: 0;
+}
+#TOC,
+.executive-summary,
+.summary-grid,
+blockquote,
+pre,
+table {
+break-inside: avoid-page;
+}
+}
+@media (max-width: 720px) {
+body {
+padding: 20px 16px 32px;
+}
+.title {
+font-size: 2rem;
+}
+.memo-cover {
+min-height: auto;
+padding: 28px 20px 24px;
+}
+.cover-title {
+font-size: 2.45rem;
+}
+.cover-meta {
+grid-template-columns: 1fr;
+}
+.summary-grid {
+grid-template-columns: 1fr;
+}
+}
+</style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Options Quant Engine</h1>
+<p class="subtitle">Research Memo - Trade Signal Logic and Overlay
+Architecture</p>
+<p class="author">Research Architecture Note</p>
+<p class="date">2026-03-14</p>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#executive-summary" id="toc-executive-summary"><span class="toc-section-number">1</span> Executive Summary</a></li>
+<li><a href="#key-findings" id="toc-key-findings"><span class="toc-section-number">2</span> Key Findings</a></li>
+<li><a href="#document-scope" id="toc-document-scope"><span class="toc-section-number">3</span> Document Scope</a></li>
+<li><a href="#architecture" id="toc-architecture"><span class="toc-section-number">4</span> Architecture</a></li>
+<li><a href="#overlay-architecture" id="toc-overlay-architecture"><span class="toc-section-number">5</span> Overlay Architecture</a></li>
+<li><a href="#risk-and-control-framework" id="toc-risk-and-control-framework"><span class="toc-section-number">6</span> Risk and Control Framework</a></li>
+<li><a href="#research-data-model" id="toc-research-data-model"><span class="toc-section-number">7</span> Research Data Model</a></li>
+<li><a href="#conclusion" id="toc-conclusion"><span class="toc-section-number">8</span> Conclusion</a></li>
+<li><a href="#appendix-a---core-formulas" id="toc-appendix-a---core-formulas"><span class="toc-section-number">9</span> Appendix A - Core Formulas</a></li>
+<li><a href="#appendix-b---feature-layer-inventory" id="toc-appendix-b---feature-layer-inventory"><span class="toc-section-number">10</span> Appendix B - Feature Layer
+Inventory</a></li>
+</ul>
+</nav>
+<div class="memo-cover">
+  <div class="cover-kicker">Options Quant Engine</div>
+  <h1 class="cover-title">Research Memo</h1>
+  <div class="cover-subtitle">Trade Signal Logic and Overlay Architecture</div>
+  <div class="cover-rule"></div>
+  <div class="cover-summary">
+    A production-oriented options-buying engine for Indian index derivatives built around
+    market microstructure, then refined through structured risk, convexity, dealer-flow,
+    and option-efficiency overlays.
+  </div>
+  <div class="cover-meta">
+    <div><span>Document Type</span>Research architecture memo</div>
+    <div><span>Scope</span>Live engine, overlays, research dataset</div>
+    <div><span>Status</span>Current implementation baseline</div>
+    <div><span>Updated</span>2026-03-14</div>
+  </div>
+</div>
+
+<div class="page-break"></div>
+
+<h2 data-number="1" id="executive-summary"><span class="header-section-number">1</span> Executive Summary</h2>
+<div class="executive-summary">
+<div class="summary-label">Investment Relevance</div>
+
+<p>This engine is designed to answer a specific execution question for
+directional option buying:</p>
+<p><strong>is there enough directional edge, enough path quality, and
+enough economic efficiency to justify buying this option
+now?</strong></p>
+</div>
+
+<div class="summary-grid">
+<div class="summary-card">
+<div class="summary-card-title">Primary Edge</div>
+Dealer positioning, gamma structure, flow, and liquidity topology drive the core directional thesis.
+</div>
+<div class="summary-card">
+<div class="summary-card-title">Control Layers</div>
+Macro/news, global risk, convexity, dealer pressure, and option efficiency act as modifiers and filters rather than standalone direction engines.
+</div>
+<div class="summary-card">
+<div class="summary-card-title">Research Posture</div>
+Every captured signal is written into a canonical dataset so the overlays can be validated and calibrated empirically over time.
+</div>
+</div>
+
+<h3 data-number="1.1" id="key-takeaways"><span class="header-section-number">1.1</span> Key Takeaways</h3>
+<ul>
+<li>The engine is a layered execution-quality model, not a one-factor
+predictor.</li>
+<li>Direction comes primarily from dealer/gamma/flow/liquidity
+structure.</li>
+<li>Overlay layers improve trade selection by controlling exogenous
+risk, convexity instability, dealer-flow amplification, and
+option-pricing efficiency.</li>
+<li>Overnight decisions are conservative and combine multiple
+independent filters.</li>
+<li>The canonical signal dataset is the right place to calibrate and
+tune the system later.</li>
+</ul>
+<div class="page-break"></div>
+
+<h2 data-number="2" id="key-findings"><span class="header-section-number">2</span> Key Findings</h2>
+<h3 data-number="2.1" id="finding-1"><span class="header-section-number">2.1</span> Finding 1</h3>
+<p>The core signal engine is best understood as a microstructure thesis
+generator. Its strongest raw inputs are dealer state, gamma regime,
+flow, liquidity topology, and volatility context.</p>
+<h3 data-number="2.2" id="finding-2"><span class="header-section-number">2.2</span> Finding 2</h3>
+<p>The overlay stack materially improves execution discipline because it
+addresses different failure modes:</p>
+<ul>
+<li>macro/news and global risk address exogenous shocks</li>
+<li>gamma-vol acceleration addresses convex extension risk</li>
+<li>dealer hedging pressure addresses amplification versus pinning</li>
+<li>option efficiency addresses whether the option itself is worth
+buying</li>
+</ul>
+<h3 data-number="2.3" id="finding-3"><span class="header-section-number">2.3</span> Finding 3</h3>
+<p>The research dataset architecture is a strategic asset. Because the
+engine logs one canonical row per signal and enriches it over time, it
+supports later calibration without turning the live engine into an
+opaque tuned black box.</p>
+<h2 data-number="3" id="document-scope"><span class="header-section-number">3</span> Document Scope</h2>
+<p>This memo covers:</p>
+<ul>
+<li>the microstructure state vector</li>
+<li>the direction and move-quality logic</li>
+<li>the overlay architecture</li>
+<li>strike selection and overnight handling</li>
+<li>the canonical research data model</li>
+</ul>
+<p>It does not attempt to present a theoretical options-pricing
+framework or a full statistical calibration study.</p>
+<h2 data-number="4" id="architecture"><span class="header-section-number">4</span> Architecture</h2>
+<h3 data-number="4.1" id="core-engine-flow"><span class="header-section-number">4.1</span> Core Engine Flow</h3>
+<p>The live engine works in this order:</p>
+<ol type="1">
+<li>normalize and validate spot + option-chain inputs</li>
+<li>build a microstructure state vector</li>
+<li>infer direction conservatively</li>
+<li>estimate move quality and path risk</li>
+<li>apply structured overlay layers</li>
+<li>rank strikes and set exits</li>
+<li>emit a live trade decision and log the signal for research</li>
+</ol>
+<p>The core implementation sits in
+<code>engine/trading_engine.py</code>, with most helper logic in
+<code>engine/trading_engine_support.py</code>.</p>
+<h3 data-number="4.2" id="state-vector"><span class="header-section-number">4.2</span> State Vector</h3>
+<p>At each snapshot the engine builds a market state composed of:</p>
+<ul>
+<li>dealer state:
+<ul>
+<li><code>dealer_pos</code></li>
+<li><code>dealer_hedging_bias</code></li>
+<li><code>dealer_hedging_flow</code></li>
+</ul></li>
+<li>gamma state:
+<ul>
+<li><code>gamma</code></li>
+<li><code>gamma_flip</code></li>
+<li><code>gamma_regime</code></li>
+<li><code>gamma_event</code></li>
+</ul></li>
+<li>flow state:
+<ul>
+<li><code>flow_signal</code></li>
+<li><code>smart_money_flow</code></li>
+<li><code>final_flow_signal</code></li>
+</ul></li>
+<li>liquidity state:
+<ul>
+<li><code>support_wall</code></li>
+<li><code>resistance_wall</code></li>
+<li><code>liquidity_levels</code></li>
+<li><code>liquidity_void_signal</code></li>
+<li><code>liquidity_vacuum_state</code></li>
+</ul></li>
+<li>volatility state:
+<ul>
+<li><code>vol_regime</code></li>
+<li><code>surface_regime</code></li>
+<li><code>atm_iv</code></li>
+</ul></li>
+<li>intraday context:
+<ul>
+<li><code>spot_vs_flip</code></li>
+<li><code>intraday_gamma_state</code></li>
+<li><code>intraday_range_pct</code></li>
+</ul></li>
+</ul>
+<p>This is the core directional substrate of the engine.</p>
+<h3 data-number="4.3" id="direction-model"><span class="header-section-number">4.3</span> Direction Model</h3>
+<p>Direction is inferred with a weighted consensus model, not a single
+trigger.</p>
+<p>Conceptually:</p>
+<p><code>S_bull = sum(w_i * bullish_i)</code></p>
+<p><code>S_bear = sum(w_i * bearish_i)</code></p>
+<p>The engine only chooses a direction when:</p>
+<ul>
+<li>one side clears the minimum score threshold</li>
+<li>one side beats the other by a minimum margin</li>
+<li>the broader structure is not too conflicted</li>
+</ul>
+<p>Inputs into the vote include:</p>
+<ul>
+<li>final flow</li>
+<li>gamma regime</li>
+<li>spot vs gamma flip</li>
+<li>dealer positioning</li>
+<li>hedging bias</li>
+<li>gamma squeeze context</li>
+<li>vanna/charm reinforcement when available</li>
+</ul>
+<p>If the directional edge is not clear, the engine returns
+<code>NO_SIGNAL</code>.</p>
+<h3 data-number="4.4" id="move-probability-layer"><span class="header-section-number">4.4</span> Move Probability Layer</h3>
+<p>The engine estimates whether the environment supports a meaningful
+move through a hybrid model:</p>
+<ul>
+<li>rule-based move probability</li>
+<li>ML move probability</li>
+<li>blended hybrid move probability</li>
+</ul>
+<p>Useful inputs include:</p>
+<ul>
+<li>gamma regime</li>
+<li>vacuum state</li>
+<li>hedging bias</li>
+<li>flow alignment</li>
+<li>flip distance</li>
+<li>intraday range normalization</li>
+<li>ATM IV percentile</li>
+</ul>
+<p>This is still a supporting layer. It does not override the
+directional vote by itself.</p>
+<h3 data-number="4.5" id="trade-strength"><span class="header-section-number">4.5</span> Trade Strength</h3>
+<p>Conditional on direction, the engine builds a trade-strength score
+from aligned and conflicting evidence.</p>
+<p>Main components include:</p>
+<ul>
+<li>flow alignment</li>
+<li>smart-money alignment</li>
+<li>gamma squeeze context</li>
+<li>dealer positioning</li>
+<li>volatility regime</li>
+<li>spot vs flip</li>
+<li>liquidity vacuum / void structure</li>
+<li>wall proximity</li>
+<li>intraday gamma shift</li>
+<li>move probability contribution</li>
+<li>directional consensus bonus or penalty</li>
+</ul>
+<p>Interpretation:</p>
+<ul>
+<li>high score means thesis, path, and structure align</li>
+<li>low score means the market is noisy, pinned, or structurally
+conflicted</li>
+</ul>
+<h2 data-number="5" id="overlay-architecture"><span class="header-section-number">5</span> Overlay Architecture</h2>
+<p>The engine applies four important overlays after the core
+microstructure thesis is built.</p>
+<h3 data-number="5.1" id="global-risk-layer"><span class="header-section-number">5.1</span> Global Risk Layer</h3>
+<p>Purpose:</p>
+<ul>
+<li>classify external/global regime stress</li>
+<li>penalize unstable overnight setups</li>
+<li>reduce or veto trades under event or volatility shock
+conditions</li>
+</ul>
+<p>Key outputs include:</p>
+<ul>
+<li><code>global_risk_state</code></li>
+<li><code>global_risk_score</code></li>
+<li><code>overnight_gap_risk_score</code></li>
+<li><code>volatility_expansion_risk_score</code></li>
+<li><code>overnight_hold_allowed</code></li>
+</ul>
+<p>This layer is intentionally non-directional.</p>
+<h3 data-number="5.2" id="gamma-vol-acceleration-layer"><span class="header-section-number">5.2</span> Gamma-Vol Acceleration
+Layer</h3>
+<p>Purpose:</p>
+<ul>
+<li>detect when a normal move may accelerate into squeeze, air pocket,
+or convex extension</li>
+</ul>
+<p>Typical inputs:</p>
+<ul>
+<li>gamma regime</li>
+<li>spot vs flip</li>
+<li>flip proximity</li>
+<li>liquidity vacuum state</li>
+<li>volatility compression / shock transition</li>
+<li>macro/global stress</li>
+</ul>
+<p>Key outputs:</p>
+<ul>
+<li><code>gamma_vol_acceleration_score</code></li>
+<li><code>squeeze_risk_state</code></li>
+<li><code>upside_squeeze_risk</code></li>
+<li><code>downside_airpocket_risk</code></li>
+<li><code>overnight_convexity_risk</code></li>
+</ul>
+<p>This is a convexity overlay, not a primary direction engine.</p>
+<h3 data-number="5.3" id="dealer-hedging-pressure-layer"><span class="header-section-number">5.3</span> Dealer Hedging Pressure
+Layer</h3>
+<p>Purpose:</p>
+<ul>
+<li>estimate whether dealer hedging flows are likely to accelerate,
+destabilize, or pin the move</li>
+</ul>
+<p>Typical inputs:</p>
+<ul>
+<li>gamma regime</li>
+<li>dealer hedging bias</li>
+<li>dealer hedging flow</li>
+<li>flip distance</li>
+<li>wall/liquidity structure</li>
+<li>flow confirmation</li>
+<li>macro/global stress as a modifier</li>
+</ul>
+<p>Key outputs:</p>
+<ul>
+<li><code>dealer_hedging_pressure_score</code></li>
+<li><code>dealer_flow_state</code></li>
+<li><code>upside_hedging_pressure</code></li>
+<li><code>downside_hedging_pressure</code></li>
+<li><code>pinning_pressure_score</code></li>
+</ul>
+<p>This layer improves trade filtering and ranking, especially for
+option buying.</p>
+<h3 data-number="5.4" id="expected-move--option-efficiency-layer"><span class="header-section-number">5.4</span> Expected Move / Option
+Efficiency Layer</h3>
+<p>Purpose:</p>
+<ul>
+<li>evaluate whether the option trade is economically attractive
+relative to the move the market is likely to make</li>
+</ul>
+<p>Baseline expected move model:</p>
+<p><code>expected_move_points ~= spot * iv * sqrt(TTE_years)</code></p>
+<p>where:</p>
+<ul>
+<li>IV is normalized carefully from percent or decimal units</li>
+<li>TTE comes from the chain if present, otherwise parsed expiry
+metadata</li>
+</ul>
+<p>Key outputs:</p>
+<ul>
+<li><code>expected_move_points</code></li>
+<li><code>expected_move_pct</code></li>
+<li><code>target_reachability_score</code></li>
+<li><code>premium_efficiency_score</code></li>
+<li><code>strike_efficiency_score</code></li>
+<li><code>option_efficiency_score</code></li>
+</ul>
+<p>This is not a full theoretical pricing model. It is a practical
+trade-efficiency overlay for live filtering and research.</p>
+<h2 data-number="6" id="risk-and-control-framework"><span class="header-section-number">6</span> Risk and Control Framework</h2>
+<h3 data-number="6.1" id="strike-selection"><span class="header-section-number">6.1</span> Strike Selection</h3>
+<p>After the engine has a direction, it ranks strikes by:</p>
+<ul>
+<li>proximity to spot and walls</li>
+<li>option liquidity and OI</li>
+<li>budget constraints</li>
+<li>optional overlay hooks</li>
+</ul>
+<p>The expected move / option efficiency layer contributes a
+conservative ranking adjustment rather than replacing the strike
+selector.</p>
+<h3 data-number="6.2" id="overnight-logic"><span class="header-section-number">6.2</span> Overnight Logic</h3>
+<p>Overnight handling is deliberately conservative and combines multiple
+layers:</p>
+<ul>
+<li>global risk</li>
+<li>gamma-vol acceleration</li>
+<li>dealer hedging pressure</li>
+<li>option efficiency</li>
+</ul>
+<p>The engine only allows overnight holds when these layers remain
+sufficiently contained. Otherwise it produces:</p>
+<ul>
+<li><code>overnight_hold_allowed = False</code></li>
+<li>an interpretable <code>overnight_hold_reason</code></li>
+<li>accumulated overnight penalty fields</li>
+</ul>
+<h3 data-number="6.3" id="operational-philosophy"><span class="header-section-number">6.3</span> Operational Philosophy</h3>
+<ul>
+<li>degrade to neutral under missing or stale data</li>
+<li>keep overlays interpretable and auditable</li>
+<li>preserve backward compatibility for the live engine and research
+dataset</li>
+<li>prefer conservative filtering over overfit optimism</li>
+</ul>
+<h2 data-number="7" id="research-data-model"><span class="header-section-number">7</span> Research Data Model</h2>
+<p>Every captured signal maps to one canonical row in
+<code>research/signal_evaluation/signals_dataset.csv</code>.</p>
+<p>Important properties:</p>
+<ul>
+<li>one signal = one row</li>
+<li>keyed by <code>signal_id</code></li>
+<li>rows are enriched over time</li>
+<li>dedupe-safe upsert</li>
+<li>stable schema for research</li>
+</ul>
+<p>The dataset stores not just core signal fields, but also overlay
+outputs from:</p>
+<ul>
+<li>global risk</li>
+<li>gamma-vol acceleration</li>
+<li>dealer hedging pressure</li>
+<li>option efficiency</li>
+</ul>
+<p>That makes it possible to test questions like:</p>
+<ul>
+<li>do convexity overlays improve ranking?</li>
+<li>do pinning-dominant regimes reduce option-buying profitability?</li>
+<li>does option efficiency reduce premium burn?</li>
+<li>do overnight filters improve next-open outcomes?</li>
+</ul>
+<h2 data-number="8" id="conclusion"><span class="header-section-number">8</span> Conclusion</h2>
+<p>This system should be read as a hierarchical execution-quality
+model:</p>
+<ul>
+<li>the core edge comes from dealer/gamma/flow/liquidity structure</li>
+<li>move probability estimates whether the move is large enough to
+matter</li>
+<li>overlay layers decide whether the path is amplified, dangerous,
+pinned, or inefficient</li>
+<li>the final decision is whether the setup is executable as an options
+trade</li>
+</ul>
+<p>The right next research step is calibration of these overlays against
+the canonical dataset, not hidden rule growth.</p>
+<div class="page-break"></div>
+
+<h2 data-number="9" id="appendix-a---core-formulas"><span class="header-section-number">9</span> Appendix A - Core Formulas</h2>
+<div class="appendix-note">
+The live engine uses deterministic, interpretable formulas and bounded transformations rather than an opaque monolithic model.
+</div>
+
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Expression</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Direction vote</td>
+<td><code>S_bull = sum(w_i * bullish_i)</code></td>
+<td>Weighted bullish evidence</td>
+</tr>
+<tr>
+<td>Direction vote</td>
+<td><code>S_bear = sum(w_i * bearish_i)</code></td>
+<td>Weighted bearish evidence</td>
+</tr>
+<tr>
+<td>Hybrid move probability</td>
+<td><code>clip(0.10 + 0.80 * (0.35 * p_rule + 0.65 * p_ml), 0.05, 0.95)</code></td>
+<td>Conservative move-quality blend</td>
+</tr>
+<tr>
+<td>Expected move</td>
+<td><code>spot * iv * sqrt(TTE_years)</code></td>
+<td>Expected underlying move baseline</td>
+</tr>
+<tr>
+<td>Flip distance</td>
+<td><code>abs(spot - gamma_flip) / spot * 100</code></td>
+<td>Local gamma instability proxy</td>
+</tr>
+<tr>
+<td>Expected move coverage</td>
+<td><code>expected_move_points / target_distance_points</code></td>
+<td>Target reachability check</td>
+</tr>
+<tr>
+<td>Premium coverage</td>
+<td><code>expected_option_move_value / entry_price</code></td>
+<td>Option efficiency check</td>
+</tr>
+</tbody>
+</table>
+<h2 data-number="10" id="appendix-b---feature-layer-inventory"><span class="header-section-number">10</span> Appendix B - Feature Layer
+Inventory</h2>
+<h3 data-number="10.1" id="overlay-registry"><span class="header-section-number">10.1</span> Overlay Registry</h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Role</th>
+<th>Example Outputs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Global risk</td>
+<td>regime / veto / overnight filter</td>
+<td><code>global_risk_state</code>,
+<code>overnight_gap_risk_score</code></td>
+</tr>
+<tr>
+<td>Gamma-vol acceleration</td>
+<td>convexity and squeeze overlay</td>
+<td><code>gamma_vol_acceleration_score</code>,
+<code>upside_squeeze_risk</code></td>
+</tr>
+<tr>
+<td>Dealer pressure</td>
+<td>amplification vs pinning</td>
+<td><code>dealer_flow_state</code>,
+<code>pinning_pressure_score</code></td>
+</tr>
+<tr>
+<td>Option efficiency</td>
+<td>expected move and premium economics</td>
+<td><code>option_efficiency_score</code>,
+<code>target_reachability_score</code></td>
+</tr>
+</tbody>
+</table>
+<h3 data-number="10.2" id="research-friendly-feature-families"><span class="header-section-number">10.2</span> Research-Friendly Feature
+Families</h3>
+<ul>
+<li>microstructure features:
+<ul>
+<li>gamma regime</li>
+<li>spot vs flip</li>
+<li>dealer positioning</li>
+<li>flow alignment</li>
+<li>wall and vacuum context</li>
+</ul></li>
+<li>exogenous risk features:
+<ul>
+<li>macro event risk</li>
+<li>global risk state</li>
+<li>volatility shock / expansion state</li>
+</ul></li>
+<li>convexity features:
+<ul>
+<li>gamma-vol acceleration</li>
+<li>upside squeeze risk</li>
+<li>downside air-pocket risk</li>
+<li>dealer hedging pressure</li>
+</ul></li>
+<li>economic-efficiency features:
+<ul>
+<li>expected move points</li>
+<li>premium efficiency</li>
+<li>strike efficiency</li>
+<li>overnight option-efficiency penalty</li>
+</ul></li>
+</ul>
+</body>
+</html>

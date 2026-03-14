@@ -6,6 +6,9 @@ Adds:
 - auto synthetic build
 - expiry-aware synthetic chain
 - optional real IV surface integration
+
+Note:
+- the default synthetic builder uses one daily spot bar per snapshot
 """
 
 from pathlib import Path

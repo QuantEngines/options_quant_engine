@@ -49,6 +49,38 @@ SIGNAL_DATASET_COLUMNS = [
     "gamma_regime",
     "spot_vs_flip",
     "macro_regime",
+    "global_risk_state",
+    "global_risk_score",
+    "oil_shock_score",
+    "commodity_risk_score",
+    "volatility_shock_score",
+    "volatility_explosion_probability",
+    "overnight_gap_risk_score",
+    "volatility_expansion_risk_score",
+    "overnight_hold_allowed",
+    "overnight_hold_reason",
+    "overnight_risk_penalty",
+    "global_risk_adjustment_score",
+    "gamma_vol_acceleration_score",
+    "squeeze_risk_state",
+    "directional_convexity_state",
+    "upside_squeeze_risk",
+    "downside_airpocket_risk",
+    "overnight_convexity_risk",
+    "gamma_vol_adjustment_score",
+    "dealer_hedging_pressure_score",
+    "dealer_flow_state",
+    "upside_hedging_pressure",
+    "downside_hedging_pressure",
+    "pinning_pressure_score",
+    "dealer_pressure_adjustment_score",
+    "expected_move_points",
+    "expected_move_pct",
+    "target_reachability_score",
+    "premium_efficiency_score",
+    "strike_efficiency_score",
+    "option_efficiency_score",
+    "option_efficiency_adjustment_score",
     "dealer_position",
     "dealer_hedging_bias",
     "volatility_regime",
@@ -128,13 +160,12 @@ def _empty_dataset_frame() -> pd.DataFrame:
 
 
 def _normalize_dataset_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    normalized = frame.copy() if frame is not None else _empty_dataset_frame()
+    if frame is None:
+        return _empty_dataset_frame()
 
-    for column in SIGNAL_DATASET_COLUMNS:
-        if column not in normalized.columns:
-            normalized[column] = pd.NA
-
-    normalized = normalized[SIGNAL_DATASET_COLUMNS]
+    # Reindex once to preserve canonical column order without repeatedly
+    # inserting missing columns, which fragments the frame internals.
+    normalized = frame.copy().reindex(columns=SIGNAL_DATASET_COLUMNS, fill_value=pd.NA)
     return normalized
 
 

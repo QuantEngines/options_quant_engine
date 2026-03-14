@@ -16,8 +16,19 @@ from engine.trading_engine import (
     classify_execution_regime,
     classify_signal_regime,
     classify_spot_vs_flip_for_symbol,
+    derive_dealer_pressure_trade_modifiers,
     decide_direction,
+    derive_gamma_vol_trade_modifiers,
+    derive_global_risk_trade_modifiers,
+    derive_option_efficiency_trade_modifiers,
 )
+from risk import (
+    build_dealer_hedging_pressure_state,
+    build_gamma_vol_acceleration_state,
+    build_option_efficiency_state,
+)
+from models.large_move_probability import large_move_probability
+from risk.global_risk_layer import evaluate_global_risk_layer
 
 
 class LiveEnginePolicyTests(unittest.TestCase):
@@ -126,6 +137,275 @@ class LiveEnginePolicyTests(unittest.TestCase):
 
         self.assertEqual(signal_regime, "EXPANSION_BIAS")
         self.assertEqual(execution_regime, "RISK_REDUCED")
+
+    def test_global_risk_trade_modifiers_apply_requested_penalties(self):
+        modifiers = derive_global_risk_trade_modifiers(
+            {
+                "global_risk_state": "VOL_SHOCK",
+                "global_risk_adjustment_score": -2,
+                "overnight_hold_allowed": False,
+                "global_risk_features": {
+                    "oil_shock_score": 0.8,
+                    "commodity_risk_score": 0.6,
+                    "volatility_shock_score": 1.0,
+                    "volatility_explosion_probability": 0.82,
+                },
+            }
+        )
+
+        self.assertEqual(modifiers["base_adjustment_score"], -2)
+        self.assertEqual(modifiers["feature_adjustment_score"], -10)
+        self.assertEqual(modifiers["effective_adjustment_score"], -12)
+        self.assertTrue(modifiers["overnight_trade_block"])
+        self.assertIn("volatility_explosion_probability_high", modifiers["adjustment_reasons"])
+        self.assertIn("oil_shock_score_high", modifiers["adjustment_reasons"])
+
+    def test_global_risk_trade_modifiers_force_no_trade_on_event_lockdown(self):
+        modifiers = derive_global_risk_trade_modifiers(
+            {
+                "global_risk_state": "EVENT_LOCKDOWN",
+                "global_risk_adjustment_score": -4,
+                "overnight_hold_allowed": False,
+                "global_risk_features": {},
+            }
+        )
+
+        self.assertTrue(modifiers["force_no_trade"])
+        self.assertTrue(modifiers["overnight_trade_block"])
+
+    def test_global_risk_trade_modifiers_do_not_penalize_neutralized_market_features(self):
+        modifiers = derive_global_risk_trade_modifiers(
+            {
+                "global_risk_state": "GLOBAL_NEUTRAL",
+                "global_risk_adjustment_score": 0,
+                "overnight_hold_allowed": True,
+                "global_risk_features": {
+                    "oil_shock_score": 0.0,
+                    "commodity_risk_score": 0.0,
+                    "volatility_shock_score": 0.0,
+                    "volatility_explosion_probability": 0.0,
+                    "market_features_neutralized": True,
+                },
+            }
+        )
+
+        self.assertEqual(modifiers["effective_adjustment_score"], 0)
+        self.assertEqual(modifiers["adjustment_reasons"], [])
+
+    def test_gamma_vol_trade_modifiers_reward_aligned_convexity(self):
+        gamma_vol_state = build_gamma_vol_acceleration_state(
+            gamma_regime="SHORT_GAMMA_ZONE",
+            spot_vs_flip="ABOVE_FLIP",
+            gamma_flip_distance_pct=0.08,
+            dealer_hedging_bias="UPSIDE_ACCELERATION",
+            liquidity_vacuum_state="BREAKOUT_ZONE",
+            intraday_range_pct=0.85,
+            volatility_compression_score=0.7,
+            volatility_shock_score=0.3,
+            macro_event_risk_score=12,
+            global_risk_state={"global_risk_state": "GLOBAL_NEUTRAL"},
+            volatility_explosion_probability=0.52,
+        )
+
+        modifiers = derive_gamma_vol_trade_modifiers(gamma_vol_state, direction="CALL")
+
+        self.assertGreaterEqual(modifiers["effective_adjustment_score"], 3)
+        self.assertEqual(modifiers["directional_convexity_state"], "UPSIDE_SQUEEZE_RISK")
+        self.assertIn("upside_squeeze_alignment", modifiers["adjustment_reasons"])
+
+    def test_gamma_vol_trade_modifiers_penalize_directional_conflict(self):
+        gamma_vol_state = build_gamma_vol_acceleration_state(
+            gamma_regime="SHORT_GAMMA_ZONE",
+            spot_vs_flip="BELOW_FLIP",
+            gamma_flip_distance_pct=0.10,
+            dealer_hedging_bias="DOWNSIDE_ACCELERATION",
+            liquidity_vacuum_state="NEAR_VACUUM",
+            intraday_range_pct=0.95,
+            volatility_compression_score=0.4,
+            volatility_shock_score=0.7,
+            macro_event_risk_score=25,
+            global_risk_state={"global_risk_state": "RISK_OFF"},
+            volatility_explosion_probability=0.62,
+        )
+
+        modifiers = derive_gamma_vol_trade_modifiers(gamma_vol_state, direction="CALL")
+
+        self.assertLess(modifiers["effective_adjustment_score"], 0)
+        self.assertEqual(modifiers["directional_convexity_state"], "DOWNSIDE_AIRPOCKET_RISK")
+        self.assertIn("downside_convexity_conflict", modifiers["adjustment_reasons"])
+
+    def test_dealer_pressure_trade_modifiers_reward_aligned_hedging_pressure(self):
+        dealer_state = build_dealer_hedging_pressure_state(
+            spot=22000,
+            gamma_regime="SHORT_GAMMA_ZONE",
+            spot_vs_flip="ABOVE_FLIP",
+            gamma_flip_distance_pct=0.08,
+            dealer_position="Short Gamma",
+            dealer_hedging_bias="UPSIDE_ACCELERATION",
+            dealer_hedging_flow="BUY_FUTURES",
+            gamma_clusters=[21940, 22040],
+            liquidity_levels=[21930, 22060],
+            support_wall=21950,
+            resistance_wall=22180,
+            liquidity_vacuum_state="BREAKOUT_ZONE",
+            intraday_gamma_state="VOL_EXPANSION",
+            intraday_range_pct=0.9,
+            flow_signal="BULLISH_FLOW",
+            smart_money_flow="BULLISH_FLOW",
+            macro_event_risk_score=15,
+            global_risk_state={"global_risk_state": "GLOBAL_NEUTRAL"},
+            volatility_explosion_probability=0.4,
+            gamma_vol_acceleration_score=72,
+        )
+
+        modifiers = derive_dealer_pressure_trade_modifiers(dealer_state, direction="CALL")
+
+        self.assertGreater(modifiers["effective_adjustment_score"], 0)
+        self.assertEqual(modifiers["dealer_flow_state"], "UPSIDE_HEDGING_ACCELERATION")
+        self.assertIn("upside_hedging_alignment", modifiers["adjustment_reasons"])
+
+    def test_dealer_pressure_trade_modifiers_dampen_pinning_option_buying(self):
+        dealer_state = build_dealer_hedging_pressure_state(
+            spot=22000,
+            gamma_regime="LONG_GAMMA_ZONE",
+            spot_vs_flip="ABOVE_FLIP",
+            gamma_flip_distance_pct=0.32,
+            dealer_position="Long Gamma",
+            dealer_hedging_bias="PINNING",
+            dealer_hedging_flow="BUY_FUTURES",
+            gamma_clusters=[21980, 22010, 22030],
+            liquidity_levels=[21990, 22020],
+            support_wall=21985,
+            resistance_wall=22025,
+            liquidity_vacuum_state="NO_VACUUM",
+            intraday_gamma_state="VOL_SUPPRESSION",
+            intraday_range_pct=0.22,
+            flow_signal="NEUTRAL_FLOW",
+            smart_money_flow="NEUTRAL_FLOW",
+            macro_event_risk_score=6,
+            global_risk_state={"global_risk_state": "GLOBAL_NEUTRAL"},
+            volatility_explosion_probability=0.05,
+            gamma_vol_acceleration_score=16,
+        )
+
+        modifiers = derive_dealer_pressure_trade_modifiers(dealer_state, direction="CALL")
+
+        self.assertLess(modifiers["effective_adjustment_score"], 0)
+        self.assertEqual(modifiers["dealer_flow_state"], "PINNING_DOMINANT")
+        self.assertIn("pinning_dampens_option_buying", modifiers["adjustment_reasons"])
+
+    def test_option_efficiency_trade_modifiers_reward_efficient_setup(self):
+        state = build_option_efficiency_state(
+            spot=22000,
+            atm_iv=18.0,
+            expiry_value="2026-03-21",
+            valuation_time="2026-03-14T10:00:00+05:30",
+            direction="CALL",
+            strike=22000,
+            option_type="CE",
+            entry_price=110,
+            target=145,
+            stop_loss=92,
+            gamma_vol_acceleration_score=72,
+            dealer_hedging_pressure_score=66,
+            liquidity_vacuum_state="BREAKOUT_ZONE",
+        )
+
+        modifiers = derive_option_efficiency_trade_modifiers(state)
+
+        self.assertGreater(modifiers["option_efficiency_score"], 60)
+        self.assertGreater(modifiers["effective_adjustment_score"], 0)
+        self.assertTrue(modifiers["overnight_hold_allowed"])
+
+    def test_option_efficiency_trade_modifiers_penalize_poor_overnight_setup(self):
+        state = build_option_efficiency_state(
+            spot=22000,
+            atm_iv=13.0,
+            expiry_value="2026-03-17",
+            valuation_time="2026-03-14T15:10:00+05:30",
+            direction="CALL",
+            strike=22300,
+            option_type="CE",
+            entry_price=145,
+            target=210,
+            stop_loss=105,
+            holding_profile="OVERNIGHT",
+            global_risk_state={
+                "global_risk_state": "GLOBAL_NEUTRAL",
+                "holding_context": {
+                    "holding_profile": "OVERNIGHT",
+                    "overnight_relevant": True,
+                },
+            },
+        )
+
+        modifiers = derive_option_efficiency_trade_modifiers(state)
+
+        self.assertLess(modifiers["effective_adjustment_score"], 0)
+        self.assertFalse(modifiers["overnight_hold_allowed"])
+        self.assertGreater(modifiers["overnight_option_efficiency_penalty"], 0)
+
+    def test_execution_regime_treats_no_trade_as_blocked(self):
+        execution_regime = classify_execution_regime(
+            trade_status="NO_TRADE",
+            signal_regime="LOCKDOWN",
+            data_quality_score=92,
+            macro_position_size_multiplier=1.0,
+        )
+
+        self.assertEqual(execution_regime, "BLOCKED")
+
+    def test_global_risk_layer_blocks_event_lockdown(self):
+        decision = evaluate_global_risk_layer(
+            data_quality={"score": 92, "status": "STRONG", "fatal": False},
+            confirmation={"status": "CONFIRMED", "veto": False},
+            adjusted_trade_strength=78,
+            min_trade_strength=45,
+            event_window_status="PRE_EVENT_LOCKDOWN",
+            macro_event_risk_score=85,
+            event_lockdown_flag=True,
+            next_event_name="RBI Policy",
+            active_event_name=None,
+            macro_news_adjustments={"macro_position_size_multiplier": 0.0, "event_lockdown_flag": False},
+        )
+
+        self.assertEqual(decision["risk_trade_status"], "EVENT_LOCKDOWN")
+        self.assertEqual(decision["global_risk_action"], "BLOCK")
+        self.assertEqual(decision["global_risk_level"], "BLOCKED")
+
+    def test_global_risk_layer_reduces_size_without_blocking(self):
+        decision = evaluate_global_risk_layer(
+            data_quality={"score": 88, "status": "GOOD", "fatal": False},
+            confirmation={"status": "CONFIRMED", "veto": False},
+            adjusted_trade_strength=72,
+            min_trade_strength=45,
+            event_window_status="NO_EVENT_DATA",
+            macro_event_risk_score=10,
+            event_lockdown_flag=False,
+            next_event_name=None,
+            active_event_name=None,
+            macro_news_adjustments={"macro_position_size_multiplier": 0.8, "event_lockdown_flag": False},
+        )
+
+        self.assertIsNone(decision["risk_trade_status"])
+        self.assertEqual(decision["global_risk_action"], "REDUCE")
+        self.assertEqual(decision["global_risk_size_cap"], 0.8)
+
+    def test_large_move_probability_recognizes_short_gamma_zone(self):
+        short_gamma_prob = large_move_probability(
+            "SHORT_GAMMA_ZONE",
+            "BREAKOUT_ZONE",
+            "UPSIDE_ACCELERATION",
+            "BULLISH_FLOW",
+        )
+        long_gamma_prob = large_move_probability(
+            "LONG_GAMMA_ZONE",
+            "BREAKOUT_ZONE",
+            "UPSIDE_ACCELERATION",
+            "BULLISH_FLOW",
+        )
+
+        self.assertGreater(short_gamma_prob, long_gamma_prob)
 
 
 if __name__ == "__main__":

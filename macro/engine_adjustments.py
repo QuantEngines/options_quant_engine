@@ -8,7 +8,7 @@ independently.
 
 from __future__ import annotations
 
-from macro.macro_news_config import MACRO_NEWS_ADJUSTMENT_CONFIG
+from macro.macro_news_config import get_macro_news_adjustment_config
 
 
 def _clip(value, lo, hi):
@@ -25,7 +25,7 @@ def _safe_float(value, default=0.0):
 
 
 def compute_macro_news_adjustments(*, direction, macro_news_state=None):
-    cfg = MACRO_NEWS_ADJUSTMENT_CONFIG
+    cfg = get_macro_news_adjustment_config()
     macro_news_state = macro_news_state if isinstance(macro_news_state, dict) else {}
 
     macro_regime = macro_news_state.get("macro_regime", "MACRO_NEUTRAL")
