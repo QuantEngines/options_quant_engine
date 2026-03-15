@@ -128,6 +128,7 @@ These layers are intentionally modifiers and filters. They do not replace the co
 
 - canonical dataset in [signals_dataset.csv](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/signals_dataset.csv)
 - schema and upsert rules in [dataset.py](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/dataset.py)
+- live capture appends new signal rows in constant time and only rewrites the CSV when an existing `signal_id` needs an update
 - row-building and outcome enrichment in [evaluator.py](/Users/pramitdutta/Desktop/options_quant_engine/research/signal_evaluation/evaluator.py)
 - this dataset is the primary calibration and validation source for tuning, walk-forward analysis, and promotion decisions
 

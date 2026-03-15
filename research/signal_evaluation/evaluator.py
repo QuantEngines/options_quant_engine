@@ -602,11 +602,12 @@ def save_signal_evaluation(
     realized_spot_path: pd.DataFrame | None = None,
     as_of=None,
     notes: str | None = None,
-) -> pd.DataFrame:
+    return_frame: bool = True,
+) -> pd.DataFrame | None:
     row = build_signal_evaluation_row(result, notes=notes)
     if realized_spot_path is not None and not realized_spot_path.empty:
         row = evaluate_signal_outcomes(row, realized_spot_path, as_of=as_of)
-    return upsert_signal_rows([row], path=dataset_path)
+    return upsert_signal_rows([row], path=dataset_path, return_frame=return_frame)
 
 
 def update_signal_dataset_outcomes(

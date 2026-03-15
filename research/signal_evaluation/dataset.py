@@ -8,6 +8,7 @@ incrementally enriched over time as realized outcomes become available.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import pandas as pd
@@ -150,6 +151,8 @@ SIGNAL_DATASET_COLUMNS = [
     "notes",
 ]
 
+_SIGNAL_ID_CACHE: dict[Path, dict[str, object]] = {}
+
 
 def _ensure_parent_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,6 +172,79 @@ def _normalize_dataset_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _current_file_signature(path: Path) -> tuple[int, int] | None:
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _update_signal_id_cache(path: Path, signal_ids: Iterable[object]) -> None:
+    _SIGNAL_ID_CACHE[path] = {
+        "signature": _current_file_signature(path),
+        "signal_ids": {str(signal_id) for signal_id in signal_ids if pd.notna(signal_id)},
+    }
+
+
+def _load_existing_signal_ids(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+
+    signature = _current_file_signature(path)
+    cached = _SIGNAL_ID_CACHE.get(path)
+    if cached and cached.get("signature") == signature:
+        return set(cached.get("signal_ids", set()))
+
+    try:
+        frame = pd.read_csv(path, usecols=["signal_id"])
+    except ValueError:
+        frame = load_signals_dataset(path)[["signal_id"]]
+
+    signal_ids = {str(signal_id) for signal_id in frame["signal_id"].dropna()}
+    _SIGNAL_ID_CACHE[path] = {
+        "signature": signature,
+        "signal_ids": signal_ids,
+    }
+    return set(signal_ids)
+
+
+def _dataset_has_canonical_header(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        header = pd.read_csv(path, nrows=0).columns.tolist()
+    except Exception:
+        return False
+    return header == SIGNAL_DATASET_COLUMNS
+
+
+def _dedupe_signal_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+
+    deduped = frame.copy()
+    sort_key = "__sort_key__"
+    deduped[sort_key] = deduped["updated_at"].fillna(deduped["created_at"]).fillna("")
+    deduped = deduped.sort_values(sort_key, kind="stable")
+    deduped = deduped.drop_duplicates(subset=["signal_id"], keep="last")
+    deduped = deduped.drop(columns=[sort_key]).reset_index(drop=True)
+    return deduped
+
+
+def _append_rows_to_dataset(frame: pd.DataFrame, path: Path, existing_signal_ids: set[str] | None = None) -> None:
+    if frame.empty:
+        return
+
+    if not path.exists() or path.stat().st_size == 0:
+        write_signals_dataset(frame, path)
+        return
+
+    frame.to_csv(path, mode="a", header=False, index=False)
+    existing_ids = set(existing_signal_ids or ())
+    existing_ids.update(str(signal_id) for signal_id in frame["signal_id"].dropna())
+    _update_signal_id_cache(path, existing_ids)
+
+
 def load_signals_dataset(path: str | Path = SIGNAL_DATASET_PATH) -> pd.DataFrame:
     dataset_path = Path(path)
     if not dataset_path.exists():
@@ -184,6 +260,7 @@ def write_signals_dataset(frame: pd.DataFrame, path: str | Path = SIGNAL_DATASET
     _ensure_parent_dir(dataset_path)
     normalized = _normalize_dataset_frame(frame)
     normalized.to_csv(dataset_path, index=False)
+    _update_signal_id_cache(dataset_path, normalized.get("signal_id", pd.Series(dtype="object")))
     return dataset_path
 
 
@@ -194,28 +271,40 @@ def ensure_signals_dataset_exists(path: str | Path = SIGNAL_DATASET_PATH) -> Pat
     return dataset_path
 
 
-def upsert_signal_rows(rows, path: str | Path = SIGNAL_DATASET_PATH) -> pd.DataFrame:
-    existing = load_signals_dataset(path)
+def upsert_signal_rows(
+    rows,
+    path: str | Path = SIGNAL_DATASET_PATH,
+    *,
+    return_frame: bool = True,
+) -> pd.DataFrame | None:
+    dataset_path = ensure_signals_dataset_exists(path)
     incoming = pd.DataFrame(rows or [])
 
     if incoming.empty:
-        write_signals_dataset(existing, path)
-        return existing
+        return load_signals_dataset(dataset_path) if return_frame else None
 
     incoming = _normalize_dataset_frame(incoming)
     if incoming["signal_id"].isna().any():
         raise ValueError("All signal rows must include a non-null signal_id")
+    incoming = _dedupe_signal_frame(incoming)
 
+    if not _dataset_has_canonical_header(dataset_path):
+        existing = load_signals_dataset(dataset_path)
+        write_signals_dataset(existing, dataset_path)
+
+    existing_signal_ids = _load_existing_signal_ids(dataset_path)
+    incoming_signal_ids = {str(signal_id) for signal_id in incoming["signal_id"].dropna()}
+
+    if not existing_signal_ids.intersection(incoming_signal_ids):
+        _append_rows_to_dataset(incoming, dataset_path, existing_signal_ids=existing_signal_ids)
+        return load_signals_dataset(dataset_path) if return_frame else None
+
+    existing = load_signals_dataset(dataset_path)
     if existing.empty:
         combined = incoming.copy()
     else:
         combined = pd.concat([existing, incoming], ignore_index=True)
 
-    sort_key = "__sort_key__"
-    combined[sort_key] = combined["updated_at"].fillna(combined["created_at"]).fillna("")
-    combined = combined.sort_values(sort_key, kind="stable")
-    combined = combined.drop_duplicates(subset=["signal_id"], keep="last")
-    combined = combined.drop(columns=[sort_key]).reset_index(drop=True)
-
-    write_signals_dataset(combined, path)
-    return combined
+    combined = _dedupe_signal_frame(combined)
+    write_signals_dataset(combined, dataset_path)
+    return combined if return_frame else None

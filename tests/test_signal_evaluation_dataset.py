@@ -286,6 +286,24 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
             self.assertEqual(frame.iloc[0]["signal_id"], build_signal_evaluation_row(result)["signal_id"])
             self.assertEqual(frame.iloc[0]["outcome_status"], "PARTIAL")
 
+    def test_save_signal_evaluation_supports_append_only_live_capture(self):
+        result_a = self._sample_result()
+        result_b = self._sample_result()
+        result_b["spot_summary"] = dict(result_b["spot_summary"])
+        result_b["spot_summary"]["timestamp"] = "2026-03-14T10:30:00+05:30"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dataset_path = Path(tmp_dir) / "signals_dataset.csv"
+            returned = save_signal_evaluation(result_a, dataset_path=dataset_path, return_frame=False)
+            self.assertIsNone(returned)
+
+            returned = save_signal_evaluation(result_b, dataset_path=dataset_path, return_frame=False)
+            self.assertIsNone(returned)
+
+            frame = load_signals_dataset(dataset_path)
+            self.assertEqual(len(frame), 2)
+            self.assertEqual(frame["signal_id"].nunique(), 2)
+
     def test_no_direction_signal_does_not_force_directional_scoring(self):
         result = self._sample_result()
         result["trade"] = dict(result["trade"])

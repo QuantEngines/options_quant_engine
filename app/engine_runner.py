@@ -400,7 +400,7 @@ def run_engine_snapshot(
 
         if capture_signal_evaluation and should_capture_signal(trade, signal_capture_policy):
             try:
-                save_signal_evaluation(result_payload)
+                save_signal_evaluation(result_payload, return_frame=False)
                 result_payload["signal_capture_status"] = "CAPTURED"
             except Exception as exc:
                 result_payload["signal_capture_status"] = f"FAILED:{type(exc).__name__}"
