@@ -19,82 +19,13 @@ import pandas as pd
 
 from analytics.greeks_engine import enrich_chain_with_greeks
 
-
-def _clip(x, lo, hi):
-    """
-    Purpose:
-        Clamp a numeric value to the configured bounds.
-
-    Context:
-        Used within the trading support common workflow. The module sits in the signal-engine layer that combines analytics, strategy rules, and overlays into final decisions.
-
-    Inputs:
-        x (Any): Raw scalar input supplied by the caller.
-        lo (Any): Inclusive lower bound for the returned value.
-        hi (Any): Inclusive upper bound for the returned value.
-
-    Returns:
-        float | int: Bounded value returned by the helper.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    return max(lo, min(hi, x))
-
-
-def _safe_float(x, default=0.0):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Used within the trading support common workflow. The module sits in the signal-engine layer that combines analytics, strategy rules, and overlays into final decisions.
-
-    Inputs:
-        x (Any): Raw scalar input supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        if x is None:
-            return default
-        return float(x)
-    except Exception:
-        return default
-
-
-def _safe_div(a, b, default=0.0):
-    """
-    Purpose:
-        Safely divide two numeric inputs and fall back when the denominator is unusable.
-
-    Context:
-        Used within the trading support common workflow. The module sits in the signal-engine layer that combines analytics, strategy rules, and overlays into final decisions.
-
-    Inputs:
-        a (Any): First numeric input for the helper.
-        b (Any): Second numeric input for the helper.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Division result or the fallback value.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        a = float(a)
-        b = float(b)
-        if b == 0:
-            return default
-        return a / b
-    except Exception:
-        return default
+# ── Shared numeric helpers ──────────────────────────────────────────────
+# Canonical implementations live in utils/numerics.py.  The private names
+# are kept here as thin re-exports so every existing import site works
+# without changes.
+from utils.numerics import clip as _clip  # noqa: F401
+from utils.numerics import safe_float as _safe_float  # noqa: F401
+from utils.numerics import safe_div as _safe_div  # noqa: F401
 
 
 def normalize_option_chain(option_chain, spot=None, valuation_time=None):
@@ -206,36 +137,7 @@ def _call_first(module, candidate_names, *args, default=None, **kwargs):
     return default
 
 
-def _to_python_number(x):
-    """
-    Purpose:
-        Convert numpy-style numeric scalars into plain Python numbers when possible.
-
-    Context:
-        Used within the trading support common workflow. The module sits in the signal-engine layer that combines analytics, strategy rules, and overlays into final decisions.
-
-    Inputs:
-        x (Any): Raw scalar input supplied by the caller.
-
-    Returns:
-        Any: Native Python scalar when conversion succeeds, otherwise the original value.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        if hasattr(x, "item"):
-            return x.item()
-    except Exception:
-        pass
-
-    try:
-        if isinstance(x, float) and x.is_integer():
-            return int(x)
-    except Exception:
-        pass
-
-    return x
+from utils.numerics import to_python_number as _to_python_number  # noqa: F401,E501
 
 
 def _clean_zone_list(zones):

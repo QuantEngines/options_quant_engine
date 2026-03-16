@@ -18,63 +18,8 @@ import numpy as np
 import pandas as pd
 
 from config.strike_selection_policy import get_strike_selection_score_config
-
-
-def _safe_float(x, default=0.0):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Used within the strike selector workflow. The module sits in the strategy layer that converts directional intent into executable option trades.
-
-    Inputs:
-        x (Any): Raw scalar input supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        if x is None:
-            return default
-        return float(x)
-    except Exception:
-        return default
-
-def _to_python_number(x):
-    """
-    Purpose:
-        Convert numpy-style numeric scalars into plain Python numbers when possible.
-
-    Context:
-        Used within the strike selector workflow. The module sits in the strategy layer that converts directional intent into executable option trades.
-
-    Inputs:
-        x (Any): Raw scalar input supplied by the caller.
-
-    Returns:
-        Any: Native Python scalar when conversion succeeds, otherwise the original value.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        if hasattr(x, "item"):
-            return x.item()
-    except Exception:
-        pass
-
-    try:
-        if isinstance(x, float) and x.is_integer():
-            return int(x)
-    except Exception:
-        pass
-
-    return x
+from strategy.enhanced_strike_scoring import compute_enhanced_strike_scores
+from utils.numerics import safe_float as _safe_float, to_python_number as _to_python_number  # noqa: F401
 
 
 def _infer_strike_step(rows):
@@ -633,6 +578,14 @@ def rank_strike_candidates(
     top_n=5,
     strike_window_steps=None,
     candidate_score_hook=None,
+    gamma_regime=None,
+    spot_vs_flip=None,
+    dealer_hedging_bias=None,
+    gamma_flip_distance_pct=None,
+    dealer_gamma_exposure=None,
+    atm_iv=None,
+    days_to_expiry=None,
+    vol_surface_regime=None,
 ):
     """
     Purpose:
@@ -691,6 +644,33 @@ def rank_strike_candidates(
         lot_size=lot_size,
     )
 
+    # Compute enhanced institutional-grade scoring factors.  The result is
+    # index-aligned with *rows* so columns can be looked up per-candidate
+    # inside the record loop below.
+    enhanced = compute_enhanced_strike_scores(
+        rows,
+        spot=float(spot),
+        direction=direction,
+        gamma_clusters=gamma_clusters,
+        gamma_regime=gamma_regime,
+        spot_vs_flip=spot_vs_flip,
+        dealer_hedging_bias=dealer_hedging_bias,
+        gamma_flip_distance_pct=gamma_flip_distance_pct,
+        dealer_gamma_exposure=dealer_gamma_exposure,
+        atm_iv=atm_iv,
+        days_to_expiry=days_to_expiry,
+        vol_surface_regime=vol_surface_regime,
+        support_wall=support_wall,
+        resistance_wall=resistance_wall,
+    )
+    _has_enhanced = not enhanced.empty
+
+    # Merge enhanced columns into the scored frame so they appear in each
+    # per-candidate record dict without needing a secondary index lookup.
+    if _has_enhanced:
+        for col in enhanced.columns:
+            rows[col] = enhanced[col]
+
     # Convert the scored dataframe into plain records because the final engine
     # payload and downstream reporting stack work with JSON-friendly structures.
     candidates = []
@@ -737,18 +717,40 @@ def rank_strike_candidates(
             score_breakdown["option_efficiency_score_adjustment"] = efficiency_score_adjustment
 
         total_score = int(row.get("_base_score", 0)) + efficiency_score_adjustment
+        delta_raw = _safe_float(row.get("DELTA"), None)
         record = {
+            "option_type": option_type,
             "strike": _to_python_number(strike),
             "last_price": round(premium, 2),
             "volume": int(volume),
             "open_interest": int(oi),
             "iv": round(iv, 2) if iv else 0,
+            "delta": round(delta_raw, 4) if delta_raw is not None else None,
             "capital_per_lot": round(premium * lot_size, 2) if lot_size is not None else None,
             "score": total_score,
             "score_breakdown": score_breakdown,
         }
         if hook_payload:
             record.update({key: value for key, value in hook_payload.items() if key != "score_adjustment"})
+
+        # Attach enhanced institutional-grade scoring fields when available.
+        if _has_enhanced:
+            _enhanced_fields = (
+                "enhanced_strike_score", "liquidity_score", "gamma_magnetism",
+                "dealer_pressure", "convexity_score", "premium_efficiency",
+                "payoff_efficiency_score",
+                "pe_premium_eff", "pe_delta_align", "pe_liquidity",
+                "pe_dist_target", "pe_iv_eff",
+                "distance_from_spot_pts", "distance_from_spot_pct",
+                "gamma_regime", "spot_vs_flip", "dealer_hedging_bias",
+                "vol_surface_regime", "tradable_intraday", "tradable_overnight",
+                "liquidity_ok", "premium_reasonable",
+            )
+            for field in _enhanced_fields:
+                val = row.get(field)
+                if val is not None:
+                    record[field] = _to_python_number(val) if isinstance(val, (np.integer, np.floating)) else val
+
         candidates.append(record)
 
     candidates.sort(
@@ -774,6 +776,14 @@ def select_best_strike(
     max_capital=None,
     strike_window_steps=None,
     candidate_score_hook=None,
+    gamma_regime=None,
+    spot_vs_flip=None,
+    dealer_hedging_bias=None,
+    gamma_flip_distance_pct=None,
+    dealer_gamma_exposure=None,
+    atm_iv=None,
+    days_to_expiry=None,
+    vol_surface_regime=None,
 ):
     """
     Purpose:
@@ -812,6 +822,14 @@ def select_best_strike(
         top_n=5,
         strike_window_steps=strike_window_steps,
         candidate_score_hook=candidate_score_hook,
+        gamma_regime=gamma_regime,
+        spot_vs_flip=spot_vs_flip,
+        dealer_hedging_bias=dealer_hedging_bias,
+        gamma_flip_distance_pct=gamma_flip_distance_pct,
+        dealer_gamma_exposure=dealer_gamma_exposure,
+        atm_iv=atm_iv,
+        days_to_expiry=days_to_expiry,
+        vol_surface_regime=vol_surface_regime,
     )
 
     if not ranked:

@@ -16,31 +16,7 @@ Downstream Usage:
 
 import pandas as pd
 
-
-def _safe_float(value, default=0.0):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `dealer inventory` module. The module sits in the analytics layer that turns option-chain and market-structure data into tradable features.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 def dealer_inventory_metrics(option_chain: pd.DataFrame):

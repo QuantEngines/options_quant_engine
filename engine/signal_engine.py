@@ -25,7 +25,7 @@ from config.settings import (
     TARGET_PROFIT_PERCENT,
 )
 from config.event_window_policy import get_event_window_policy_config
-from config.signal_policy import get_trade_runtime_thresholds
+from config.signal_policy import get_activation_score_policy_config, get_trade_runtime_thresholds
 from engine.runtime_metadata import attach_trade_views
 from engine.trading_support import (
     _clip,
@@ -172,52 +172,53 @@ def _build_decision_explainability(payload, *, trade_status, min_trade_strength)
     gamma_flip = payload.get("gamma_flip")
 
     activation_score = 0
+    acfg = get_activation_score_policy_config()
     if _is_directional_flow(flow_signal):
-        activation_score += 24
+        activation_score += acfg.flow_bonus
     if _is_directional_flow(smart_money_flow):
-        activation_score += 16
+        activation_score += acfg.smart_money_bonus
     if _is_convexity_active(directional_convexity_state):
-        activation_score += 20
+        activation_score += acfg.convexity_bonus
     if _is_dealer_structure_active(dealer_flow_state):
-        activation_score += 14
-    if trade_strength >= max(12, int(min_trade_strength * 0.5)):
-        activation_score += 14
-    if hybrid_move_probability >= 0.55:
-        activation_score += 12
-    activation_score = int(_clip(activation_score, 0, 100))
+        activation_score += acfg.dealer_structure_bonus
+    if trade_strength >= max(12, int(min_trade_strength * acfg.trade_strength_min_ratio)):
+        activation_score += acfg.trade_strength_bonus
+    if hybrid_move_probability >= acfg.move_probability_floor:
+        activation_score += acfg.move_probability_bonus
+    activation_score = int(_clip(activation_score, 0, acfg.activation_cap))
 
     confirmation_score = 0
     if confirmation_status in {"STRONG_CONFIRMATION", "CONFIRMED"}:
-        confirmation_score = 100
+        confirmation_score = acfg.confirmation_score_strong
     elif confirmation_status == "MIXED":
-        confirmation_score = 55
+        confirmation_score = acfg.confirmation_score_mixed
     elif confirmation_status == "CONFLICT":
-        confirmation_score = 20
+        confirmation_score = acfg.confirmation_score_conflict
     elif confirmation_status == "NO_DIRECTION":
-        confirmation_score = 10
+        confirmation_score = acfg.confirmation_score_no_direction
 
-    data_ready_score = 100
+    data_ready_score = acfg.data_ready_strong
     if data_quality_status == "GOOD":
-        data_ready_score = 80
+        data_ready_score = acfg.data_ready_good
     elif data_quality_status == "CAUTION":
-        data_ready_score = 55
+        data_ready_score = acfg.data_ready_caution
     elif data_quality_status == "WEAK":
-        data_ready_score = 30
+        data_ready_score = acfg.data_ready_weak
 
     maturity_score = int(
         _clip(
-            (0.45 * trade_strength)
-            + (0.30 * confirmation_score)
-            + (0.25 * data_ready_score),
+            (acfg.maturity_weight_trade_strength * trade_strength)
+            + (acfg.maturity_weight_confirmation * confirmation_score)
+            + (acfg.maturity_weight_data_ready * data_ready_score),
             0,
             100,
         )
     )
 
     explainability_confidence = "LOW"
-    if data_ready_score >= 75 and confirmation_score >= 55:
+    if data_ready_score >= acfg.high_confidence_data_ready_floor and confirmation_score >= acfg.high_confidence_confirmation_floor:
         explainability_confidence = "HIGH"
-    elif data_ready_score >= 55:
+    elif data_ready_score >= acfg.medium_confidence_data_ready_floor:
         explainability_confidence = "MEDIUM"
 
     missing_requirements = []
@@ -271,7 +272,7 @@ def _build_decision_explainability(payload, *, trade_status, min_trade_strength)
             missing_requirements.append("missing_directional_consensus")
             missing_confirmations.append("direction")
 
-            if activation_score < 35:
+            if activation_score < acfg.dead_inactive_threshold:
                 decision_classification = "DEAD_INACTIVE"
                 setup_state = "NONE"
                 no_trade_reason_code = "SIGNAL_SCORE_BELOW_THRESHOLD"
@@ -424,6 +425,27 @@ def _build_decision_explainability(payload, *, trade_status, min_trade_strength)
         **neutralization,
     }
     return explainability
+
+
+def _estimate_days_to_expiry(option_chain_validation, valuation_time):
+    """Estimate calendar days to expiry from chain validation and valuation time."""
+    import datetime as _dt
+
+    selected = (
+        option_chain_validation.get("selected_expiry")
+        if isinstance(option_chain_validation, dict)
+        else None
+    )
+    if selected is None or valuation_time is None:
+        return None
+    try:
+        import pandas as _pd
+        expiry_ts = _pd.Timestamp(selected)
+        val_ts = _pd.Timestamp(valuation_time)
+        delta = (expiry_ts - val_ts).total_seconds() / 86400.0
+        return max(delta, 0.0)
+    except Exception:
+        return None
 
 
 def generate_trade(
@@ -995,6 +1017,15 @@ def generate_trade(
         )
         payload.update(explainability)
         payload["explainability"] = explainability
+
+        # Compute signal confidence and attach to the payload so it is
+        # captured into the evaluation dataset alongside the other diagnostics.
+        from analytics.signal_confidence import compute_signal_confidence
+
+        confidence = compute_signal_confidence(payload)
+        payload["signal_confidence_score"] = confidence["confidence_score"]
+        payload["signal_confidence_level"] = confidence["confidence_level"]
+
         return attach_trade_views(payload)
 
     if global_risk["risk_trade_status"] == "DATA_INVALID":
@@ -1080,6 +1111,13 @@ def generate_trade(
             lot_size=lot_size,
             max_capital=max_capital if apply_budget_constraint else None,
             candidate_score_hook=option_efficiency_candidate_hook,
+            gamma_regime=market_state["gamma_regime"],
+            spot_vs_flip=market_state["spot_vs_flip"],
+            dealer_hedging_bias=market_state["hedging_bias"],
+            gamma_flip_distance_pct=probability_state["components"].get("gamma_flip_distance_pct"),
+            atm_iv=market_state["atm_iv"],
+            days_to_expiry=_estimate_days_to_expiry(option_chain_validation, valuation_time),
+            vol_surface_regime=market_state["surface_regime"],
         )
 
     base_payload["ranked_strike_candidates"] = ranked_strikes
@@ -1186,39 +1224,38 @@ def generate_trade(
         "option_efficiency_features": option_efficiency_state.get("option_efficiency_features", {}),
         "option_efficiency_diagnostics": option_efficiency_state.get("option_efficiency_diagnostics", {}),
     })
+    # --- Overnight hold consolidation -----------------------------------------
+    _overnight_layers = [
+        ("global_risk", global_risk_trade_modifiers),
+        ("gamma_vol", gamma_vol_trade_modifiers),
+        ("dealer_pressure", dealer_pressure_trade_modifiers),
+        ("option_efficiency", option_efficiency_trade_modifiers),
+    ]
+    _overnight_allowed = True
+    _overnight_reason = option_efficiency_trade_modifiers["overnight_hold_reason"]
+    for _layer_name, _layer_mods in _overnight_layers:
+        if not _layer_mods["overnight_hold_allowed"]:
+            _overnight_allowed = False
+            _overnight_reason = _layer_mods["overnight_hold_reason"]
+            break
+
+    _penalty_keys = {
+        "global_risk": "overnight_risk_penalty",
+        "gamma_vol": "overnight_convexity_penalty",
+        "dealer_pressure": "overnight_dealer_pressure_penalty",
+        "option_efficiency": "overnight_option_efficiency_penalty",
+    }
+    _overnight_penalty = sum(
+        int(_safe_float(_layer_mods.get(_penalty_keys[_layer_name]), 0.0))
+        for _layer_name, _layer_mods in _overnight_layers
+    )
+
     base_payload.update(
         {
-            "overnight_hold_allowed": (
-                global_risk_trade_modifiers["overnight_hold_allowed"]
-                and gamma_vol_trade_modifiers["overnight_hold_allowed"]
-                and dealer_pressure_trade_modifiers["overnight_hold_allowed"]
-                and option_efficiency_trade_modifiers["overnight_hold_allowed"]
-            ),
-            "overnight_hold_reason": (
-                global_risk_trade_modifiers["overnight_hold_reason"]
-                if not global_risk_trade_modifiers["overnight_hold_allowed"]
-                else (
-                    gamma_vol_trade_modifiers["overnight_hold_reason"]
-                    if not gamma_vol_trade_modifiers["overnight_hold_allowed"]
-                    else (
-                        dealer_pressure_trade_modifiers["overnight_hold_reason"]
-                        if not dealer_pressure_trade_modifiers["overnight_hold_allowed"]
-                        else option_efficiency_trade_modifiers["overnight_hold_reason"]
-                    )
-                )
-            ),
-            "overnight_risk_penalty": (
-                global_risk_trade_modifiers["overnight_risk_penalty"]
-                + gamma_vol_trade_modifiers["overnight_convexity_penalty"]
-                + dealer_pressure_trade_modifiers["overnight_dealer_pressure_penalty"]
-                + option_efficiency_trade_modifiers["overnight_option_efficiency_penalty"]
-            ),
-            "overnight_trade_block": (
-                global_risk_trade_modifiers["overnight_trade_block"]
-                or not gamma_vol_trade_modifiers["overnight_hold_allowed"]
-                or not dealer_pressure_trade_modifiers["overnight_hold_allowed"]
-                or not option_efficiency_trade_modifiers["overnight_hold_allowed"]
-            ),
+            "overnight_hold_allowed": _overnight_allowed,
+            "overnight_hold_reason": _overnight_reason,
+            "overnight_risk_penalty": _overnight_penalty,
+            "overnight_trade_block": not _overnight_allowed,
         }
     )
 

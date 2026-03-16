@@ -20,6 +20,8 @@ import math
 import pandas as pd
 import yfinance as yf
 
+from utils.math_helpers import norm_cdf as _norm_cdf
+
 from config.settings import (
     DATA_DIR,
     BACKTEST_STRIKE_STEP,
@@ -127,26 +129,6 @@ def _validate_dataframe(df: pd.DataFrame):
 
     if missing:
         raise ValueError(f"Historical option chain missing required columns: {missing}")
-
-
-def _norm_cdf(x: float) -> float:
-    """
-    Purpose:
-        Evaluate the standard normal cumulative distribution function.
-
-    Context:
-        Function inside the `historical option chain` module. The module sits in the data layer that ingests, normalizes, and validates market inputs before analytics run.
-
-    Inputs:
-        x (float): Raw scalar input supplied by the caller.
-
-    Returns:
-        float: Cumulative probability for the supplied z-score.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
 def _black_scholes_price(spot, strike, t, sigma, option_type):

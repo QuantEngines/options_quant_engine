@@ -101,6 +101,7 @@ The engine now has five important overlay packages plus a dedicated research-gov
 - `risk/option_efficiency_*`: expected move and option-buying efficiency overlay
 - `tuning/`: parameter registry, named packs, experiment runner, advanced search, automated campaigns, promotion, and reporting
   plus walk-forward and regime-aware validation
+- `utils/`: centralized numeric helpers (`clip`, `safe_float`, `safe_div`, `to_python_number`), math functions (`norm_pdf`, `norm_cdf`), and timestamp utilities (`coerce_timestamp`)
 
 These layers are intentionally modifiers and filters. They do not replace the core directional engine.
 
@@ -376,18 +377,6 @@ That means:
 - walk-forward and regime-aware validation are based on signal outcomes, not personal trade history
 - promotion and shadow-mode comparisons are based on signal behavior and robustness
 - manual or real broker trades may still be logged operationally later, but they are not a learning source for this system
-
-## Research Note
-
-The maintained research note source is:
-
-- [quant_note_trade_signal_logic.md](research/quant_note_trade_signal_logic.md)
-
-Local rendered research-note artifacts are generated under `documentation/`, but
-that folder is intentionally excluded from git for now.
-
-If you want to regenerate local publishable artifacts, use the markdown sources
-under `research/` and `documentation/research_notes/`.
 
 ## Testing
 

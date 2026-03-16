@@ -24,32 +24,7 @@ import pandas as pd
 
 from tuning.packs import resolve_parameter_pack
 from tuning.registry import get_parameter_registry
-
-
-def _safe_float(value: Any, default: float | None = None) -> float | None:
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `comparison` module. The module sits in the tuning layer that searches, validates, and promotes parameter packs.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (float | None): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 def _round_or_none(value: Any, digits: int = 6) -> float | None:

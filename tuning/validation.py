@@ -24,32 +24,7 @@ import pandas as pd
 from tuning.objectives import apply_selection_policy, compute_frame_metrics, compute_objective_score
 from tuning.regimes import REGIME_COLUMNS, label_validation_regimes
 from tuning.walk_forward import DEFAULT_WALK_FORWARD_CONFIG, apply_walk_forward_split, build_walk_forward_splits
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `validation` module. The module sits in the tuning layer that searches, validates, and promotes parameter packs.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (float): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 def _selection_penalty(metrics: dict[str, Any]) -> float:

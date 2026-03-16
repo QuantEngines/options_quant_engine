@@ -22,6 +22,7 @@ from typing import Any
 import pandas as pd
 
 from tuning.models import ObjectiveResult
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 DEFAULT_OBJECTIVE_WEIGHTS = {
@@ -57,32 +58,6 @@ class SplitFrames:
     """
     train: pd.DataFrame
     validation: pd.DataFrame
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `objectives` module. The module sits in the tuning layer that searches, validates, and promotes parameter packs.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (float): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _mean_or_default(series: pd.Series, default: float = 0.0) -> float:

@@ -47,6 +47,7 @@ from config.signal_evaluation_scoring import (
     SIGNAL_EVALUATION_TIMING_WEIGHTS,
 )
 from config.signal_policy import (
+    ActivationScorePolicyConfig,
     CONFIRMATION_FILTER_CONFIG,
     CONSENSUS_SCORE_CONFIG,
     DataQualityPolicyConfig,
@@ -606,6 +607,16 @@ def build_default_parameter_registry() -> ParameterRegistry:
             category="probability",
             config_obj=ProbabilityFeaturePolicyConfig(),
             description_prefix="Signal-engine probability parameter",
+        )
+    )
+    definitions.extend(
+        _from_dataclass(
+            prefix="signal_engine.activation_score",
+            module="config.signal_policy",
+            group="signal_engine",
+            category="activation_score",
+            config_obj=ActivationScorePolicyConfig(),
+            description_prefix="Activation-score setup-readiness parameter",
         )
     )
     definitions.extend(

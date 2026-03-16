@@ -17,54 +17,7 @@ Downstream Usage:
 from __future__ import annotations
 
 from macro.macro_news_config import get_macro_news_adjustment_config
-
-
-def _clip(value, lo, hi):
-    """
-    Purpose:
-        Clamp a numeric value to the configured bounds.
-
-    Context:
-        Function inside the `engine adjustments` module. The module sits in the macro overlay layer that models scheduled events and headline-driven context.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        lo (Any): Inclusive lower bound for the returned value.
-        hi (Any): Inclusive upper bound for the returned value.
-
-    Returns:
-        float | int: Bounded value returned by the helper.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    return max(lo, min(hi, value))
-
-
-def _safe_float(value, default=0.0):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `engine adjustments` module. The module sits in the macro overlay layer that models scheduled events and headline-driven context.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
+from utils.numerics import clip as _clip, safe_float as _safe_float  # noqa: F401
 
 
 def compute_macro_news_adjustments(*, direction, macro_news_state=None):

@@ -27,6 +27,7 @@ warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
 from config.settings import (
     DEFAULT_SYMBOL,
     DEFAULT_DATA_SOURCE,
+    OUTPUT_MODE,
     REFRESH_INTERVAL,
     NSE_REFRESH_INTERVAL,
     ICICI_REFRESH_INTERVAL,
@@ -37,6 +38,7 @@ from config.settings import (
 )
 
 from app.engine_runner import run_engine_snapshot
+from app.terminal_output import render_snapshot
 from data.data_source_router import DataSourceRouter
 from data.replay_loader import save_option_chain_snapshot
 from data.spot_downloader import save_spot_snapshot
@@ -138,6 +140,12 @@ def parse_runtime_args():
         default=CAPTURE_POLICY_ALL,
         help="Signal capture policy: TRADE_ONLY, ACTIONABLE, or ALL_SIGNALS",
     )
+    parser.add_argument(
+        "--output-mode",
+        default=None,
+        choices=["COMPACT", "STANDARD", "FULL_DEBUG"],
+        help="Terminal verbosity: COMPACT, STANDARD (default), or FULL_DEBUG",
+    )
     return parser.parse_args()
 
 
@@ -210,6 +218,24 @@ def choose_budget_mode():
 
     print("Invalid choice. Defaulting to No.")
     return False
+
+
+def choose_output_mode(default: str = "STANDARD") -> str:
+    """Prompt the operator to select the terminal output verbosity level."""
+    print("\nSelect output mode:")
+    print("1. COMPACT      — minimal execution surface")
+    print("2. STANDARD     — scoring + confirmation diagnostics")
+    print("3. FULL_DEBUG   — every field the engine produces")
+
+    mapping = {"1": "COMPACT", "2": "STANDARD", "3": "FULL_DEBUG"}
+    choice = input(f"Enter choice (1/2/3) [default: {default}]: ").strip()
+
+    if choice in mapping:
+        return mapping[choice]
+    if not choice:
+        return default
+    print(f"Invalid choice. Defaulting to {default}.")
+    return default
 
 
 def _prompt_runtime_secret(env_name: str, label: str, secret: bool = False):
@@ -764,6 +790,7 @@ def main():
     """
     args = parse_runtime_args()
     signal_capture_policy = normalize_capture_policy(args.signal_capture_policy)
+    output_mode = args.output_mode or OUTPUT_MODE
     symbol = choose_underlying_symbol()
     headline_service = build_default_headline_service()
 
@@ -772,11 +799,13 @@ def main():
         prompt_provider_credentials(source)
     apply_budget_constraint = choose_budget_mode()
     lot_size, requested_lots, max_capital = get_budget_inputs(apply_budget_constraint)
+    output_mode = choose_output_mode(default=output_mode)
     refresh_interval = 0 if args.replay else _refresh_interval_for_source(source)
 
     print("\nRunning Quant Engine for:", symbol)
     print("Data Source:", source)
     print("Budget Constraint Applied:", apply_budget_constraint)
+    print("Output Mode:", output_mode)
 
     if args.replay:
         data_router = None
@@ -851,8 +880,6 @@ def main():
                     print(f"\nCould not save spot snapshot: {save_err}")
                 saved_one_spot_snapshot = True
 
-            print_validation_block("SPOT VALIDATION", spot_validation)
-
             if not spot_validation.get("is_valid", False):
                 print("\nSpot snapshot invalid. Skipping this cycle.")
                 if args.replay:
@@ -860,93 +887,12 @@ def main():
                 time.sleep(refresh_interval)
                 continue
 
-            print_key_value_block("SPOT SNAPSHOT", {
-                "spot": spot_summary.get("spot"),
-                "day_open": spot_summary.get("day_open"),
-                "day_high": spot_summary.get("day_high"),
-                "day_low": spot_summary.get("day_low"),
-                "prev_close": spot_summary.get("prev_close"),
-                "timestamp": spot_summary.get("timestamp"),
-                "lookback_avg_range_pct": spot_summary.get("lookback_avg_range_pct"),
-            })
-
-            print_key_value_block("MACRO EVENT RISK", {
-                "macro_event_risk_score": macro_event_state.get("macro_event_risk_score"),
-                "event_window_status": macro_event_state.get("event_window_status"),
-                "event_lockdown_flag": macro_event_state.get("event_lockdown_flag"),
-                "minutes_to_next_event": macro_event_state.get("minutes_to_next_event"),
-                "next_event_name": macro_event_state.get("next_event_name"),
-            })
-
-            print_key_value_block("MACRO / NEWS REGIME", {
-                "macro_regime": macro_news_state.get("macro_regime"),
-                "macro_regime_reasons": macro_news_state.get("macro_regime_reasons"),
-                "macro_event_risk_score": macro_news_state.get("macro_event_risk_score"),
-                "macro_sentiment_score": macro_news_state.get("macro_sentiment_score"),
-                "volatility_shock_score": macro_news_state.get("volatility_shock_score"),
-                "event_lockdown_flag": macro_news_state.get("event_lockdown_flag"),
-                "news_confidence_score": macro_news_state.get("news_confidence_score"),
-                "headline_velocity": macro_news_state.get("headline_velocity"),
-                "headline_count": macro_news_state.get("headline_count"),
-                "classified_headline_count": macro_news_state.get("classified_headline_count"),
-                "next_event_name": macro_news_state.get("next_event_name"),
-                "neutral_fallback": macro_news_state.get("neutral_fallback"),
-            })
-            print_key_value_block("GLOBAL RISK STATE", {
-                "global_risk_state": global_risk_state.get("global_risk_state"),
-                "global_risk_score": global_risk_state.get("global_risk_score"),
-                "overnight_gap_risk_score": global_risk_state.get("overnight_gap_risk_score"),
-                "volatility_expansion_risk_score": global_risk_state.get("volatility_expansion_risk_score"),
-                "overnight_hold_allowed": global_risk_state.get("overnight_hold_allowed"),
-                "overnight_hold_reason": global_risk_state.get("overnight_hold_reason"),
-                "overnight_risk_penalty": global_risk_state.get("overnight_risk_penalty"),
-                "global_risk_adjustment_score": global_risk_state.get("global_risk_adjustment_score"),
-                "global_risk_reasons": global_risk_state.get("global_risk_reasons"),
-            })
-            print_key_value_block("GLOBAL MARKET SNAPSHOT", {
-                "provider": global_market_snapshot.get("provider"),
-                "data_available": global_market_snapshot.get("data_available"),
-                "stale": global_market_snapshot.get("stale"),
-                "oil_change_24h": global_market_snapshot.get("market_inputs", {}).get("oil_change_24h"),
-                "US VIX Change 24h": global_market_snapshot.get("market_inputs", {}).get("vix_change_24h"),
-                "India VIX Level": global_market_snapshot.get("market_inputs", {}).get("india_vix_level"),
-                "India VIX Change 24h": global_market_snapshot.get("market_inputs", {}).get("india_vix_change_24h"),
-                "sp500_change_24h": global_market_snapshot.get("market_inputs", {}).get("sp500_change_24h"),
-                "us10y_change_bp": global_market_snapshot.get("market_inputs", {}).get("us10y_change_bp"),
-                "usdinr_change_24h": global_market_snapshot.get("market_inputs", {}).get("usdinr_change_24h"),
-                "warnings": global_market_snapshot.get("warnings"),
-            })
-
-            macro_news_details = {
-                "headline_provider": headline_state.get("provider_name"),
-                "headline_data_available": headline_state.get("data_available"),
-                "headline_is_stale": headline_state.get("is_stale"),
-                "headline_warnings": headline_state.get("warnings"),
-                "headline_issues": headline_state.get("issues"),
-                "provider_metadata": headline_state.get("provider_metadata"),
-                "classification_preview": macro_news_state.get("classification_preview"),
-            }
-            if (
-                headline_state.get("warnings")
-                or headline_state.get("issues")
-                or headline_state.get("provider_metadata")
-                or macro_news_state.get("classification_preview")
-            ):
-                print_key_value_block(
-                    "MACRO / NEWS DETAILS",
-                    {key: _format_output_value(value) for key, value in macro_news_details.items()},
-                )
-
-            print_validation_block("OPTION CHAIN VALIDATION", option_chain_validation)
-
             if not option_chain_validation.get("is_valid", False):
                 print("\nOption chain invalid. Skipping this cycle.")
                 if args.replay:
                     break
                 time.sleep(refresh_interval)
                 continue
-
-            print(f"\n{'option_chain_rows':26}: {result.get('option_chain_rows')}")
 
             if not args.replay and not saved_one_option_chain_snapshot:
                 try:
@@ -972,33 +918,20 @@ def main():
                 elif signal_capture_status.startswith("SKIPPED_POLICY:"):
                     print(f"\n{'signal_capture':26}: {signal_capture_status}")
 
-                print_trader_view(execution_trade or trade_for_display)
-
-                dashboard_for_print = dict(trade_for_display)
-                dashboard_for_print.update({
-                    "spot": spot_summary.get("spot"),
-                    "spot_timestamp": spot_summary.get("timestamp"),
-                    "day_open": spot_summary.get("day_open"),
-                    "day_high": spot_summary.get("day_high"),
-                    "day_low": spot_summary.get("day_low"),
-                    "prev_close": spot_summary.get("prev_close"),
-                    "lookback_avg_range_pct": spot_summary.get("lookback_avg_range_pct"),
-                    "spot_validation": spot_validation,
-                    "option_chain_validation": option_chain_validation,
-                    "macro_regime": macro_news_state.get("macro_regime"),
-                    "macro_sentiment_score": macro_news_state.get("macro_sentiment_score"),
-                    "volatility_shock_score": macro_news_state.get("volatility_shock_score"),
-                    "news_confidence_score": macro_news_state.get("news_confidence_score"),
-                    "headline_velocity": macro_news_state.get("headline_velocity"),
-                })
-
-                print_dealer_dashboard(dashboard_for_print)
-
-                print_signal_summary(trade_for_display)
-                print_diagnostics(trade_for_display)
-            else:
-                print("\nNo trade signal")
-                print_key_value_block("ENGINE STATUS", {"message": "No trade payload returned"})
+            render_snapshot(
+                output_mode,
+                result=result,
+                spot_summary=spot_summary,
+                spot_validation=spot_validation,
+                option_chain_validation=option_chain_validation,
+                macro_event_state=macro_event_state,
+                macro_news_state=macro_news_state,
+                global_risk_state=global_risk_state,
+                global_market_snapshot=global_market_snapshot,
+                headline_state=headline_state,
+                trade=trade_for_display,
+                execution_trade=execution_trade,
+            )
 
             previous_chain = option_chain_frame.copy()
 

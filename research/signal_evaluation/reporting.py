@@ -66,31 +66,7 @@ COVERAGE_FIELDS = (
     "signed_return_60m_bps",
 )
 
-
-def _safe_float(value: Any, default: float | None = None) -> float | None:
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `reporting` module. The module sits in the research layer that evaluates signals, curates datasets, and renders reports.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (float | None): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 def _round_or_none(value: Any, digits: int = 4) -> float | None:
@@ -531,6 +507,126 @@ def _research_tables(frame: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
     return tables
 
 
+# ---------------------------------------------------------------------------
+# Advanced research metrics
+# ---------------------------------------------------------------------------
+
+def _information_coefficient(frame: pd.DataFrame) -> dict[str, Any]:
+    """Compute rank-correlation (IC) between predicted probability and realized returns."""
+    result: dict[str, Any] = {}
+    prob_col = "hybrid_move_probability"
+    return_col = "signed_return_60m_bps"
+    if prob_col not in frame.columns or return_col not in frame.columns:
+        return result
+    working = frame[[prob_col, return_col]].copy()
+    working[prob_col] = pd.to_numeric(working[prob_col], errors="coerce")
+    working[return_col] = pd.to_numeric(working[return_col], errors="coerce")
+    working = working.dropna()
+    if len(working) < 10:
+        return result
+    ic = working[prob_col].corr(working[return_col], method="spearman")
+    result["information_coefficient_60m"] = _round_or_none(ic, 4)
+    result["ic_sample_count"] = int(len(working))
+    return result
+
+
+def _calibration_analysis(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Compare predicted move probability against realized hit rates per bucket."""
+    prob_col = "hybrid_move_probability"
+    correct_col = "correct_60m"
+    if prob_col not in frame.columns or correct_col not in frame.columns:
+        return []
+    working = frame[[prob_col, correct_col]].copy()
+    working[prob_col] = pd.to_numeric(working[prob_col], errors="coerce")
+    working[correct_col] = pd.to_numeric(working[correct_col], errors="coerce")
+    working = working.dropna()
+    if working.empty:
+        return []
+    bins = [0.0, 0.35, 0.50, 0.65, 0.80, 1.01]
+    labels = ["0_34", "35_49", "50_64", "65_79", "80_100"]
+    working["prob_bucket"] = pd.cut(working[prob_col], bins=bins, labels=labels)
+    rows = []
+    for bucket, group in working.groupby("prob_bucket", dropna=False, observed=False):
+        if pd.isna(bucket) or group.empty:
+            continue
+        rows.append({
+            "probability_bucket": str(bucket),
+            "sample_count": int(len(group)),
+            "predicted_avg_probability": _round_or_none(group[prob_col].mean(), 4),
+            "realized_hit_rate": _round_or_none(group[correct_col].mean(), 4),
+            "calibration_gap": _round_or_none(
+                float(group[prob_col].mean()) - float(group[correct_col].mean()), 4
+            ),
+        })
+    return rows
+
+
+def _expected_value_metrics(frame: pd.DataFrame) -> dict[str, Any]:
+    """Compute win/loss ratio, average win, average loss, and expectancy."""
+    return_col = "signed_return_60m_bps"
+    if return_col not in frame.columns:
+        return {}
+    returns = pd.to_numeric(frame[return_col], errors="coerce").dropna()
+    if returns.empty:
+        return {}
+    wins = returns[returns > 0]
+    losses = returns[returns <= 0]
+    avg_win = float(wins.mean()) if not wins.empty else 0.0
+    avg_loss = float(losses.mean()) if not losses.empty else 0.0
+    win_rate = float(len(wins)) / float(len(returns)) if len(returns) > 0 else 0.0
+    loss_rate = 1.0 - win_rate
+    expectancy = (win_rate * avg_win) + (loss_rate * avg_loss)
+    win_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float("inf")
+    return {
+        "total_signals": int(len(returns)),
+        "win_count": int(len(wins)),
+        "loss_count": int(len(losses)),
+        "win_rate": _round_or_none(win_rate, 4),
+        "avg_win_bps": _round_or_none(avg_win, 2),
+        "avg_loss_bps": _round_or_none(avg_loss, 2),
+        "win_loss_ratio": _round_or_none(win_loss_ratio, 2),
+        "expectancy_bps": _round_or_none(expectancy, 2),
+    }
+
+
+def _drawdown_analysis(frame: pd.DataFrame) -> dict[str, Any]:
+    """Compute longest losing streak and cumulative return drawdown."""
+    correct_col = "correct_60m"
+    return_col = "signed_return_60m_bps"
+    result: dict[str, Any] = {}
+    if correct_col not in frame.columns:
+        return result
+
+    working = frame.copy()
+    working[correct_col] = pd.to_numeric(working[correct_col], errors="coerce")
+    correctness = working[correct_col].dropna().astype(int)
+    if correctness.empty:
+        return result
+
+    # Longest losing streak
+    max_streak = 0
+    current_streak = 0
+    for val in correctness:
+        if val == 0:
+            current_streak += 1
+            max_streak = max(max_streak, current_streak)
+        else:
+            current_streak = 0
+    result["longest_losing_streak"] = max_streak
+
+    # Cumulative return drawdown
+    if return_col in frame.columns:
+        returns = pd.to_numeric(frame[return_col], errors="coerce").dropna()
+        if not returns.empty:
+            cumulative = returns.cumsum()
+            running_max = cumulative.cummax()
+            drawdown = cumulative - running_max
+            result["max_drawdown_bps"] = _round_or_none(float(drawdown.min()), 2)
+            result["current_drawdown_bps"] = _round_or_none(float(drawdown.iloc[-1]), 2)
+
+    return result
+
+
 def build_signal_evaluation_summary(
     frame: pd.DataFrame,
     *,
@@ -580,6 +676,10 @@ def build_signal_evaluation_summary(
         "score_bucket_performance": _score_bucket_performance(enriched),
         "regime_breakdown": _regime_breakdown(enriched, top_n=top_n),
         "data_coverage_summary": _coverage_summary(enriched),
+        "information_coefficient": _information_coefficient(enriched),
+        "calibration_analysis": _calibration_analysis(enriched),
+        "expected_value_metrics": _expected_value_metrics(enriched),
+        "drawdown_analysis": _drawdown_analysis(enriched),
         "research_tables": _research_tables(enriched),
         }
     )
@@ -693,6 +793,59 @@ def render_signal_evaluation_markdown(summary: dict[str, Any]) -> str:
         else:
             lines.append("| (none) | 0 |  |  |")
 
+    # --- Information Coefficient ---
+    ic_data = summary.get("information_coefficient", {})
+    if ic_data:
+        lines.extend([
+            "",
+            "## Information Coefficient",
+            "",
+            f"- IC (Spearman, 60m): {ic_data.get('information_coefficient_60m')}",
+            f"- Sample count: {ic_data.get('ic_sample_count')}",
+        ])
+
+    # --- Calibration Analysis ---
+    calibration = summary.get("calibration_analysis", [])
+    if calibration:
+        lines.extend([
+            "",
+            "## Calibration Analysis",
+            "",
+            "| Probability Bucket | Samples | Predicted Avg P | Realized Hit Rate | Calibration Gap |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ])
+        for row in calibration:
+            lines.append(
+                f"| {row.get('probability_bucket')} | {row.get('sample_count')} | {row.get('predicted_avg_probability')} | {row.get('realized_hit_rate')} | {row.get('calibration_gap')} |"
+            )
+
+    # --- Expected Value Metrics ---
+    ev_data = summary.get("expected_value_metrics", {})
+    if ev_data:
+        lines.extend([
+            "",
+            "## Expected Value & Win/Loss",
+            "",
+            f"- Total signals: {ev_data.get('total_signals')}",
+            f"- Win count: {ev_data.get('win_count')} | Loss count: {ev_data.get('loss_count')}",
+            f"- Win rate: {ev_data.get('win_rate')}",
+            f"- Avg win (bps): {ev_data.get('avg_win_bps')} | Avg loss (bps): {ev_data.get('avg_loss_bps')}",
+            f"- Win/Loss ratio: {ev_data.get('win_loss_ratio')}",
+            f"- Expectancy (bps): {ev_data.get('expectancy_bps')}",
+        ])
+
+    # --- Drawdown Analysis ---
+    dd_data = summary.get("drawdown_analysis", {})
+    if dd_data:
+        lines.extend([
+            "",
+            "## Drawdown Analysis",
+            "",
+            f"- Longest losing streak: {dd_data.get('longest_losing_streak')}",
+            f"- Max drawdown (bps): {dd_data.get('max_drawdown_bps')}",
+            f"- Current drawdown (bps): {dd_data.get('current_drawdown_bps')}",
+        ])
+
     return "\n".join(lines).strip() + "\n"
 
 
@@ -721,6 +874,7 @@ def _write_table_csvs(summary: dict[str, Any], base_dir: Path) -> dict[str, str]
         "horizon_performance": summary.get("horizon_performance", []),
         "score_bucket_performance": summary.get("score_bucket_performance", []),
         "data_coverage_summary": summary.get("data_coverage_summary", []),
+        "calibration_analysis": summary.get("calibration_analysis", []),
     }
     for name, rows in table_mappings.items():
         csv_path = base_dir / f"{name}.csv"

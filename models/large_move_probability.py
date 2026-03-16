@@ -18,54 +18,7 @@ from __future__ import annotations
 from typing import Optional
 
 from config.large_move_policy import get_large_move_probability_config
-
-
-def _clip(x: float, lo: float, hi: float) -> float:
-    """
-    Purpose:
-        Clamp a numeric value to the configured bounds.
-
-    Context:
-        Used within the large move probability workflow. The module sits in the modeling layer that turns features into scores and probabilities.
-
-    Inputs:
-        x (float): Raw scalar input supplied by the caller.
-        lo (float): Inclusive lower bound for the returned value.
-        hi (float): Inclusive upper bound for the returned value.
-
-    Returns:
-        float | int: Bounded value returned by the helper.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    return max(lo, min(hi, x))
-
-
-def _safe_float(x, default: float = 0.0) -> float:
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Used within the large move probability workflow. The module sits in the modeling layer that turns features into scores and probabilities.
-
-    Inputs:
-        x (Any): Raw scalar input supplied by the caller.
-        default (float): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        if x is None:
-            return default
-        return float(x)
-    except Exception:
-        return default
+from utils.numerics import clip as _clip, safe_float as _safe_float  # noqa: F401
 
 
 def large_move_probability(

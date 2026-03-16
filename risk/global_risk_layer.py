@@ -19,54 +19,7 @@ from __future__ import annotations
 from config.global_risk_policy import get_global_risk_policy_config
 from risk.global_risk_features import build_global_risk_features
 from risk.global_risk_regime import classify_global_risk_state
-
-
-def _clip(value, lo, hi):
-    """
-    Purpose:
-        Clamp a numeric value to the configured bounds.
-
-    Context:
-        Used within the global risk layer workflow. The module sits in the risk-overlay layer that can resize, downgrade, or block trade ideas.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        lo (Any): Inclusive lower bound for the returned value.
-        hi (Any): Inclusive upper bound for the returned value.
-
-    Returns:
-        float | int: Bounded value returned by the helper.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    return max(lo, min(hi, value))
-
-
-def _safe_float(value, default=0.0):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Used within the global risk layer workflow. The module sits in the risk-overlay layer that can resize, downgrade, or block trade ideas.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
+from utils.numerics import clip as _clip, safe_float as _safe_float  # noqa: F401
 
 
 def _event_name(active_event_name=None, next_event_name=None):

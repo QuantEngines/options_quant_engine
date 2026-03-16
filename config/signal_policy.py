@@ -78,6 +78,7 @@ TRADE_RUNTIME_THRESHOLDS = {
     "expansion_bias_threshold": 75,
     "directional_bias_threshold": 55,
     "neutral_flow_probability_floor": 0.55,
+    "wall_proximity_buffer": 50,
 }
 
 CONFIRMATION_FILTER_CONFIG = {
@@ -493,3 +494,56 @@ def get_trade_modifier_policy_config() -> TradeModifierPolicyConfig:
     from config.policy_resolver import resolve_dataclass_config
 
     return resolve_dataclass_config("signal_engine.trade_modifiers", TradeModifierPolicyConfig())
+
+
+# ---------------------------------------------------------------------------
+# Activation score policy — controls the setup-readiness scoring that decides
+# whether a no-direction snapshot is DEAD_INACTIVE, WATCHLIST, or active.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ActivationScorePolicyConfig:
+    """Weights and thresholds for the activation-score subsystem in
+    ``_build_decision_explainability``."""
+
+    flow_bonus: int = 24
+    smart_money_bonus: int = 16
+    convexity_bonus: int = 20
+    dealer_structure_bonus: int = 14
+    trade_strength_bonus: int = 14
+    move_probability_bonus: int = 12
+    move_probability_floor: float = 0.55
+    trade_strength_min_ratio: float = 0.5
+    activation_cap: int = 100
+    dead_inactive_threshold: int = 35
+
+    # Confirmation-status → numeric score mapping
+    confirmation_score_strong: int = 100
+    confirmation_score_mixed: int = 55
+    confirmation_score_conflict: int = 20
+    confirmation_score_no_direction: int = 10
+
+    # Data-ready numeric mapping
+    data_ready_strong: int = 100
+    data_ready_good: int = 80
+    data_ready_caution: int = 55
+    data_ready_weak: int = 30
+
+    # Maturity score blend weights
+    maturity_weight_trade_strength: float = 0.45
+    maturity_weight_confirmation: float = 0.30
+    maturity_weight_data_ready: float = 0.25
+
+    # Explainability confidence thresholds
+    high_confidence_data_ready_floor: int = 75
+    high_confidence_confirmation_floor: int = 55
+    medium_confidence_data_ready_floor: int = 55
+
+
+def get_activation_score_policy_config() -> ActivationScorePolicyConfig:
+    """Return the activation-score policy bundle."""
+    from config.policy_resolver import resolve_dataclass_config
+
+    return resolve_dataclass_config(
+        "signal_engine.activation_score", ActivationScorePolicyConfig()
+    )

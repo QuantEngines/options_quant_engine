@@ -17,11 +17,12 @@ Downstream Usage:
 from config.signal_policy import (
     get_consensus_score_config,
     get_large_move_scoring_policy_config,
+    get_trade_runtime_thresholds,
     get_trade_strength_weights,
 )
 
 
-def _wall_proximity_score(spot, support_wall, resistance_wall, direction, proximity_buffer=50):
+def _wall_proximity_score(spot, support_wall, resistance_wall, direction, proximity_buffer=None):
     """
     Purpose:
         Process wall proximity score for downstream use.
@@ -44,7 +45,11 @@ def _wall_proximity_score(spot, support_wall, resistance_wall, direction, proxim
     """
     weights = get_trade_strength_weights()
     score = 0
-    proximity_buffer = abs(float(proximity_buffer or 0))
+    if proximity_buffer is None:
+        rt = get_trade_runtime_thresholds()
+        proximity_buffer = abs(float(rt.get("wall_proximity_buffer", 50)))
+    else:
+        proximity_buffer = abs(float(proximity_buffer or 0))
 
     if direction == "CALL":
         if support_wall is not None and abs(spot - support_wall) <= proximity_buffer:

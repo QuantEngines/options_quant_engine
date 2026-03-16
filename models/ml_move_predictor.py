@@ -20,26 +20,7 @@ from typing import Iterable
 
 import numpy as np
 
-def _clip(x: float, lo: float, hi: float) -> float:
-    """
-    Purpose:
-        Clamp a numeric value to the configured bounds.
-
-    Context:
-        Function inside the `ml move predictor` module. The module sits in the modeling layer that turns features into probabilities, scores, and predictive outputs.
-
-    Inputs:
-        x (float): Raw scalar input supplied by the caller.
-        lo (float): Inclusive lower bound for the returned value.
-        hi (float): Inclusive upper bound for the returned value.
-
-    Returns:
-        float | int: Bounded value returned by the helper.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    return max(lo, min(hi, x))
+from utils.numerics import clip as _clip  # noqa: F401
 
 
 class MovePredictor:

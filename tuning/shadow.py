@@ -22,6 +22,7 @@ from typing import Any
 import pandas as pd
 
 from tuning.artifacts import append_jsonl_record, load_jsonl_frame
+from utils.numerics import safe_float as _safe_float
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TUNING_RESEARCH_DIR = PROJECT_ROOT / "research" / "parameter_tuning"
@@ -41,32 +42,6 @@ SHADOW_COMPARISON_FIELDS = [
     "option_efficiency_score",
     "overnight_hold_allowed",
 ]
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `shadow` module. The module sits in the tuning layer that searches, validates, and promotes parameter packs.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (float): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _trade_signal_present(trade: dict[str, Any] | None) -> bool:

@@ -19,6 +19,8 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
+from utils.numerics import safe_float as _safe_float
+
 
 IST_TIMEZONE = "Asia/Kolkata"
 
@@ -109,31 +111,6 @@ def _to_ist_timestamp(index_value):
 
     return ts
 
-
-def _safe_float(value, default=None):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `spot downloader` module. The module sits in the data layer that ingests, normalizes, and validates market inputs before analytics run.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _compute_lookback_avg_range_pct(daily_hist: pd.DataFrame, completed_days: int = 10):

@@ -22,72 +22,8 @@ import re
 import pandas as pd
 
 from config.settings import DIVIDEND_YIELD, RISK_FREE_RATE
-
-
-def _safe_float(value, default=None):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `greeks engine` module. The module sits in the analytics layer that turns option-chain and market-structure data into tradable features.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
-
-
-def _norm_pdf(x: float) -> float:
-    """
-    Purpose:
-        Evaluate the standard normal probability density used by the Black-Scholes Greeks formulas.
-    
-    Context:
-        Internal helper in the Greeks engine. The closed-form Greeks calculation uses the standard normal density when converting option inputs into delta, gamma, vega, vanna, and charm.
-    
-    Inputs:
-        x (float): Standard-normal z-score at which the density should be evaluated.
-    
-    Returns:
-        float: Standard normal PDF evaluated at `x`.
-    
-    Notes:
-        This helper keeps the analytical formula explicit and avoids re-deriving the density inside each Greek expression.
-    """
-    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
-
-
-def _norm_cdf(x: float) -> float:
-    """
-    Purpose:
-        Evaluate the standard normal cumulative distribution function.
-
-    Context:
-        Function inside the `greeks engine` module. The module sits in the analytics layer that turns option-chain and market-structure data into tradable features.
-
-    Inputs:
-        x (float): Raw scalar input supplied by the caller.
-
-    Returns:
-        float: Cumulative probability for the supplied z-score.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+from utils.numerics import safe_float as _safe_float  # noqa: F401
+from utils.math_helpers import norm_pdf as _norm_pdf, norm_cdf as _norm_cdf  # noqa: F401
 
 
 def _coerce_valuation_timestamp(value):

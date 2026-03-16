@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 
 from config.validation_regime_policy import get_validation_regime_config
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 REGIME_COLUMNS = [
@@ -52,32 +53,6 @@ def _normalize(value: Any) -> str:
         The output is designed to remain serializable so experiments, reports, and governance decisions can be reproduced later.
     """
     return str(value or "").upper().strip()
-
-
-def _safe_float(value: Any, default: float | None = None) -> float | None:
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `regimes` module. The module sits in the tuning layer that searches, validates, and promotes parameter packs.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (float | None): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _normalize_series(series: pd.Series) -> pd.Series:

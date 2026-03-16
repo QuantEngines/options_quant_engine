@@ -16,32 +16,7 @@ Downstream Usage:
 
 from config.signal_policy import get_confirmation_filter_config
 from config.symbol_microstructure import DEFAULT_MICROSTRUCTURE_CONFIG, get_microstructure_config
-
-
-def _safe_float(x, default=None):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `confirmation filters` module. The module sits in the strategy layer that converts directional intent into executable option trades.
-
-    Inputs:
-        x (Any): Raw scalar input supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if x is None:
-            return default
-        return float(x)
-    except Exception:
-        return default
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 def _sign_label(score, cfg):

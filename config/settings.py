@@ -121,6 +121,9 @@ def get_icici_runtime_config() -> dict:
 DEFAULT_SYMBOL = "NIFTY"
 DEFAULT_DATA_SOURCE = "NSE"
 
+# Terminal output verbosity: COMPACT, STANDARD, or FULL_DEBUG
+OUTPUT_MODE = os.getenv("OQE_OUTPUT_MODE", "STANDARD").upper().strip()
+
 REFRESH_INTERVAL = 10
 NSE_REFRESH_INTERVAL = 12
 ICICI_REFRESH_INTERVAL = 8

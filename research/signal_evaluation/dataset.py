@@ -155,6 +155,8 @@ SIGNAL_DATASET_COLUMNS = [
     "tradeability_score",
     "composite_signal_score",
     "directional_consistency_score",
+    "signal_confidence_score",
+    "signal_confidence_level",
     "signal_calibration_bucket",
     "probability_calibration_bucket",
     "notes",

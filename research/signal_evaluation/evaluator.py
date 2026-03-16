@@ -45,32 +45,7 @@ from research.signal_evaluation.market_data import (
     fetch_realized_spot_path,
     resolve_research_as_of,
 )
-
-
-def _safe_float(value, default=None):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `evaluator` module. The module sits in the research layer that evaluates signals, curates datasets, and renders reports.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
+from utils.numerics import safe_float as _safe_float  # noqa: F401
 
 
 def _coerce_ts(value) -> pd.Timestamp:

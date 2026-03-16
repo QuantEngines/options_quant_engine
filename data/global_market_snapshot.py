@@ -21,6 +21,8 @@ import math
 import pandas as pd
 import yfinance as yf
 
+from utils.numerics import safe_float as _safe_float
+
 from config.market_data_policy import (
     GLOBAL_MARKET_TICKERS,
     IST_TIMEZONE,
@@ -63,32 +65,6 @@ def _coerce_timestamp(value):
         return parsed.tz_convert(IST_TIMEZONE)
     except Exception:
         return None
-
-
-def _safe_float(value, default=None):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Function inside the `global market snapshot` module. The module sits in the data layer that ingests, normalizes, and validates market inputs before analytics run.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
-    """
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _symbol_to_yfinance(symbol: str) -> str:

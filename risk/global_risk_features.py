@@ -19,6 +19,7 @@ from __future__ import annotations
 import pandas as pd
 
 from config.global_risk_policy import get_global_risk_policy_config
+from utils.numerics import clip as _clip, safe_float as _safe_float  # noqa: F401
 
 
 IST_TIMEZONE = "Asia/Kolkata"
@@ -37,76 +38,11 @@ MARKET_INPUT_KEYS = [
 ]
 
 
-def _safe_float(value, default=0.0):
-    """
-    Purpose:
-        Safely coerce an input to `float` while preserving a fallback.
-
-    Context:
-        Used within the global risk features workflow. The module sits in the risk-overlay layer that can resize, downgrade, or block trade ideas.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        float: Parsed floating-point value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
-
-
 def _safe_int(value, default=0):
-    """
-    Purpose:
-        Safely coerce an input to `int` while preserving a fallback.
-
-    Context:
-        Used within the global risk features workflow. The module sits in the risk-overlay layer that can resize, downgrade, or block trade ideas.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        default (Any): Fallback value used when the preferred path is unavailable.
-
-    Returns:
-        int: Parsed integer value or the fallback.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
     try:
         return int(value)
     except Exception:
         return default
-
-
-def _clip(value, lo, hi):
-    """
-    Purpose:
-        Clamp a numeric value to the configured bounds.
-
-    Context:
-        Used within the global risk features workflow. The module sits in the risk-overlay layer that can resize, downgrade, or block trade ideas.
-
-    Inputs:
-        value (Any): Raw value supplied by the caller.
-        lo (Any): Inclusive lower bound for the returned value.
-        hi (Any): Inclusive upper bound for the returned value.
-
-    Returns:
-        float | int: Bounded value returned by the helper.
-
-    Notes:
-        Internal helper that keeps the surrounding trading logic compact and readable.
-    """
-    return max(lo, min(hi, value))
 
 
 def _coerce_timestamp(value):

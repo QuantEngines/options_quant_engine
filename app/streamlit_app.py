@@ -510,6 +510,57 @@ def _render_dataframe(data, *, hide_index: bool = True):
     )
 
 
+def _render_enhanced_ranked_strikes(ranked: pd.DataFrame):
+    """Render the enhanced ranked-strikes table with factor scores and diagnostics."""
+    has_enhanced = "enhanced_strike_score" in ranked.columns
+
+    # --- Display columns ---
+    core_cols = ["strike", "last_price", "volume", "open_interest", "iv", "score"]
+    factor_cols = [
+        "enhanced_strike_score", "liquidity_score", "gamma_magnetism",
+        "dealer_pressure", "convexity_score", "premium_efficiency",
+    ]
+    distance_cols = ["distance_from_spot_pts", "distance_from_spot_pct"]
+    flag_cols = ["tradable_intraday", "tradable_overnight", "liquidity_ok", "premium_reasonable"]
+    context_cols = ["gamma_regime", "spot_vs_flip", "dealer_hedging_bias", "vol_surface_regime"]
+
+    if has_enhanced:
+        display_cols = [c for c in core_cols + factor_cols + distance_cols + flag_cols if c in ranked.columns]
+    else:
+        display_cols = [c for c in core_cols if c in ranked.columns]
+
+    display = ranked[display_cols].copy()
+
+    # Sort by enhanced score when available, otherwise base score
+    sort_col = "enhanced_strike_score" if has_enhanced else "score"
+    if sort_col in display.columns:
+        display = display.sort_values(sort_col, ascending=False).reset_index(drop=True)
+
+    # Highlight top strike row via Styler
+    def _highlight_top(row):
+        if row.name == 0:
+            return ["background-color: rgba(76, 175, 80, 0.15)"] * len(row)
+        return [""] * len(row)
+
+    styled = display.style.apply(_highlight_top, axis=1)
+
+    # Format factor scores to 2 decimal places where applicable
+    factor_format = {c: "{:.2f}" for c in factor_cols if c in display.columns}
+    if "distance_from_spot_pct" in display.columns:
+        factor_format["distance_from_spot_pct"] = "{:.2f}%"
+    styled = styled.format(factor_format, na_rep="-")
+
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # Show market structure context below the table
+    if has_enhanced and not ranked.empty:
+        ctx_values = {c: ranked.iloc[0].get(c) for c in context_cols if c in ranked.columns and ranked.iloc[0].get(c)}
+        if ctx_values:
+            ctx_parts = [f"**{k.replace('_', ' ').title()}**: {v}" for k, v in ctx_values.items() if v]
+            if ctx_parts:
+                st.caption("Market Structure: " + " · ".join(ctx_parts))
+
+
 def _badge_class_for_regime(regime: str) -> str:
     """
     Purpose:
@@ -956,6 +1007,110 @@ def _render_decision_panel(trade: dict):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _render_overnight_risk_card(trade: dict):
+    """Render a color-coded overnight hold assessment card."""
+    from app.terminal_output import resolve_overnight_hold_assessment
+
+    assessment = resolve_overnight_hold_assessment(trade)
+    suggested = assessment["overnight_hold_suggested"]
+
+    color_map = {"YES": "#22c55e", "HOLD_WITH_CAUTION": "#eab308", "NO": "#ef4444"}
+    label_map = {"YES": "HOLD ALLOWED", "HOLD_WITH_CAUTION": "HOLD WITH CAUTION", "NO": "DO NOT HOLD"}
+    bg_map = {"YES": "#052e16", "HOLD_WITH_CAUTION": "#422006", "NO": "#450a0a"}
+
+    color = color_map.get(suggested, "#888")
+    label = label_map.get(suggested, suggested)
+    bg = bg_map.get(suggested, "#1a1a1a")
+
+    st.markdown(
+        f'<div style="background:{bg};border:1px solid {color};border-radius:8px;'
+        f'padding:12px 16px;margin:8px 0">'
+        f'<span style="color:{color};font-weight:700;font-size:1.1em">'
+        f'{label}</span>'
+        f'<span style="color:#aaa;margin-left:12px;font-size:0.9em">'
+        f'Confidence: {assessment["overnight_hold_confidence"]}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    detail_cols = st.columns(3)
+    detail_cols[0].metric("Gap Risk Score", _safe_metric_value(assessment["overnight_gap_risk_score"]))
+    detail_cols[1].metric("Risk Penalty", _safe_metric_value(assessment["overnight_risk_penalty"]))
+    detail_cols[2].metric("Suggested", label)
+
+    if assessment["overnight_hold_reason"]:
+        st.caption(f"Reason: {assessment['overnight_hold_reason']}")
+    if assessment["overnight_constraints"]:
+        with st.expander("Overnight Constraints", expanded=False):
+            for c in assessment["overnight_constraints"]:
+                st.text(f"• {c}")
+
+
+def _render_signal_confidence_card(trade: dict):
+    """Render a gauge-style signal confidence card with component breakdown."""
+    from analytics.signal_confidence import compute_signal_confidence
+
+    result = compute_signal_confidence(trade)
+    score = result["confidence_score"]
+    level = result["confidence_level"]
+
+    color_map = {
+        "VERY_HIGH": "#22c55e",
+        "HIGH": "#3b82f6",
+        "MODERATE": "#eab308",
+        "LOW": "#f97316",
+        "UNRELIABLE": "#ef4444",
+    }
+    color = color_map.get(level, "#888")
+
+    # SVG gauge arc
+    pct = max(0, min(100, score))
+    arc_len = pct * 1.8  # 0–180 degrees mapped
+    import math
+    rad = math.radians(180 - arc_len)
+    ex = 50 + 40 * math.cos(rad)
+    ey = 55 - 40 * math.sin(rad)
+    large = 1 if arc_len > 90 else 0
+
+    gauge_svg = (
+        f'<svg viewBox="0 0 100 60" width="220" height="132">'
+        f'<path d="M10,55 A40,40 0 0,1 90,55" fill="none" stroke="#333" stroke-width="6" stroke-linecap="round"/>'
+        f'<path d="M10,55 A40,40 0 {large},1 {ex:.1f},{ey:.1f}" fill="none" stroke="{color}" stroke-width="6" stroke-linecap="round"/>'
+        f'<text x="50" y="48" text-anchor="middle" fill="{color}" font-size="14" font-weight="700">{score}</text>'
+        f'<text x="50" y="58" text-anchor="middle" fill="#aaa" font-size="6">{level}</text>'
+        f'</svg>'
+    )
+
+    st.markdown(
+        f'<div style="background:#111;border:1px solid {color};border-radius:8px;'
+        f'padding:12px 16px;margin:8px 0;text-align:center">'
+        f'<div style="color:{color};font-weight:700;font-size:1em;margin-bottom:4px">'
+        f'Signal Confidence</div>'
+        f'{gauge_svg}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Component breakdown table
+    components = [
+        ("Signal Strength", result["signal_strength_component"], "30%"),
+        ("Confirmation", result["confirmation_component"], "25%"),
+        ("Market Stability", result["market_stability_component"], "20%"),
+        ("Data Integrity", result["data_integrity_component"], "15%"),
+        ("Option Efficiency", result["option_efficiency_component"], "10%"),
+    ]
+    rows = []
+    for name, val, weight in components:
+        bar_color = "#22c55e" if val >= 70 else "#eab308" if val >= 40 else "#ef4444"
+        rows.append({"Component": name, "Score": round(val, 1), "Weight": weight})
+
+    st.dataframe(
+        pd.DataFrame(rows),
+        width=400,
+        hide_index=True,
+    )
+
+
 def _render_macro_news_section(macro_news_state: dict, headline_state: dict):
     """
     Purpose:
@@ -1186,6 +1341,8 @@ def _render_workstation(result: dict):
     if execution_trade or trade:
         _render_trade_metrics(execution_trade or trade)
         _render_decision_panel(execution_trade or trade)
+        _render_signal_confidence_card(execution_trade or trade)
+        _render_overnight_risk_card(execution_trade or trade)
     else:
         st.warning("No trade payload was returned for this snapshot.")
 
@@ -1239,7 +1396,7 @@ def _render_workstation(result: dict):
         if isinstance(ranked, pd.DataFrame) and not ranked.empty:
             st.markdown('<div class="oqe-panel">', unsafe_allow_html=True)
             st.subheader(f"Ranked Strikes ({trade.get('selected_expiry') or '-'})")
-            _render_dataframe(ranked)
+            _render_enhanced_ranked_strikes(ranked)
             st.markdown("</div>", unsafe_allow_html=True)
 
     with diagnostics_tab:
