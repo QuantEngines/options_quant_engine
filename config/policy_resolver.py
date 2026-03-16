@@ -27,8 +27,6 @@ from dataclasses import asdict, dataclass, is_dataclass
 import os
 from typing import Any
 
-from tuning.packs import resolve_parameter_pack
-
 
 DEFAULT_PARAMETER_PACK = "baseline_v1"
 
@@ -90,6 +88,8 @@ def _load_pack_overrides(name: str) -> tuple[str, dict[str, Any]]:
     """
 
     pack_name = str(name or DEFAULT_PARAMETER_PACK).strip() or DEFAULT_PARAMETER_PACK
+    from tuning.packs import resolve_parameter_pack
+
     try:
         return pack_name, dict(resolve_parameter_pack(pack_name).overrides)
     except Exception:

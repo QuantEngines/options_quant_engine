@@ -57,6 +57,375 @@ from strategy.exit_model import calculate_exit
 from strategy.strike_selector import select_best_strike
 
 
+def _as_upper(value):
+    return str(value or "").upper().strip()
+
+
+def _is_directional_flow(flow_label):
+    return _as_upper(flow_label) in {"BULLISH_FLOW", "BEARISH_FLOW"}
+
+
+def _is_convexity_active(convexity_state):
+    return _as_upper(convexity_state) in {
+        "UPSIDE_SQUEEZE_RISK",
+        "DOWNSIDE_AIRPOCKET_RISK",
+        "TWO_SIDED_VOLATILITY_RISK",
+    }
+
+
+def _is_dealer_structure_active(dealer_flow_state):
+    return _as_upper(dealer_flow_state) in {
+        "UPSIDE_HEDGING_ACCELERATION",
+        "DOWNSIDE_HEDGING_ACCELERATION",
+        "PINNING_DOMINANT",
+        "TWO_SIDED_INSTABILITY",
+    }
+
+
+def _dedupe_keep_order(items):
+    out = []
+    seen = set()
+    for item in items:
+        if item in (None, "", []):
+            continue
+        normalized = str(item)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _collect_neutralization_states(payload):
+    option_efficiency_features = payload.get("option_efficiency_features")
+    option_efficiency_diagnostics = payload.get("option_efficiency_diagnostics")
+    option_efficiency_reasons = payload.get("option_efficiency_reasons")
+    macro_adjustment_reasons = payload.get("macro_adjustment_reasons")
+    global_risk_features = payload.get("global_risk_features")
+    global_risk_diagnostics = payload.get("global_risk_diagnostics")
+
+    option_efficiency_features = option_efficiency_features if isinstance(option_efficiency_features, dict) else {}
+    option_efficiency_diagnostics = option_efficiency_diagnostics if isinstance(option_efficiency_diagnostics, dict) else {}
+    option_efficiency_reasons = option_efficiency_reasons if isinstance(option_efficiency_reasons, list) else []
+    macro_adjustment_reasons = macro_adjustment_reasons if isinstance(macro_adjustment_reasons, list) else []
+    global_risk_features = global_risk_features if isinstance(global_risk_features, dict) else {}
+    global_risk_diagnostics = global_risk_diagnostics if isinstance(global_risk_diagnostics, dict) else {}
+
+    option_efficiency_status = "AVAILABLE"
+    option_efficiency_reason = "features_available"
+    if (
+        option_efficiency_features.get("neutral_fallback")
+        or "option_efficiency_neutral_fallback" in option_efficiency_reasons
+        or payload.get("expected_move_points") is None
+    ):
+        option_efficiency_status = "UNAVAILABLE_NEUTRALIZED"
+        warnings = option_efficiency_diagnostics.get("warnings")
+        if isinstance(warnings, list) and warnings:
+            option_efficiency_reason = str(warnings[0])
+        else:
+            option_efficiency_reason = "expected_move_not_computable"
+
+    global_risk_status = "ACTIVE"
+    global_risk_reason = "global_risk_features_available"
+    if global_risk_features.get("market_features_neutralized"):
+        global_risk_status = "LOW_CONFIDENCE_NEUTRALIZED"
+        global_risk_reason = "market_features_neutralized"
+    elif global_risk_diagnostics.get("fallback"):
+        global_risk_status = "LOW_CONFIDENCE_NEUTRALIZED"
+        global_risk_reason = "fallback_global_risk_state"
+
+    macro_news_status = "ACTIVE"
+    macro_news_reason = "headline_adjustments_available"
+    if "macro_news_neutral_fallback" in macro_adjustment_reasons:
+        macro_news_status = "STALE_NEUTRALIZED"
+        macro_news_reason = "macro_news_neutral_fallback"
+    elif _as_upper(payload.get("macro_regime")) == "MACRO_NEUTRAL":
+        macro_news_status = "NEUTRAL"
+        macro_news_reason = "macro_regime_neutral"
+
+    return {
+        "option_efficiency_status": option_efficiency_status,
+        "option_efficiency_reason": option_efficiency_reason,
+        "global_risk_status": global_risk_status,
+        "global_risk_reason": global_risk_reason,
+        "macro_news_status": macro_news_status,
+        "macro_news_reason": macro_news_reason,
+    }
+
+
+def _build_decision_explainability(payload, *, trade_status, min_trade_strength):
+    direction = payload.get("direction")
+    flow_signal = _as_upper(payload.get("flow_signal") or payload.get("final_flow_signal"))
+    smart_money_flow = _as_upper(payload.get("smart_money_flow"))
+    confirmation_status = _as_upper(payload.get("confirmation_status"))
+    signal_quality = _as_upper(payload.get("signal_quality"))
+    directional_convexity_state = _as_upper(payload.get("directional_convexity_state"))
+    dealer_flow_state = _as_upper(payload.get("dealer_flow_state"))
+    dealer_hedging_bias = _as_upper(payload.get("dealer_hedging_bias"))
+    global_risk_action = _as_upper(payload.get("global_risk_action"))
+    data_quality_status = _as_upper(payload.get("data_quality_status"))
+    trade_strength = int(_safe_float(payload.get("trade_strength"), 0.0))
+    hybrid_move_probability = _safe_float(payload.get("hybrid_move_probability"), 0.0)
+    spot = _safe_float(payload.get("spot"), 0.0)
+    support_wall = payload.get("support_wall")
+    resistance_wall = payload.get("resistance_wall")
+    gamma_flip = payload.get("gamma_flip")
+
+    activation_score = 0
+    if _is_directional_flow(flow_signal):
+        activation_score += 24
+    if _is_directional_flow(smart_money_flow):
+        activation_score += 16
+    if _is_convexity_active(directional_convexity_state):
+        activation_score += 20
+    if _is_dealer_structure_active(dealer_flow_state):
+        activation_score += 14
+    if trade_strength >= max(12, int(min_trade_strength * 0.5)):
+        activation_score += 14
+    if hybrid_move_probability >= 0.55:
+        activation_score += 12
+    activation_score = int(_clip(activation_score, 0, 100))
+
+    confirmation_score = 0
+    if confirmation_status in {"STRONG_CONFIRMATION", "CONFIRMED"}:
+        confirmation_score = 100
+    elif confirmation_status == "MIXED":
+        confirmation_score = 55
+    elif confirmation_status == "CONFLICT":
+        confirmation_score = 20
+    elif confirmation_status == "NO_DIRECTION":
+        confirmation_score = 10
+
+    data_ready_score = 100
+    if data_quality_status == "GOOD":
+        data_ready_score = 80
+    elif data_quality_status == "CAUTION":
+        data_ready_score = 55
+    elif data_quality_status == "WEAK":
+        data_ready_score = 30
+
+    maturity_score = int(
+        _clip(
+            (0.45 * trade_strength)
+            + (0.30 * confirmation_score)
+            + (0.25 * data_ready_score),
+            0,
+            100,
+        )
+    )
+
+    explainability_confidence = "LOW"
+    if data_ready_score >= 75 and confirmation_score >= 55:
+        explainability_confidence = "HIGH"
+    elif data_ready_score >= 55:
+        explainability_confidence = "MEDIUM"
+
+    missing_requirements = []
+    missing_confirmations = []
+    blocked_by = []
+    promotion_requirements = []
+    setup_upgrade_conditions = []
+    reason_details = []
+
+    no_trade_reason_code = None
+    no_trade_reason = None
+    watchlist_flag = False
+    watchlist_reason = None
+    setup_state = "NONE"
+    setup_quality = "NONE"
+    directional_resolution_needed = False
+    likely_next_trigger = None
+
+    if trade_status == "TRADE":
+        decision_classification = "TRADE_READY"
+        setup_state = "NONE"
+        setup_quality = "READY"
+    else:
+        setup_quality = signal_quality or "VERY_WEAK"
+        if trade_status == "DATA_INVALID":
+            decision_classification = "DATA_BLOCKED"
+            setup_state = "DATA_BLOCKED"
+            blocked_by.append("data_quality")
+            no_trade_reason_code = "DATA_QUALITY_INSUFFICIENT"
+            no_trade_reason = "Trade blocked due to invalid or stale market data"
+        elif trade_status == "NO_TRADE" or global_risk_action == "BLOCK":
+            decision_classification = "RISK_BLOCKED"
+            setup_state = "RISK_BLOCKED"
+            blocked_by.append("global_risk")
+            if bool(payload.get("event_lockdown_flag")):
+                no_trade_reason_code = "EVENT_LOCKDOWN_BLOCK"
+                no_trade_reason = "Trade blocked due to event lockdown window"
+                blocked_by.append("event_lockdown")
+            else:
+                no_trade_reason_code = "GLOBAL_RISK_BLOCK"
+                no_trade_reason = "Trade blocked by global risk overlay"
+            reason_details.extend(payload.get("global_risk_reasons") or [])
+        elif trade_status == "BUDGET_FAIL":
+            decision_classification = "RISK_BLOCKED"
+            setup_state = "RISK_BLOCKED"
+            blocked_by.append("budget")
+            no_trade_reason_code = "BUDGET_CONSTRAINT_BLOCK"
+            no_trade_reason = "Signal passed but budget constraint blocked execution"
+        elif direction is None:
+            directional_resolution_needed = True
+            missing_requirements.append("missing_directional_consensus")
+            missing_confirmations.append("direction")
+
+            if activation_score < 35:
+                decision_classification = "DEAD_INACTIVE"
+                setup_state = "NONE"
+                no_trade_reason_code = "SIGNAL_SCORE_BELOW_THRESHOLD"
+                no_trade_reason = "Market activity is below watchlist threshold"
+                watchlist_flag = False
+                watchlist_reason = None
+            elif directional_convexity_state == "TWO_SIDED_VOLATILITY_RISK":
+                decision_classification = "DIRECTIONALLY_AMBIGUOUS"
+                setup_state = "DIRECTION_PENDING"
+                no_trade_reason_code = "TWO_SIDED_VOLATILITY_WITHOUT_EDGE"
+                no_trade_reason = "Two-sided convexity risk without directional edge"
+                watchlist_flag = True
+                watchlist_reason = "Convexity active but directional asymmetry is unresolved"
+                setup_upgrade_conditions.append("move away from gamma flip with aligned flow + dealer bias")
+            elif flow_signal in {"BULLISH_FLOW", "BEARISH_FLOW"} or dealer_flow_state in {
+                "UPSIDE_HEDGING_ACCELERATION",
+                "DOWNSIDE_HEDGING_ACCELERATION",
+                "PINNING_DOMINANT",
+            }:
+                decision_classification = "WATCHLIST_SETUP"
+                setup_state = "DIRECTION_PENDING"
+                no_trade_reason_code = "DIRECTIONAL_CONVICTION_INSUFFICIENT"
+                no_trade_reason = "Directional signals are present but conviction threshold is not met"
+                watchlist_flag = True
+                watchlist_reason = "Setup has structure but direction is not confirmed"
+            else:
+                decision_classification = "DEAD_INACTIVE"
+                setup_state = "NONE"
+                no_trade_reason_code = "SIGNAL_SCORE_BELOW_THRESHOLD"
+                no_trade_reason = "Market is currently inactive with no directional edge"
+
+            if confirmation_status in {"NO_DIRECTION", "CONFLICT"}:
+                missing_requirements.append("confirmation_filter_not_met")
+                missing_confirmations.append("confirmation")
+
+            if flow_signal == "NEUTRAL_FLOW" and smart_money_flow == "NEUTRAL_FLOW":
+                missing_requirements.append("missing_flow_confirmation")
+
+            if dealer_hedging_bias in {"PINNING", "DOWNSIDE_PINNING", "UPSIDE_PINNING"} or dealer_flow_state == "PINNING_DOMINANT":
+                missing_requirements.append("pinning_structure_dampens_signal")
+                promotion_requirements.append("dealer hedging bias shifts from pinning to acceleration")
+
+            if trade_strength < min_trade_strength:
+                missing_requirements.append("insufficient_trade_strength")
+                promotion_requirements.append(f"trade_strength >= {int(min_trade_strength)}")
+        elif trade_status == "WATCHLIST":
+            watchlist_flag = True
+            if data_quality_status in {"CAUTION", "WEAK"}:
+                decision_classification = "WATCHLIST_CONFIRMATION_PENDING"
+                setup_state = "CONFIRMATION_PENDING"
+                watchlist_reason = "Data quality and confirmation filters require more clarity"
+            elif global_risk_action in {"WATCHLIST", "REDUCE"}:
+                decision_classification = "BLOCKED_SETUP"
+                setup_state = "RISK_BLOCKED"
+                watchlist_reason = "Signal is structurally valid but downgraded by risk overlays"
+                blocked_by.append("risk_overlay")
+            else:
+                decision_classification = "WATCHLIST_SETUP"
+                setup_state = "CONFIRMATION_PENDING"
+                watchlist_reason = "Directional thesis exists but confirmations are incomplete"
+
+            if confirmation_status in {"CONFLICT", "NO_DIRECTION"}:
+                missing_requirements.append("confirmation_filter_not_met")
+                missing_confirmations.append("confirmation")
+
+            if trade_strength < min_trade_strength:
+                missing_requirements.append("insufficient_trade_strength")
+                promotion_requirements.append(f"trade_strength >= {int(min_trade_strength)}")
+
+            if flow_signal == "NEUTRAL_FLOW":
+                missing_requirements.append("missing_flow_confirmation")
+
+            no_trade_reason_code = no_trade_reason_code or "FLOW_NOT_CONFIRMED"
+            no_trade_reason = no_trade_reason or "Setup is on watchlist pending stronger confirmation"
+        else:
+            decision_classification = "WATCHLIST_SETUP" if signal_quality in {"WEAK", "MEDIUM"} else "DEAD_INACTIVE"
+            setup_state = "CONFIRMATION_PENDING" if decision_classification == "WATCHLIST_SETUP" else "NONE"
+            if decision_classification == "WATCHLIST_SETUP":
+                watchlist_flag = True
+                watchlist_reason = "Setup exists but does not yet meet execution thresholds"
+            no_trade_reason_code = "SIGNAL_SCORE_BELOW_THRESHOLD"
+            no_trade_reason = "Signal did not reach execution threshold"
+
+    if flow_signal == "NEUTRAL_FLOW" and smart_money_flow == "NEUTRAL_FLOW":
+        promotion_requirements.append("flow turns directional and aligns with smart-money flow")
+        setup_upgrade_conditions.append("directional flow confirmation on both flow lenses")
+    elif flow_signal in {"BULLISH_FLOW", "BEARISH_FLOW"} and smart_money_flow not in {"BULLISH_FLOW", "BEARISH_FLOW"}:
+        missing_requirements.append("missing_flow_confirmation")
+        promotion_requirements.append("smart-money flow confirms directional flow")
+
+    if directional_convexity_state == "TWO_SIDED_VOLATILITY_RISK":
+        setup_upgrade_conditions.append("resolve two-sided convexity into one-sided acceleration")
+
+    if dealer_flow_state == "PINNING_DOMINANT":
+        setup_upgrade_conditions.append("pinning pressure eases and hedging acceleration emerges")
+
+    if support_wall is not None and resistance_wall is not None:
+        if flow_signal == "BEARISH_FLOW":
+            likely_next_trigger = f"break below support wall {support_wall}"
+            setup_upgrade_conditions.append(f"decisive move below support wall {support_wall}")
+        elif flow_signal == "BULLISH_FLOW":
+            likely_next_trigger = f"break above resistance wall {resistance_wall}"
+            setup_upgrade_conditions.append(f"decisive move above resistance wall {resistance_wall}")
+
+    if likely_next_trigger is None and gamma_flip is not None:
+        likely_next_trigger = f"clean move away from gamma flip {gamma_flip} with confirmation"
+
+    if payload.get("expected_move_points") is None:
+        missing_requirements.append("option_efficiency_unavailable")
+        promotion_requirements.append("option efficiency features become available and supportive")
+
+    if hybrid_move_probability > 0:
+        prob_value = hybrid_move_probability
+        if prob_value < 0.55:
+            missing_requirements.append("move_probability_not_high_enough")
+            promotion_requirements.append("hybrid move probability rises above conviction floor")
+
+    if not no_trade_reason_code and trade_status != "TRADE":
+        no_trade_reason_code = "SIGNAL_SCORE_BELOW_THRESHOLD"
+        no_trade_reason = "Setup has not met the minimum execution bar"
+
+    neutralization = _collect_neutralization_states(payload)
+
+    explainability = {
+        "decision_classification": decision_classification,
+        "setup_state": setup_state,
+        "setup_quality": setup_quality,
+        "setup_activation_score": activation_score,
+        "setup_maturity_score": maturity_score,
+        "explainability_confidence": explainability_confidence,
+        "watchlist_flag": bool(watchlist_flag),
+        "watchlist_reason": watchlist_reason,
+        "no_trade_reason_code": no_trade_reason_code,
+        "no_trade_reason": no_trade_reason,
+        "no_trade_reason_details": _dedupe_keep_order(reason_details),
+        "blocked_by": _dedupe_keep_order(blocked_by),
+        "missing_confirmations": _dedupe_keep_order(missing_confirmations),
+        "missing_signal_requirements": _dedupe_keep_order(missing_requirements),
+        "signal_promotion_requirements": _dedupe_keep_order(promotion_requirements),
+        "setup_upgrade_conditions": _dedupe_keep_order(setup_upgrade_conditions),
+        "setup_upgrade_path": _dedupe_keep_order(setup_upgrade_conditions + promotion_requirements),
+        "likely_next_trigger": likely_next_trigger,
+        "watchlist_trigger_levels": {
+            "spot": spot,
+            "support_wall": support_wall,
+            "resistance_wall": resistance_wall,
+            "gamma_flip": gamma_flip,
+        },
+        "directional_resolution_needed": bool(directional_resolution_needed),
+        **neutralization,
+    }
+    return explainability
+
+
 def generate_trade(
     symbol,
     spot,
@@ -296,6 +665,8 @@ def generate_trade(
     scoring_breakdown["dealer_pressure_alignment_adjustment_score"] = dealer_pressure_trade_modifiers["alignment_adjustment_score"]
     scoring_breakdown["dealer_pressure_adjustment_score"] = dealer_pressure_adjustment_score
     global_risk_features = global_risk_state.get("global_risk_features", {}) if isinstance(global_risk_state, dict) else {}
+    india_vix_level = global_risk_features.get("india_vix_level")
+    india_vix_change_24h = global_risk_features.get("india_vix_change_24h")
     option_efficiency_state = {}
     option_efficiency_trade_modifiers = derive_option_efficiency_trade_modifiers(option_efficiency_state)
     option_efficiency_adjustment_score = option_efficiency_trade_modifiers["option_efficiency_adjustment_score"]
@@ -557,6 +928,8 @@ def generate_trade(
             "payoff_efficiency_hint": option_efficiency_trade_modifiers["payoff_efficiency_hint"],
             "oil_shock_score": global_risk_trade_modifiers["oil_shock_score"],
             "market_volatility_shock_score": global_risk_trade_modifiers["volatility_shock_score"],
+            "india_vix_level": india_vix_level,
+            "india_vix_change_24h": india_vix_change_24h,
             "commodity_risk_score": global_risk_trade_modifiers["commodity_risk_score"],
             "risk_off_intensity": global_risk["global_risk_features"].get("risk_off_intensity", 0.0),
             "volatility_compression_score": global_risk["global_risk_features"].get("volatility_compression_score", 0.0),
@@ -615,6 +988,13 @@ def generate_trade(
             data_quality_score=data_quality["score"],
             macro_position_size_multiplier=execution_size_multiplier,
         )
+        explainability = _build_decision_explainability(
+            payload,
+            trade_status=trade_status,
+            min_trade_strength=min_trade_strength,
+        )
+        payload.update(explainability)
+        payload["explainability"] = explainability
         return attach_trade_views(payload)
 
     if global_risk["risk_trade_status"] == "DATA_INVALID":
@@ -668,6 +1048,8 @@ def generate_trade(
                 spot=spot,
                 direction=direction,
                 atm_iv=market_state["atm_iv"],
+                india_vix_level=india_vix_level,
+                india_vix_change_24h=india_vix_change_24h,
                 selected_expiry=(
                     option_chain_validation.get("selected_expiry")
                     if isinstance(option_chain_validation, dict)
@@ -730,6 +1112,8 @@ def generate_trade(
     option_efficiency_state = build_option_efficiency_state(
         spot=spot,
         atm_iv=market_state["atm_iv"],
+        india_vix_level=india_vix_level,
+        india_vix_change_24h=india_vix_change_24h,
         fallback_iv=option_row_dict.get("impliedVolatility", option_row_dict.get("IV")),
         expiry_value=option_row_dict.get(
             "EXPIRY_DT",

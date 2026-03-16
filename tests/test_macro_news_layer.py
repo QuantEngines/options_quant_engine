@@ -114,8 +114,12 @@ class MacroNewsLayerTests(unittest.TestCase):
 
     def test_symbol_relevance_helper(self):
         self.assertTrue(headline_mentions_symbol("NIFTY", "Nifty gains as bond yields cool"))
+        self.assertTrue(headline_mentions_symbol("NIFTY", "Indian markets rise as Sensex and broader equities extend gains"))
         self.assertTrue(headline_mentions_symbol("BANKNIFTY", "Financials rally lifts Bank Nifty sentiment"))
+        self.assertTrue(headline_mentions_symbol("BANKNIFTY", "Indian banking stocks rebound as private lenders lead market gains"))
+        self.assertTrue(headline_mentions_symbol("FINNIFTY", "Indian financial services stocks gain after softer yields"))
         self.assertTrue(headline_mentions_symbol("RELIANCE", "Reliance board approves capex update"))
+        self.assertFalse(headline_mentions_symbol("NIFTY", "US stocks rally as Treasury yields cool after Fed remarks"))
         self.assertFalse(headline_mentions_symbol("RELIANCE", "Infosys board discusses buyback plan"))
 
 

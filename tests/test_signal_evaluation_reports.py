@@ -99,6 +99,15 @@ class SignalEvaluationReportsTests(unittest.TestCase):
         self.assertIn("regime_fingerprint_performance", report)
         self.assertFalse(report["move_probability_calibration"].empty)
 
+    def test_move_probability_calibration_coerces_object_score_columns(self):
+        frame = self._sample_frame()
+        frame["composite_signal_score"] = frame["composite_signal_score"].astype(str)
+
+        calibration = move_probability_calibration(frame)
+
+        self.assertFalse(calibration.empty)
+        self.assertIn("avg_composite_signal_score", calibration.columns)
+
     def test_structured_signal_evaluation_summary_and_artifacts_are_generated(self):
         frame = self._sample_frame()
         frame["signal_timestamp"] = [

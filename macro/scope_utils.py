@@ -19,9 +19,45 @@ from __future__ import annotations
 
 INDEX_SCOPES = {"INDEX", "INDICES", "NIFTY", "BANKNIFTY", "FINNIFTY"}
 INDEX_KEYWORD_MAP = {
-    "NIFTY": ["nifty", "nifty 50", "india equities", "indian equities"],
-    "BANKNIFTY": ["bank nifty", "banknifty", "bank index", "financials", "banks"],
-    "FINNIFTY": ["fin nifty", "finnifty", "financial services"],
+    "NIFTY": [
+        "nifty",
+        "nifty 50",
+        "nse nifty",
+        "sensex",
+        "bse sensex",
+        "stock market",
+        "stock markets",
+        "equity market",
+        "equity markets",
+        "indian market",
+        "indian markets",
+        "indian equities",
+        "india equities",
+        "dalal street",
+    ],
+    "BANKNIFTY": [
+        "bank nifty",
+        "banknifty",
+        "bank index",
+        "banking index",
+        "bank stocks",
+        "bank shares",
+        "financial stocks",
+        "financial shares",
+        "financials",
+        "banks",
+        "psu banks",
+        "private banks",
+        "lenders",
+    ],
+    "FINNIFTY": [
+        "fin nifty",
+        "finnifty",
+        "financial services",
+        "financial sector",
+        "nbfc",
+        "nbfcs",
+    ],
 }
 
 
@@ -122,7 +158,23 @@ def headline_mentions_symbol(symbol: str, headline: str) -> bool:
 
     if symbol_upper in {"NIFTY", "BANKNIFTY", "FINNIFTY"}:
         keywords = INDEX_KEYWORD_MAP.get(symbol_upper, [])
-        return any(keyword in text for keyword in keywords)
+        if any(keyword in text for keyword in keywords):
+            return True
+
+        # Index products often move on broad India-market headlines that do not
+        # repeat the exact index name. Treat these as relevant only when the
+        # headline clearly points to Indian equities rather than generic global
+        # finance commentary.
+        market_markers = {
+            "NIFTY": ["markets", "shares", "stocks", "equities", "benchmarks", "indices"],
+            "BANKNIFTY": ["banks", "banking", "financials", "lenders"],
+            "FINNIFTY": ["financials", "financial services", "nbfcs", "lenders"],
+        }
+        geography_markers = ["india", "indian", "nse", "bse", "sensex", "dalal street"]
+
+        return any(marker in text for marker in market_markers.get(symbol_upper, [])) and any(
+            marker in text for marker in geography_markers
+        )
 
     simple_aliases = {
         symbol_upper.lower(),

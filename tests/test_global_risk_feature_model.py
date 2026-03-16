@@ -69,6 +69,8 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
                     "gold_change_24h": 2.4,
                     "copper_change_24h": -4.0,
                     "vix_change_24h": 12.0,
+                    "india_vix_change_24h": 6.0,
+                    "india_vix_level": 15.5,
                     "sp500_change_24h": -1.5,
                     "nasdaq_change_24h": -0.8,
                     "us10y_change_bp": 12.0,
@@ -92,6 +94,9 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
         self.assertEqual(features["volatility_compression_score"], 0.7)
         self.assertAlmostEqual(features["risk_off_intensity"], 0.614, places=3)
         self.assertAlmostEqual(features["volatility_explosion_probability"], 0.945, places=3)
+        self.assertEqual(features["us_vix_change_24h"], 12.0)
+        self.assertEqual(features["india_vix_change_24h"], 6.0)
+        self.assertEqual(features["india_vix_level"], 15.5)
         self.assertTrue(features["market_data_available"])
         self.assertFalse(features["neutral_fallback"])
 

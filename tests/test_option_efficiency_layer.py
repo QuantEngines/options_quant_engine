@@ -41,6 +41,25 @@ class OptionEfficiencyLayerTests(unittest.TestCase):
         self.assertEqual(state["expected_move_quality"], "FALLBACK")
         self.assertIn("fallback_iv_used", state["option_efficiency_diagnostics"]["warnings"])
 
+    def test_india_vix_can_anchor_expected_move_when_atm_iv_is_missing(self):
+        state = build_option_efficiency_state(
+            spot=22000,
+            india_vix_level=16.5,
+            india_vix_change_24h=5.2,
+            expiry_value="2026-03-21",
+            valuation_time="2026-03-14T10:00:00+05:30",
+            direction="CALL",
+            strike=22000,
+            option_type="CE",
+            entry_price=110,
+            target=145,
+        )
+
+        self.assertEqual(state["expected_move_quality"], "FALLBACK")
+        self.assertEqual(state["option_efficiency_diagnostics"]["iv_source"], "INDIA_VIX")
+        self.assertIn("india_vix_used", state["option_efficiency_diagnostics"]["warnings"])
+        self.assertIsNotNone(state["expected_move_points"])
+
     def test_missing_iv_and_expiry_degrades_to_neutral(self):
         state = build_option_efficiency_state(
             spot=22000,

@@ -346,6 +346,10 @@ def move_probability_calibration(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["probability_calibration_bucket", "signal_count", "avg_move_probability", "actual_hit_rate"])
 
     df["move_probability"] = _safe_numeric(df["move_probability"])
+    if "composite_signal_score" in df.columns:
+        df["composite_signal_score"] = _safe_numeric(df["composite_signal_score"])
+    else:
+        df["composite_signal_score"] = pd.Series(index=df.index, dtype="float64")
     df["hit_flag"] = _signal_hit_flag(df)
     group_field = "probability_calibration_bucket" if "probability_calibration_bucket" in df.columns else "move_probability"
 

@@ -267,6 +267,44 @@ st.markdown(
         box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
         margin-bottom: 1rem;
     }
+    .oqe-mini-scorecard {
+        border: 1px solid rgba(30, 41, 59, 0.10);
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.74);
+        padding: 0.7rem 0.8rem;
+        margin-bottom: 0.85rem;
+    }
+    .oqe-mini-title {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #64748b;
+        margin-bottom: 0.2rem;
+        font-weight: 700;
+    }
+    .oqe-mini-value {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: #0f172a;
+        line-height: 1.25;
+        word-break: break-word;
+    }
+    .oqe-decision-watchlist {
+        background: rgba(245, 158, 11, 0.18);
+        color: #92400e;
+    }
+    .oqe-decision-inactive {
+        background: rgba(100, 116, 139, 0.18);
+        color: #334155;
+    }
+    .oqe-decision-blocked {
+        background: rgba(239, 68, 68, 0.16);
+        color: #991b1b;
+    }
+    .oqe-decision-ready {
+        background: rgba(16, 185, 129, 0.16);
+        color: #065f46;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -291,6 +329,27 @@ def _safe_metric_value(value):
         The helper keeps the surrounding module readable without changing runtime behavior.
     """
     return "-" if value in (None, "") else value
+
+
+def _normalize_symbol_input_state(key: str = "control_symbol"):
+    """
+    Purpose:
+        Normalize the symbol widget value in Streamlit session state.
+
+    Context:
+        This callback runs from the Symbol widget `on_change` hook so the
+        displayed input value is uppercased safely within Streamlit's callback
+        lifecycle.
+
+    Inputs:
+        key (str): Session-state key for the symbol input widget.
+
+    Returns:
+        None: The function mutates `st.session_state` in place.
+    """
+    raw_value = st.session_state.get(key)
+    normalized = (str(raw_value or "").strip().upper() or DEFAULT_SYMBOL)
+    st.session_state[key] = normalized
 
 
 def _safe_float(value):
@@ -503,6 +562,101 @@ def _badge_class_for_trade_status(status: str) -> str:
     if status in {"NO_SIGNAL", "DATA_INVALID"}:
         return "oqe-badge-no-signal"
     return "oqe-badge-blocked"
+
+
+def _badge_class_for_decision_classification(decision_classification: str, trade_status: str) -> str:
+    decision = (decision_classification or "").upper()
+    trade_status = (trade_status or "").upper()
+    if trade_status == "TRADE" or decision == "TRADE_READY":
+        return "oqe-decision-ready"
+    if trade_status in {"DATA_INVALID", "NO_TRADE", "BUDGET_FAIL"} or "BLOCK" in decision:
+        return "oqe-decision-blocked"
+    if "WATCHLIST" in decision or "AMBIGUOUS" in decision:
+        return "oqe-decision-watchlist"
+    if "INACTIVE" in decision:
+        return "oqe-decision-inactive"
+    return "oqe-badge-neutral"
+
+
+def _render_explainability_scorecard(trade: dict):
+    if not isinstance(trade, dict):
+        return
+
+    decision_classification = trade.get("decision_classification") or "UNKNOWN"
+    trade_status = trade.get("trade_status")
+    missing_requirements = trade.get("missing_signal_requirements")
+    missing_requirements = missing_requirements if isinstance(missing_requirements, list) else []
+    blocked_by = trade.get("blocked_by")
+    blocked_by = blocked_by if isinstance(blocked_by, list) else []
+    next_trigger = trade.get("likely_next_trigger")
+    setup_activation_score = trade.get("setup_activation_score")
+    setup_maturity_score = trade.get("setup_maturity_score")
+    confidence = trade.get("explainability_confidence")
+
+    st.markdown('<div class="oqe-panel">', unsafe_allow_html=True)
+    st.subheader("Explainability Scorecard")
+    cols = st.columns([1.05, 0.9, 0.9, 1.0, 1.15])
+
+    decision_badge_class = _badge_class_for_decision_classification(decision_classification, trade_status)
+    cols[0].markdown(
+        (
+            '<div class="oqe-mini-scorecard">'
+            '<div class="oqe-mini-title">Decision</div>'
+            f'<div class="oqe-badge {decision_badge_class}" style="margin-bottom:0.35rem;">{decision_classification}</div>'
+            f'<div class="oqe-mini-value">{_safe_metric_value(trade_status)}</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    cols[1].markdown(
+        (
+            '<div class="oqe-mini-scorecard">'
+            '<div class="oqe-mini-title">Setup Quality</div>'
+            f'<div class="oqe-mini-value">{_safe_metric_value(trade.get("setup_quality"))}</div>'
+            f'<div class="oqe-mini-title" style="margin-top:0.4rem;">State</div>'
+            f'<div class="oqe-mini-value">{_safe_metric_value(trade.get("setup_state"))}</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    blocked_value = ", ".join(blocked_by) if blocked_by else "-"
+    cols[2].markdown(
+        (
+            '<div class="oqe-mini-scorecard">'
+            '<div class="oqe-mini-title">Missing / Blocked</div>'
+            f'<div class="oqe-mini-value">{len(missing_requirements)} missing</div>'
+            f'<div class="oqe-mini-title" style="margin-top:0.4rem;">Blocked By</div>'
+            f'<div class="oqe-mini-value">{blocked_value}</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    cols[3].markdown(
+        (
+            '<div class="oqe-mini-scorecard">'
+            '<div class="oqe-mini-title">Activation / Maturity</div>'
+            f'<div class="oqe-mini-value">{_safe_metric_value(setup_activation_score)} / {_safe_metric_value(setup_maturity_score)}</div>'
+            f'<div class="oqe-mini-title" style="margin-top:0.4rem;">Confidence</div>'
+            f'<div class="oqe-mini-value">{_safe_metric_value(confidence)}</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    cols[4].markdown(
+        (
+            '<div class="oqe-mini-scorecard">'
+            '<div class="oqe-mini-title">Likely Next Trigger</div>'
+            f'<div class="oqe-mini-value">{_safe_metric_value(next_trigger)}</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _list_replay_files(replay_dir: str, symbol: str, kind: str):
@@ -779,6 +933,8 @@ def _render_decision_panel(trade: dict):
         Internal helper that keeps the surrounding implementation focused on higher-level trading logic.
     """
     focus_cards = [
+        ("Decision Class", trade.get("decision_classification")),
+        ("Setup State", trade.get("setup_state")),
         ("Direction Source", trade.get("direction_source")),
         ("Execution Regime", trade.get("execution_regime")),
         ("Selected Expiry", trade.get("selected_expiry")),
@@ -787,6 +943,8 @@ def _render_decision_panel(trade: dict):
         ("Provider Health", (trade.get("provider_health") or {}).get("summary_status")),
         ("Macro Adjustment", trade.get("macro_adjustment_score")),
         ("Position Size Multiplier", trade.get("macro_position_size_multiplier")),
+        ("No-Trade Code", trade.get("no_trade_reason_code")),
+        ("Watchlist", trade.get("watchlist_flag")),
     ]
     st.markdown('<div class="oqe-panel">', unsafe_allow_html=True)
     st.subheader("Decision Summary")
@@ -1019,10 +1177,15 @@ def _render_workstation(result: dict):
     Notes:
         The helper keeps the surrounding module readable without changing runtime behavior.
     """
-    trade = result.get("execution_trade") or result.get("trade")
-    if trade:
-        _render_trade_metrics(trade)
-        _render_decision_panel(trade)
+    full_trade = result.get("trade") or result.get("trade_audit")
+    execution_trade = result.get("execution_trade")
+    if execution_trade is None and isinstance(full_trade, dict):
+        execution_trade = full_trade.get("execution_trade")
+    trade = full_trade or execution_trade
+
+    if execution_trade or trade:
+        _render_trade_metrics(execution_trade or trade)
+        _render_decision_panel(execution_trade or trade)
     else:
         st.warning("No trade payload was returned for this snapshot.")
 
@@ -1031,6 +1194,9 @@ def _render_workstation(result: dict):
     )
 
     with overview_tab:
+        if trade:
+            _render_explainability_scorecard(trade)
+
         top_left, top_right = st.columns(2)
         with top_left:
             _render_key_value_table("Spot Validation", result.get("spot_validation", {}))
@@ -1039,6 +1205,29 @@ def _render_workstation(result: dict):
         with top_right:
             _render_key_value_table("Option Chain Validation", result.get("option_chain_validation", {}))
             _render_macro_news_section(result.get("macro_news_state", {}), result.get("headline_state", {}))
+
+        global_market_snapshot = result.get("global_market_snapshot", {}) or {}
+        global_market_inputs = global_market_snapshot.get("market_inputs", {}) or {}
+        lower_left, lower_right = st.columns(2)
+        with lower_left:
+            _render_key_value_table("Global Risk State", result.get("global_risk_state", {}))
+        with lower_right:
+            _render_key_value_table(
+                "Global Market Snapshot",
+                {
+                    "provider": global_market_snapshot.get("provider"),
+                    "data_available": global_market_snapshot.get("data_available"),
+                    "stale": global_market_snapshot.get("stale"),
+                    "oil_change_24h": global_market_inputs.get("oil_change_24h"),
+                    "US VIX Change 24h": global_market_inputs.get("vix_change_24h"),
+                    "India VIX Level": global_market_inputs.get("india_vix_level"),
+                    "India VIX Change 24h": global_market_inputs.get("india_vix_change_24h"),
+                    "sp500_change_24h": global_market_inputs.get("sp500_change_24h"),
+                    "us10y_change_bp": global_market_inputs.get("us10y_change_bp"),
+                    "usdinr_change_24h": global_market_inputs.get("usdinr_change_24h"),
+                    "warnings": global_market_snapshot.get("warnings"),
+                },
+            )
 
         if trade:
             with st.expander("Full Trader View", expanded=False):
@@ -1056,18 +1245,36 @@ def _render_workstation(result: dict):
     with diagnostics_tab:
         if trade:
             diagnostics = {
-                key: trade.get(key)
-                for key in (
-                    "direction_source",
-                    "macro_adjustment_reasons",
-                    "macro_regime_reasons",
-                    "confirmation_status",
-                    "confirmation_reasons",
-                    "scoring_breakdown",
-                    "option_chain_validation",
-                    "spot_validation",
+                label: value
+                for label, value in (
+                    ("direction_source", trade.get("direction_source")),
+                    ("decision_classification", trade.get("decision_classification")),
+                    ("setup_state", trade.get("setup_state")),
+                    ("setup_quality", trade.get("setup_quality")),
+                    ("watchlist_flag", trade.get("watchlist_flag")),
+                    ("watchlist_reason", trade.get("watchlist_reason")),
+                    ("no_trade_reason_code", trade.get("no_trade_reason_code")),
+                    ("no_trade_reason", trade.get("no_trade_reason")),
+                    ("missing_signal_requirements", trade.get("missing_signal_requirements")),
+                    ("setup_upgrade_conditions", trade.get("setup_upgrade_conditions")),
+                    ("likely_next_trigger", trade.get("likely_next_trigger")),
+                    ("option_efficiency_status", trade.get("option_efficiency_status")),
+                    ("option_efficiency_reason", trade.get("option_efficiency_reason")),
+                    ("global_risk_status", trade.get("global_risk_status")),
+                    ("global_risk_reason", trade.get("global_risk_reason")),
+                    ("macro_news_status", trade.get("macro_news_status")),
+                    ("macro_news_reason", trade.get("macro_news_reason")),
+                    ("India VIX Level", trade.get("india_vix_level")),
+                    ("India VIX Change 24h", trade.get("india_vix_change_24h")),
+                    ("macro_adjustment_reasons", trade.get("macro_adjustment_reasons")),
+                    ("macro_regime_reasons", trade.get("macro_regime_reasons")),
+                    ("confirmation_status", trade.get("confirmation_status")),
+                    ("confirmation_reasons", trade.get("confirmation_reasons")),
+                    ("scoring_breakdown", trade.get("scoring_breakdown")),
+                    ("option_chain_validation", trade.get("option_chain_validation")),
+                    ("spot_validation", trade.get("spot_validation")),
                 )
-                if key in trade
+                if value is not None
             }
             _render_key_value_list("Trade Diagnostics", diagnostics)
 
@@ -1359,6 +1566,179 @@ def _inject_autorefresh(interval_seconds: int):
     )
 
 
+def _query_param_value(name: str, default: str | None = None) -> str | None:
+    """
+    Purpose:
+        Read a single query parameter value from the current Streamlit URL state.
+
+    Context:
+        The workstation uses a browser reload for timed refreshes, so lightweight
+        control selections need a second persistence mechanism beyond in-memory
+        session state.
+
+    Inputs:
+        name (str): Query-parameter name to read.
+        default (str | None): Fallback used when the parameter is missing.
+
+    Returns:
+        str | None: The normalized string value, or the provided fallback.
+    """
+    value = st.query_params.get(name, default)
+    if isinstance(value, list):
+        return value[0] if value else default
+    return value
+
+
+def _query_param_bool(name: str, default: bool) -> bool:
+    """
+    Purpose:
+        Decode a boolean control value from query parameters.
+
+    Context:
+        Streamlit query parameters are string-based, so booleans need an explicit
+        conversion step before they are used to seed widget state.
+
+    Inputs:
+        name (str): Query-parameter name to read.
+        default (bool): Fallback boolean when the parameter is missing.
+
+    Returns:
+        bool: Parsed boolean value for the control.
+    """
+    value = (_query_param_value(name) or "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _query_param_int(name: str, default: int) -> int:
+    """
+    Purpose:
+        Decode an integer control value from query parameters.
+
+    Context:
+        Numeric sidebar selections should survive timed page reloads without
+        forcing operators to re-enter sizing or cadence settings.
+
+    Inputs:
+        name (str): Query-parameter name to read.
+        default (int): Fallback integer when the parameter is missing or invalid.
+
+    Returns:
+        int: Parsed integer value for the control.
+    """
+    value = _query_param_value(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _query_param_float(name: str, default: float) -> float:
+    """
+    Purpose:
+        Decode a float control value from query parameters.
+
+    Context:
+        Capital controls are stored as URL strings during timed refreshes, so
+        they need a safe numeric conversion on reload.
+
+    Inputs:
+        name (str): Query-parameter name to read.
+        default (float): Fallback float when the parameter is missing or invalid.
+
+    Returns:
+        float: Parsed floating-point value for the control.
+    """
+    value = _query_param_value(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _seed_control_state():
+    """
+    Purpose:
+        Seed Streamlit widget state from URL parameters on first load.
+
+    Context:
+        The timed refresh path performs a full browser reload. Query-parameter
+        seeding preserves operator-selected runtime controls across those reloads
+        without leaking engine logic into the UI layer.
+
+    Inputs:
+        None: This helper derives defaults from query parameters and settings.
+
+    Returns:
+        None: The function mutates `st.session_state` in place.
+    """
+    defaults = {
+        "control_mode": _query_param_value("mode", "LIVE") or "LIVE",
+        "control_symbol": (_query_param_value("symbol", DEFAULT_SYMBOL) or DEFAULT_SYMBOL).strip().upper(),
+        "control_source": (_query_param_value("source", DEFAULT_DATA_SOURCE) or DEFAULT_DATA_SOURCE).strip().upper(),
+        "control_save_live_snapshots": _query_param_bool("save_live_snapshots", False),
+        "control_auto_refresh": _query_param_bool("auto_refresh", False),
+        "control_refresh_seconds": max(10, min(_query_param_int("refresh_seconds", 30), 300)),
+        "control_apply_budget_constraint": _query_param_bool("apply_budget_constraint", False),
+        "control_lot_size": max(1, _query_param_int("lot_size", int(LOT_SIZE))),
+        "control_requested_lots": max(1, _query_param_int("requested_lots", int(NUMBER_OF_LOTS))),
+        "control_max_capital": max(0.0, _query_param_float("max_capital", float(MAX_CAPITAL_PER_TRADE))),
+        "control_replay_dir": _query_param_value("replay_dir", "debug_samples") or "debug_samples",
+        "control_replay_spot": _query_param_value("replay_spot", "") or "",
+        "control_replay_chain": _query_param_value("replay_chain", "") or "",
+    }
+
+    if defaults["control_source"] not in DATA_SOURCE_OPTIONS and defaults["control_mode"] == "LIVE":
+        defaults["control_source"] = DEFAULT_DATA_SOURCE
+
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+
+def _persist_control_state(mode: str, *, symbol: str | None = None, source: str | None = None, replay_dir: str | None = None):
+    """
+    Purpose:
+        Persist non-sensitive sidebar controls into the URL query string.
+
+    Context:
+        URL-backed persistence keeps the workstation sticky across timed reloads
+        while avoiding unsafe exposure of broker credentials in the browser address.
+
+    Inputs:
+        mode (str): Current workstation mode so mode-specific fields can be managed.
+
+    Returns:
+        None: The function mutates `st.query_params` in place.
+    """
+    st.query_params["mode"] = st.session_state.get("control_mode", mode)
+    st.query_params["symbol"] = symbol or st.session_state.get("control_symbol", DEFAULT_SYMBOL)
+    st.query_params["source"] = source or st.session_state.get("control_source", DEFAULT_DATA_SOURCE)
+    st.query_params["save_live_snapshots"] = "1" if st.session_state.get("control_save_live_snapshots") else "0"
+    st.query_params["auto_refresh"] = "1" if st.session_state.get("control_auto_refresh") else "0"
+    st.query_params["refresh_seconds"] = str(st.session_state.get("control_refresh_seconds", 30))
+    if not st.session_state.get("control_auto_refresh"):
+        st.query_params.pop("auto_run", None)
+    st.query_params["apply_budget_constraint"] = "1" if st.session_state.get("control_apply_budget_constraint") else "0"
+    st.query_params["lot_size"] = str(st.session_state.get("control_lot_size", int(LOT_SIZE)))
+    st.query_params["requested_lots"] = str(st.session_state.get("control_requested_lots", int(NUMBER_OF_LOTS)))
+    st.query_params["max_capital"] = str(st.session_state.get("control_max_capital", float(MAX_CAPITAL_PER_TRADE)))
+
+    if mode == "REPLAY":
+        st.query_params["replay_dir"] = replay_dir or st.session_state.get("control_replay_dir", "debug_samples")
+        st.query_params["replay_spot"] = st.session_state.get("control_replay_spot", "")
+        st.query_params["replay_chain"] = st.session_state.get("control_replay_chain", "")
+    else:
+        for key in ("replay_dir", "replay_spot", "replay_chain"):
+            st.query_params.pop(key, None)
+
+
 def main():
     """
     Purpose:
@@ -1386,32 +1766,42 @@ def main():
         unsafe_allow_html=True,
     )
 
+    _seed_control_state()
+
     with st.sidebar:
         st.header("Run Controls")
-        mode = st.radio("Mode", ["LIVE", "REPLAY"], index=0, horizontal=True)
-        symbol = st.text_input("Symbol", value=DEFAULT_SYMBOL).strip().upper() or DEFAULT_SYMBOL
+        mode = st.radio("Mode", ["LIVE", "REPLAY"], horizontal=True, key="control_mode")
+        st.text_input("Symbol", key="control_symbol", on_change=_normalize_symbol_input_state)
+        symbol = (st.session_state.get("control_symbol") or DEFAULT_SYMBOL).strip().upper() or DEFAULT_SYMBOL
 
         auto_refresh = False
         refresh_seconds = 30
 
         if mode == "LIVE":
             st.caption("Live broker/public-data snapshot")
-            source = st.selectbox("Data Source", DATA_SOURCE_OPTIONS, index=DATA_SOURCE_OPTIONS.index(DEFAULT_DATA_SOURCE))
-            save_live_snapshots = st.checkbox("Save live snapshots", value=False)
-            auto_refresh = st.checkbox("Auto-refresh live view", value=False)
+            live_source = st.session_state.get("control_source", DEFAULT_DATA_SOURCE)
+            if live_source not in DATA_SOURCE_OPTIONS:
+                live_source = DEFAULT_DATA_SOURCE
+                st.session_state["control_source"] = live_source
+            source_index = DATA_SOURCE_OPTIONS.index(live_source)
+            source = st.selectbox("Data Source", DATA_SOURCE_OPTIONS, index=source_index, key="control_source")
+            save_live_snapshots = st.checkbox("Save live snapshots", key="control_save_live_snapshots")
+            auto_refresh = st.checkbox("Auto-refresh live view", key="control_auto_refresh")
             if auto_refresh:
-                refresh_seconds = st.slider("Refresh every (sec)", min_value=10, max_value=300, value=30, step=5)
+                refresh_seconds = st.slider("Refresh every (sec)", min_value=10, max_value=300, step=5, key="control_refresh_seconds")
+            else:
+                refresh_seconds = int(st.session_state.get("control_refresh_seconds", 30))
         else:
             st.caption("Replay from saved market snapshots")
-            source = st.text_input("Replay Source Label", value="REPLAY").strip().upper() or "REPLAY"
+            source = st.text_input("Replay Source Label", key="control_source").strip().upper() or "REPLAY"
             save_live_snapshots = False
 
         st.divider()
         st.caption("Sizing")
-        apply_budget_constraint = st.checkbox("Apply budget constraint", value=False)
-        lot_size = st.number_input("Lot Size", min_value=1, value=int(LOT_SIZE), step=1)
-        requested_lots = st.number_input("Requested Lots", min_value=1, value=int(NUMBER_OF_LOTS), step=1)
-        max_capital = st.number_input("Max Capital Per Trade", min_value=0.0, value=float(MAX_CAPITAL_PER_TRADE), step=1000.0)
+        apply_budget_constraint = st.checkbox("Apply budget constraint", key="control_apply_budget_constraint")
+        lot_size = st.number_input("Lot Size", min_value=1, step=1, key="control_lot_size")
+        requested_lots = st.number_input("Requested Lots", min_value=1, step=1, key="control_requested_lots")
+        max_capital = st.number_input("Max Capital Per Trade", min_value=0.0, step=1000.0, key="control_max_capital")
 
         provider_credentials = {}
         if mode == "LIVE" and source == "ZERODHA":
@@ -1432,23 +1822,27 @@ def main():
         replay_dir = "debug_samples"
         if mode == "REPLAY":
             st.markdown("**Replay Inputs**")
-            replay_dir = st.text_input("Replay Directory", value="debug_samples").strip() or "debug_samples"
+            replay_dir = st.text_input("Replay Directory", key="control_replay_dir").strip() or "debug_samples"
             spot_files = _list_replay_files(replay_dir, symbol, "spot")
             chain_files = _list_replay_files(replay_dir, symbol, "chain")
             default_chain = _select_default_option(chain_files)
             default_spot = _nearest_spot_for_chain(default_chain, spot_files) if default_chain else _select_default_option(spot_files)
             spot_options = [""] + spot_files
             chain_options = [""] + chain_files
+            saved_replay_spot = st.session_state.get("control_replay_spot", "")
+            saved_replay_chain = st.session_state.get("control_replay_chain", "")
             replay_spot = st.selectbox(
                 "Replay Spot Snapshot",
                 options=spot_options,
-                index=spot_options.index(default_spot) if default_spot in spot_options else 0,
+                index=spot_options.index(saved_replay_spot) if saved_replay_spot in spot_options else (spot_options.index(default_spot) if default_spot in spot_options else 0),
+                key="control_replay_spot",
                 help="Defaults to the nearest spot snapshot for the latest matching option-chain snapshot.",
             )
             replay_chain = st.selectbox(
                 "Replay Option Chain Snapshot",
                 options=chain_options,
-                index=chain_options.index(default_chain) if default_chain in chain_options else 0,
+                index=chain_options.index(saved_replay_chain) if saved_replay_chain in chain_options else (chain_options.index(default_chain) if default_chain in chain_options else 0),
+                key="control_replay_chain",
                 help="Defaults to the latest matching option-chain snapshot.",
             )
 
@@ -1462,11 +1856,21 @@ def main():
 
         run_button = st.button("Run Snapshot", type="primary", width="stretch")
 
-    if not run_button and "last_result" not in st.session_state:
+    _persist_control_state(mode, symbol=symbol, source=source, replay_dir=replay_dir if mode == "REPLAY" else None)
+
+    # Detect a reload triggered by the auto-refresh timer (query param survives browser reloads).
+    auto_run_triggered = (
+        mode == "LIVE"
+        and auto_refresh
+        and _query_param_bool("auto_run", False)
+    )
+    should_run = run_button or auto_run_triggered
+
+    if not should_run and "last_result" not in st.session_state:
         st.info("Choose settings in the sidebar, then click `Run Snapshot`.")
         return
 
-    if run_button:
+    if should_run:
         with st.spinner("Running engine snapshot..."):
             st.session_state["last_result"] = run_engine_snapshot(
                 symbol=symbol,
@@ -1486,6 +1890,11 @@ def main():
         st.session_state["last_symbol"] = symbol
         st.session_state["auto_refresh"] = auto_refresh
         st.session_state["refresh_seconds"] = refresh_seconds
+        # Arm the next auto-run so the following browser reload also executes automatically.
+        if auto_refresh:
+            st.query_params["auto_run"] = "1"
+        else:
+            st.query_params.pop("auto_run", None)
 
     result = st.session_state.get("last_result")
     if not result:

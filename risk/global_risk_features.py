@@ -574,6 +574,16 @@ def build_global_risk_features(
     gold_change_24h = _safe_float(effective_market_inputs.get("gold_change_24h"), None)
     copper_change_24h = _safe_float(effective_market_inputs.get("copper_change_24h"), None)
     vix_change_24h = _safe_float(effective_market_inputs.get("vix_change_24h"), None)
+    india_vix_change_24h = (
+        _safe_float(market_inputs.get("india_vix_change_24h"), None)
+        if market_data_available
+        else None
+    )
+    india_vix_level = (
+        _safe_float(market_inputs.get("india_vix_level"), None)
+        if market_data_available
+        else None
+    )
     sp500_change_24h = _safe_float(effective_market_inputs.get("sp500_change_24h"), None)
     nasdaq_change_24h = _safe_float(effective_market_inputs.get("nasdaq_change_24h"), None)
     us10y_change_bp = _safe_float(effective_market_inputs.get("us10y_change_bp"), None)
@@ -668,7 +678,10 @@ def build_global_risk_features(
         "oil_change_24h": oil_change_24h,
         "gold_change_24h": gold_change_24h,
         "copper_change_24h": copper_change_24h,
+        "us_vix_change_24h": vix_change_24h,
         "vix_change_24h": vix_change_24h,
+        "india_vix_change_24h": india_vix_change_24h,
+        "india_vix_level": india_vix_level,
         "sp500_change_24h": sp500_change_24h,
         "nasdaq_change_24h": nasdaq_change_24h,
         "us10y_change_bp": us10y_change_bp,

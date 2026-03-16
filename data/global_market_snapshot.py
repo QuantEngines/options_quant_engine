@@ -351,6 +351,31 @@ def _realized_volatility(history: pd.DataFrame, window: int):
     return float(sample.std(ddof=0) * math.sqrt(252.0))
 
 
+def _latest_close(history: pd.DataFrame):
+    """
+    Purpose:
+        Return the most recent close from a normalized market history.
+
+    Context:
+        Internal helper used when downstream layers need a current level, not
+        just a one-day change. India VIX is especially useful as a local
+        volatility level for option-valuation heuristics.
+
+    Inputs:
+        history (pd.DataFrame): Normalized price history with a `close` column.
+
+    Returns:
+        float | None: Latest close value or `None` when unavailable.
+
+    Notes:
+        This helper leaves scoring decisions to downstream layers and only
+        exposes the raw level in a normalized form.
+    """
+    if history is None or history.empty:
+        return None
+    return _safe_float(history.iloc[-1]["close"], None)
+
+
 def _neutral_market_snapshot(symbol: str, as_of=None, issues=None, warnings=None, provider="YFINANCE"):
     """
     Purpose:
@@ -446,6 +471,8 @@ def build_global_market_snapshot(symbol: str, *, as_of=None) -> dict:
     market_inputs["gold_change_24h"] = _daily_change_pct(histories.get("gold"))
     market_inputs["copper_change_24h"] = _daily_change_pct(histories.get("copper"))
     market_inputs["vix_change_24h"] = _daily_change_pct(histories.get("vix"))
+    market_inputs["india_vix_change_24h"] = _daily_change_pct(histories.get("india_vix"))
+    market_inputs["india_vix_level"] = _latest_close(histories.get("india_vix"))
     market_inputs["sp500_change_24h"] = _daily_change_pct(histories.get("sp500"))
     market_inputs["nasdaq_change_24h"] = _daily_change_pct(histories.get("nasdaq"))
     market_inputs["us10y_change_bp"] = _us10y_change_bp(histories.get("us10y"))

@@ -22,6 +22,7 @@ GLOBAL_MARKET_TICKERS = {
     "gold": "GC=F",
     "copper": "HG=F",
     "vix": "^VIX",
+    "india_vix": "^INDIAVIX",
     "sp500": "^GSPC",
     "nasdaq": "^IXIC",
     "us10y": "^TNX",

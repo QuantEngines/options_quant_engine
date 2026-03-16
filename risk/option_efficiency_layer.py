@@ -412,6 +412,8 @@ def score_option_efficiency_candidate(
     spot,
     direction,
     atm_iv=None,
+    india_vix_level=None,
+    india_vix_change_24h=None,
     selected_expiry=None,
     valuation_time=None,
     hybrid_move_probability=None,
@@ -439,6 +441,10 @@ def score_option_efficiency_candidate(
         spot (Any): Input associated with spot.
         direction (Any): Trade direction label associated with the current signal, typically `CALL` or `PUT`.
         atm_iv (Any): Input associated with ATM IV.
+        india_vix_level (Any): India VIX level carried from the market snapshot
+            for local-volatility fallback use.
+        india_vix_change_24h (Any): One-day India VIX change used for
+            diagnostics alongside contract-level efficiency heuristics.
         selected_expiry (Any): Expiry associated with the contract referenced by the signal.
         valuation_time (Any): Input associated with valuation time.
         hybrid_move_probability (Any): Input associated with hybrid move probability.
@@ -464,6 +470,8 @@ def score_option_efficiency_candidate(
     state = build_option_efficiency_state(
         spot=spot,
         atm_iv=atm_iv,
+        india_vix_level=india_vix_level,
+        india_vix_change_24h=india_vix_change_24h,
         fallback_iv=row.get("impliedVolatility", row.get("IV")),
         expiry_value=row.get("EXPIRY_DT", selected_expiry),
         valuation_time=valuation_time,

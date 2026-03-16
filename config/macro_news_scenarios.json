@@ -139,7 +139,7 @@
     "events": [],
     "headlines": [
       {
-        "timestamp": "2026-03-18T09:00:00+05:30",
+        "timestamp": "2026-03-18T07:00:00+05:30",
         "source": "SCENARIO_FEED",
         "headline": "RBI says inflation path remains manageable",
         "url_or_identifier": "scenario-stale-001",

@@ -290,6 +290,8 @@ def build_option_efficiency_features(
     *,
     spot=None,
     atm_iv=None,
+    india_vix_level=None,
+    india_vix_change_24h=None,
     fallback_iv=None,
     expiry_value=None,
     valuation_time=None,
@@ -328,6 +330,10 @@ def build_option_efficiency_features(
     Inputs:
         spot (Any): Input associated with spot.
         atm_iv (Any): Input associated with ATM IV.
+        india_vix_level (Any): India VIX level used as a local-volatility
+            fallback when the option chain lacks a stable ATM IV.
+        india_vix_change_24h (Any): One-day India VIX change carried through as
+            local volatility context for diagnostics.
         fallback_iv (Any): Input associated with fallback IV.
         expiry_value (Any): Input associated with expiry value.
         valuation_time (Any): Input associated with valuation time.
@@ -366,6 +372,10 @@ def build_option_efficiency_features(
     holding_context = _holding_context(global_risk_state, holding_profile)
     iv_decimal, iv_unit = _normalize_iv(atm_iv)
     iv_source = "ATM_IV" if iv_decimal is not None else None
+    if iv_decimal is None:
+        iv_decimal, iv_unit = _normalize_iv(india_vix_level)
+        if iv_decimal is not None:
+            iv_source = "INDIA_VIX"
     if iv_decimal is None:
         iv_decimal, iv_unit = _normalize_iv(fallback_iv)
         if iv_decimal is not None:
@@ -450,6 +460,8 @@ def build_option_efficiency_features(
     warnings = []
     if neutral_fallback:
         warnings.append("expected_move_unavailable")
+    elif iv_source == "INDIA_VIX":
+        warnings.append("india_vix_used")
     elif iv_source == "FALLBACK_IV":
         warnings.append("fallback_iv_used")
 
@@ -463,6 +475,8 @@ def build_option_efficiency_features(
         "stop_loss": _safe_float(stop_loss, None),
         "trade_strength": _safe_float(trade_strength, None),
         "atm_iv": _safe_float(atm_iv, None),
+        "india_vix_level": _safe_float(india_vix_level, None),
+        "india_vix_change_24h": _safe_float(india_vix_change_24h, None),
         "fallback_iv": _safe_float(fallback_iv, None),
         "iv_source": iv_source,
         "iv_unit": iv_unit,

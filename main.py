@@ -498,6 +498,8 @@ def print_dealer_dashboard(summary: dict):
         ("Macro Regime", "macro_regime"),
         ("Macro Sentiment", "macro_sentiment_score"),
         ("Vol Shock Score", "volatility_shock_score"),
+        ("India VIX Level", "india_vix_level"),
+        ("India VIX Change 24h", "india_vix_change_24h"),
         ("News Confidence", "news_confidence_score"),
         ("Headline Velocity", "headline_velocity"),
         ("Macro Adj Score", "macro_adjustment_score"),
@@ -563,6 +565,11 @@ def print_signal_summary(trade):
         "stop_loss": trade.get("stop_loss"),
         "trade_strength": trade.get("trade_strength"),
         "signal_quality": trade.get("signal_quality"),
+        "decision_classification": trade.get("decision_classification"),
+        "setup_state": trade.get("setup_state"),
+        "setup_quality": trade.get("setup_quality"),
+        "watchlist_flag": trade.get("watchlist_flag"),
+        "watchlist_reason": trade.get("watchlist_reason"),
         "hybrid_move_probability": trade.get("hybrid_move_probability"),
         "flow_signal": trade.get("final_flow_signal"),
         "gamma_regime": trade.get("gamma_regime"),
@@ -607,6 +614,24 @@ def print_signal_summary(trade):
         "message": trade.get("message"),
     }
     print_key_value_block("QUANT TRADE SIGNAL", compact)
+
+    explainability = {
+        "decision_classification": trade.get("decision_classification"),
+        "no_trade_reason_code": trade.get("no_trade_reason_code"),
+        "no_trade_reason": trade.get("no_trade_reason"),
+        "missing_signal_requirements": trade.get("missing_signal_requirements"),
+        "setup_upgrade_conditions": trade.get("setup_upgrade_conditions"),
+        "likely_next_trigger": trade.get("likely_next_trigger"),
+        "watchlist_flag": trade.get("watchlist_flag"),
+        "watchlist_reason": trade.get("watchlist_reason"),
+        "option_efficiency_status": trade.get("option_efficiency_status"),
+        "option_efficiency_reason": trade.get("option_efficiency_reason"),
+        "global_risk_status": trade.get("global_risk_status"),
+        "global_risk_reason": trade.get("global_risk_reason"),
+        "macro_news_status": trade.get("macro_news_status"),
+        "macro_news_reason": trade.get("macro_news_reason"),
+    }
+    print_key_value_block("EXPLAINABILITY", explainability)
 
 
 def print_ranked_candidates_table(candidates, expiry=None):
@@ -694,6 +719,14 @@ def print_diagnostics(trade):
         "option_efficiency_reasons",
         "option_efficiency_diagnostics",
         "option_efficiency_features",
+        "no_trade_reason_details",
+        "blocked_by",
+        "missing_confirmations",
+        "signal_promotion_requirements",
+        "setup_upgrade_path",
+        "watchlist_trigger_levels",
+        "directional_resolution_needed",
+        "explainability",
         "scoring_breakdown",
     ]
 
@@ -804,7 +837,11 @@ def main():
             global_risk_state = result.get("global_risk_state", {})
             option_chain_validation = result.get("option_chain_validation", {})
             option_chain_frame = result.get("option_chain_frame")
-            trade = result.get("execution_trade") or result.get("trade")
+            full_trade = result.get("trade") or result.get("trade_audit")
+            execution_trade = result.get("execution_trade")
+            if execution_trade is None and isinstance(full_trade, dict):
+                execution_trade = full_trade.get("execution_trade")
+            trade_for_display = full_trade or execution_trade
 
             if not args.replay and not saved_one_spot_snapshot:
                 try:
@@ -871,7 +908,9 @@ def main():
                 "data_available": global_market_snapshot.get("data_available"),
                 "stale": global_market_snapshot.get("stale"),
                 "oil_change_24h": global_market_snapshot.get("market_inputs", {}).get("oil_change_24h"),
-                "vix_change_24h": global_market_snapshot.get("market_inputs", {}).get("vix_change_24h"),
+                "US VIX Change 24h": global_market_snapshot.get("market_inputs", {}).get("vix_change_24h"),
+                "India VIX Level": global_market_snapshot.get("market_inputs", {}).get("india_vix_level"),
+                "India VIX Change 24h": global_market_snapshot.get("market_inputs", {}).get("india_vix_change_24h"),
                 "sp500_change_24h": global_market_snapshot.get("market_inputs", {}).get("sp500_change_24h"),
                 "us10y_change_bp": global_market_snapshot.get("market_inputs", {}).get("us10y_change_bp"),
                 "usdinr_change_24h": global_market_snapshot.get("market_inputs", {}).get("usdinr_change_24h"),
@@ -921,7 +960,7 @@ def main():
                     print(f"Could not save option chain snapshot: {save_err}")
                 saved_one_option_chain_snapshot = True
 
-            if trade:
+            if trade_for_display:
                 signal_capture_status = result.get("signal_capture_status", "SKIPPED")
                 if signal_capture_status == "CAPTURED":
                     print(f"\n{'signal_capture':26}: CAPTURED -> {result.get('signal_dataset_path')}")
@@ -933,9 +972,9 @@ def main():
                 elif signal_capture_status.startswith("SKIPPED_POLICY:"):
                     print(f"\n{'signal_capture':26}: {signal_capture_status}")
 
-                print_trader_view(trade)
+                print_trader_view(execution_trade or trade_for_display)
 
-                dashboard_for_print = dict(trade)
+                dashboard_for_print = dict(trade_for_display)
                 dashboard_for_print.update({
                     "spot": spot_summary.get("spot"),
                     "spot_timestamp": spot_summary.get("timestamp"),
@@ -955,8 +994,8 @@ def main():
 
                 print_dealer_dashboard(dashboard_for_print)
 
-                print_signal_summary(trade)
-                print_diagnostics(trade)
+                print_signal_summary(trade_for_display)
+                print_diagnostics(trade_for_display)
             else:
                 print("\nNo trade signal")
                 print_key_value_block("ENGINE STATUS", {"message": "No trade payload returned"})
