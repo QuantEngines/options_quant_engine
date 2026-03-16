@@ -9,3 +9,4 @@ kiteconnect
 breeze-connect
 python-dotenv
 streamlit
+openai

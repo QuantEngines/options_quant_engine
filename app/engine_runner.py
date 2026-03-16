@@ -13,6 +13,8 @@ Key Outputs:
 Downstream Usage:
     Consumed by operators, replay tooling, and research capture workflows.
 """
+from __future__ import annotations
+
 import os
 from contextlib import nullcontext
 from typing import Dict, Optional
@@ -27,6 +29,7 @@ from app.runtime_sinks import (
 )
 from config.settings import STOP_LOSS_PERCENT, TARGET_PROFIT_PERCENT
 from data.spot_downloader import get_spot_snapshot, save_spot_snapshot, validate_spot_snapshot
+from data.spot_history import append_spot_observation
 from data.data_source_router import DataSourceRouter
 from data.replay_loader import (
     latest_replay_snapshot_paths,
@@ -1194,6 +1197,7 @@ def run_engine_snapshot(
     use_promotion_state: bool = False,
     signal_capture_sink: Optional[SignalCaptureSink] = None,
     shadow_evaluation_sink: Optional[ShadowEvaluationSink] = None,
+    global_market_snapshot: Optional[dict] = None,
     target_profit_percent: float = TARGET_PROFIT_PERCENT,
     stop_loss_percent: float = STOP_LOSS_PERCENT,
 ) -> Dict[str, object]:
@@ -1286,6 +1290,17 @@ def run_engine_snapshot(
             source=source,
         )
 
+        # Accumulate local spot history for outcome enrichment fallback
+        if not replay_mode:
+            try:
+                append_spot_observation(
+                    symbol,
+                    spot_snapshot.get("spot"),
+                    spot_snapshot.get("timestamp"),
+                )
+            except Exception:
+                pass  # best-effort; never block engine on history logging
+
         return run_preloaded_engine_snapshot(
             symbol=symbol,
             mode=mode,
@@ -1309,6 +1324,7 @@ def run_engine_snapshot(
             shadow_evaluation_sink=shadow_evaluation_sink,
             replay_paths=replay_paths,
             saved_paths=saved_paths,
+            global_market_snapshot=global_market_snapshot,
             target_profit_percent=target_profit_percent,
             stop_loss_percent=stop_loss_percent,
         )

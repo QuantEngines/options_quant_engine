@@ -26,6 +26,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.engine_runner import run_preloaded_engine_snapshot
+from config.settings import GLOBAL_MARKET_DATA_ENABLED
 from data.expiry_resolver import filter_option_chain_by_expiry, resolve_selected_expiry
 from data.replay_loader import load_option_chain_snapshot, load_spot_snapshot
 
@@ -123,27 +124,8 @@ def _find_spot_snapshots(symbol: str, replay_dir: str):
     return sorted(directory.glob(f"{symbol.upper()}_spot_snapshot_*.json"))
 
 
-def _replay_global_market_snapshot(symbol: str, spot_snapshot: dict) -> dict:
-    """
-    Purpose:
-        Provide a neutral global-market snapshot for offline replay analysis.
-
-    Context:
-        Internal helper used when archived spot and option-chain snapshots are
-        re-evaluated through the shared runtime orchestration path.
-
-    Inputs:
-        symbol (str): Underlying symbol or index identifier.
-        spot_snapshot (dict): Spot snapshot associated with the replay case.
-
-    Returns:
-        dict: Neutral global-market snapshot shaped like the live payload.
-
-    Notes:
-        Replay regression is intended to measure signal behavior from archived
-        inputs, so it avoids blending in present-day cross-asset market data.
-    """
-
+def _neutral_replay_snapshot(symbol: str, spot_snapshot: dict) -> dict:
+    """Return a neutral global-market snapshot when cross-asset data is unavailable."""
     return {
         "symbol": str(symbol or "").upper().strip(),
         "provider": "REPLAY_NEUTRAL",
@@ -156,6 +138,44 @@ def _replay_global_market_snapshot(symbol: str, spot_snapshot: dict) -> dict:
         "lookback_days": None,
         "market_inputs": {},
     }
+
+
+def _replay_global_market_snapshot(symbol: str, spot_snapshot: dict, *, _cache=None) -> dict:
+    """
+    Build a global-market snapshot for replay regression.
+
+    Attempts to fetch real cross-asset data via yfinance (when enabled),
+    caching per date to avoid redundant API calls.  Falls back to a
+    neutral snapshot when market data is unavailable.
+    """
+    as_of = spot_snapshot.get("timestamp")
+    try:
+        import pandas as pd
+
+        ts = pd.Timestamp(as_of)
+        date_key = str(ts.date())
+    except Exception:
+        date_key = str(as_of)[:10]
+
+    cache_key = (str(symbol or "").upper().strip(), date_key)
+
+    if _cache is not None and cache_key in _cache:
+        return _cache[cache_key]
+
+    if GLOBAL_MARKET_DATA_ENABLED:
+        try:
+            from data.global_market_snapshot import build_global_market_snapshot
+
+            snapshot = build_global_market_snapshot(symbol, as_of=as_of)
+        except Exception:
+            snapshot = _neutral_replay_snapshot(symbol, spot_snapshot)
+    else:
+        snapshot = _neutral_replay_snapshot(symbol, spot_snapshot)
+
+    if _cache is not None:
+        _cache[cache_key] = snapshot
+
+    return snapshot
 
 
 def _find_chain_snapshots(symbol: str, source: str, replay_dir: str):
@@ -284,6 +304,8 @@ def run_regression(symbol: str, source: str, replay_dir: str, limit: int | None 
     results = []
     bucket_counts = Counter()
     source_counts = Counter()
+    global_market_cache = {}
+    previous_chain = None
 
     for chain_path in chain_paths:
         spot_path = _nearest_spot_snapshot(chain_path, spot_paths)
@@ -301,17 +323,19 @@ def run_regression(symbol: str, source: str, replay_dir: str, limit: int | None 
             source=source.upper().strip(),
             spot_snapshot=spot_snapshot,
             option_chain=option_chain,
-            previous_chain=None,
+            previous_chain=previous_chain,
             apply_budget_constraint=False,
             requested_lots=1,
             lot_size=1,
             max_capital=float("inf"),
             capture_signal_evaluation=False,
             enable_shadow_logging=False,
-            global_market_snapshot=_replay_global_market_snapshot(symbol, spot_snapshot),
+            global_market_snapshot=_replay_global_market_snapshot(symbol, spot_snapshot, _cache=global_market_cache),
         )
         if not signal_result.get("ok", False):
             raise ValueError(signal_result.get("error") or "Replay snapshot evaluation failed")
+
+        previous_chain = option_chain
 
         trade = signal_result.get("execution_trade") or signal_result.get("trade")
 

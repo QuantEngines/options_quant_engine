@@ -26,6 +26,7 @@ SIGNAL_EVALUATION_DIRECTION_WEIGHTS = {
     "correct_15m": 1.2,
     "correct_30m": 1.1,
     "correct_60m": 1.0,
+    "correct_120m": 0.9,
     "correct_session_close": 1.0,
 }
 
@@ -34,6 +35,7 @@ SIGNAL_EVALUATION_TIMING_WEIGHTS = {
     "realized_return_15m": 1.2,
     "realized_return_30m": 1.0,
     "realized_return_60m": 0.8,
+    "realized_return_120m": 0.6,
 }
 
 SIGNAL_EVALUATION_THRESHOLDS = {

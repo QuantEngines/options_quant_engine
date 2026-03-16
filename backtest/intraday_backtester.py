@@ -23,6 +23,7 @@ from config.settings import (
     LOT_SIZE,
     MAX_CAPITAL_PER_TRADE,
     NUMBER_OF_LOTS,
+    GLOBAL_MARKET_DATA_ENABLED,
     TARGET_PROFIT_PERCENT,
     STOP_LOSS_PERCENT,
 )
@@ -127,28 +128,8 @@ def _build_backtest_spot_snapshot(symbol, ts, snapshot_chain, previous_chain=Non
     }
 
 
-def _backtest_global_market_snapshot(symbol, ts):
-    """
-    Purpose:
-        Provide a neutral global-market snapshot for historical parity runs.
-
-    Context:
-        Internal helper used when backtests reuse the live orchestration path
-        but do not have point-in-time cross-asset data aligned with the replayed
-        option-chain bar.
-
-    Inputs:
-        symbol (Any): Underlying symbol or index identifier.
-        ts (Any): Timestamp associated with the current historical bar.
-
-    Returns:
-        dict: Neutral global-market snapshot shaped like the live payload.
-
-    Notes:
-        Using an explicit neutral snapshot is preferable to implicitly pulling
-        present-day cross-asset data into historical evaluations.
-    """
-
+def _neutral_backtest_snapshot(symbol, ts):
+    """Return a neutral global-market snapshot when cross-asset data is unavailable."""
     timestamp = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
     return {
         "symbol": str(symbol or "").upper().strip(),
@@ -162,6 +143,36 @@ def _backtest_global_market_snapshot(symbol, ts):
         "lookback_days": None,
         "market_inputs": {},
     }
+
+
+def _backtest_global_market_snapshot(symbol, ts, *, _cache=None):
+    """
+    Build a global-market snapshot for backtest evaluation.
+
+    Attempts to fetch real cross-asset data via yfinance (when enabled),
+    caching per date to avoid redundant API calls.  Falls back to a
+    neutral snapshot when market data is unavailable.
+    """
+    date_key = ts.date() if hasattr(ts, "date") else str(ts)[:10]
+    cache_key = (str(symbol or "").upper().strip(), date_key)
+
+    if _cache is not None and cache_key in _cache:
+        return _cache[cache_key]
+
+    if GLOBAL_MARKET_DATA_ENABLED:
+        try:
+            from data.global_market_snapshot import build_global_market_snapshot
+
+            snapshot = build_global_market_snapshot(symbol, as_of=ts)
+        except Exception:
+            snapshot = _neutral_backtest_snapshot(symbol, ts)
+    else:
+        snapshot = _neutral_backtest_snapshot(symbol, ts)
+
+    if _cache is not None:
+        _cache[cache_key] = snapshot
+
+    return snapshot
 
 
 def run_intraday_backtest(
@@ -211,6 +222,7 @@ def run_intraday_backtest(
     trade_log = []
     previous_chain = None
     open_trade = None
+    global_market_cache = {}
 
     last_direction = None
     direction_count = 0
@@ -273,7 +285,7 @@ def run_intraday_backtest(
             max_capital=MAX_CAPITAL_PER_TRADE,
             capture_signal_evaluation=False,
             enable_shadow_logging=False,
-            global_market_snapshot=_backtest_global_market_snapshot(symbol, ts),
+            global_market_snapshot=_backtest_global_market_snapshot(symbol, ts, _cache=global_market_cache),
             target_profit_percent=target_profit_percent,
             stop_loss_percent=stop_loss_percent,
         )

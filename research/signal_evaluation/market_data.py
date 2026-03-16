@@ -15,12 +15,18 @@ Downstream Usage:
 """
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 import yfinance as yf
 
 from config.market_data_policy import IST_TIMEZONE, normalize_symbol_to_yfinance
+from data.spot_history import load_spot_history
+
+logger = logging.getLogger(__name__)
 
 
 def coerce_market_timestamp(value) -> pd.Timestamp:
@@ -90,6 +96,7 @@ def fetch_realized_spot_history(symbol: str, *, start_ts, end_ts, interval: str 
 
     Notes:
         Prices are fetched through `yfinance`, so this is a research convenience path rather than a production market-data feed.
+        Falls back to the local spot history store when yfinance returns no data.
     """
     start_ts = coerce_market_timestamp(start_ts)
     end_ts = coerce_market_timestamp(end_ts)
@@ -102,15 +109,25 @@ def fetch_realized_spot_history(symbol: str, *, start_ts, end_ts, interval: str 
         auto_adjust=False,
     )
 
-    if frame is None or frame.empty:
-        return pd.DataFrame(columns=["timestamp", "spot"])
+    if frame is not None and not frame.empty:
+        history = frame.reset_index()
+        ts_col = "Datetime" if "Datetime" in history.columns else "Date"
+        history["timestamp"] = history[ts_col].map(coerce_market_timestamp)
+        history["spot"] = pd.to_numeric(history.get("Close"), errors="coerce")
+        history = history.dropna(subset=["timestamp", "spot"])
+        return history[["timestamp", "spot"]].reset_index(drop=True)
 
-    history = frame.reset_index()
-    ts_col = "Datetime" if "Datetime" in history.columns else "Date"
-    history["timestamp"] = history[ts_col].map(coerce_market_timestamp)
-    history["spot"] = pd.to_numeric(history.get("Close"), errors="coerce")
-    history = history.dropna(subset=["timestamp", "spot"])
-    return history[["timestamp", "spot"]].reset_index(drop=True)
+    # Fallback: local spot history store
+    logger.info("yfinance returned no data for %s; falling back to local spot history", symbol)
+    local = load_spot_history(symbol, start_ts=start_ts, end_ts=end_ts)
+    if not local.empty:
+        return local
+
+    # Last-resort fallback: stitch saved spot snapshots from debug_samples
+    stitched = _stitch_saved_spot_snapshots(symbol, start_ts=start_ts, end_ts=end_ts)
+    if not stitched.empty:
+        logger.info("Stitched %d spot observations from saved snapshots for %s", len(stitched), symbol)
+    return stitched
 
 
 def slice_realized_spot_history(history: pd.DataFrame, *, signal_timestamp, as_of=None) -> pd.DataFrame:
@@ -236,3 +253,41 @@ def build_realized_spot_path_cache(
             )
 
     return cache
+
+
+def _stitch_saved_spot_snapshots(
+    symbol: str,
+    *,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    snapshot_dir: str | Path = "debug_samples",
+) -> pd.DataFrame:
+    """Build a realized spot path by reading saved point-in-time JSON snapshots.
+
+    This is a last-resort fallback when both yfinance and the local spot history
+    store have no data.  Each snapshot file contains a single observation.
+    """
+    snap_dir = Path(snapshot_dir)
+    if not snap_dir.exists():
+        return pd.DataFrame(columns=["timestamp", "spot"])
+
+    prefix = symbol.upper()
+    rows: list[dict] = []
+    for path in sorted(snap_dir.glob(f"{prefix}_spot_snapshot_*.json")):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            ts = coerce_market_timestamp(data["timestamp"])
+            spot = float(data["spot"])
+            if start_ts <= ts <= end_ts:
+                rows.append({"timestamp": ts, "spot": round(spot, 4)})
+        except Exception:
+            continue
+
+    if not rows:
+        return pd.DataFrame(columns=["timestamp", "spot"])
+
+    df = pd.DataFrame(rows)
+    df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    return df[["timestamp", "spot"]]
+
