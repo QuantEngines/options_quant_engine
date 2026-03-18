@@ -272,7 +272,7 @@ options_quant_engine/
 ├── news/               # deterministic news classification
 ├── research/           # signal evaluation, decision policies, ML evaluation, parameter-tuning artifacts
 │   ├── decision_policy/# decision-policy definitions, engine, config, evaluation
-│   ├── ml_evaluation/  # robustness analysis, rank-gate sizing, predictor comparison
+│   ├── ml_evaluation/  # robustness analysis, rank-gate sizing, predictor comparison, EV-based sizing research
 │   ├── ml_models/      # GBT ranking + LogReg calibration research models
 │   └── signal_evaluation/ # canonical signal dataset, evaluator, daily reports
 ├── risk/               # overlay layers and regime models
@@ -341,10 +341,10 @@ variable is not set.
 ### Prediction Method
 
 ```bash
-OQE_PREDICTION_METHOD=blended   # blended | pure_ml | pure_rule | research_dual_model | research_decision_policy
+OQE_PREDICTION_METHOD=blended   # blended | pure_ml | pure_rule | research_dual_model | research_decision_policy | ev_sizing
 ```
 
-Set to `blended` (default) for the production rule + ML weighted blend. Set to `pure_ml` to use only the ML leg, `pure_rule` for only the rule-based heuristic, `research_dual_model` to use the research GBT ranking + LogReg calibration dual-model, or `research_decision_policy` to use the decision-policy layer that applies ALLOW/BLOCK/DOWNGRADE policies over the dual-model output. The backtester also accepts a per-run `prediction_method` parameter that overrides this setting for that run only.
+Set to `blended` (default) for the production rule + ML weighted blend. Set to `pure_ml` to use only the ML leg, `pure_rule` for only the rule-based heuristic, `research_dual_model` to use the research GBT ranking + LogReg calibration dual-model, `research_decision_policy` to use the decision-policy layer that applies ALLOW/BLOCK/DOWNGRADE policies over the dual-model output, or `ev_sizing` to use expected-value-based sizing from conditional return tables (blocks negative-EV signals, scales positive-EV proportionally). The backtester also accepts a per-run `prediction_method` parameter that overrides this setting for that run only.
 
 ### Common Provider Settings
 
@@ -538,6 +538,7 @@ The probability stack uses a pluggable predictor architecture under `engine/pred
 | `pure_rule` | Rule leg only — ML leg suppressed |
 | `research_dual_model` | Research dual-model — GBT ranking + LogReg calibration |
 | `research_decision_policy` | Decision-policy layer — dual-model + ALLOW/BLOCK/DOWNGRADE policies |
+| `ev_sizing` | EV-based sizing — uses conditional return tables to compute per-signal expected value; blocks negative-EV, scales positive-EV proportionally |
 
 ### Switching Prediction Method
 
@@ -573,6 +574,7 @@ with prediction_method_override("research_dual_model"):
 - `engine/predictors/builtin_predictors.py` — built-in predictors (blended, pure_ml, pure_rule)
 - `engine/predictors/research_predictor.py` — research dual-model predictor (GBT + LogReg)
 - `engine/predictors/decision_policy_predictor.py` — decision-policy predictor (dual-model + policy overlay)
+- `engine/predictors/ev_sizing_predictor.py` — EV-based sizing predictor (conditional return tables + expected value)
 - `research/decision_policy/` — policy definitions, engine, evaluation, and configuration
 
 ### Registering Custom Predictors
