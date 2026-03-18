@@ -58,6 +58,7 @@ def compute_confirmation_filters(
     gamma_event=None,
     hybrid_move_probability=None,
     spot_vs_flip=None,
+    gamma_regime=None,
 ):
     """
     Returns a dict:
@@ -79,6 +80,7 @@ def compute_confirmation_filters(
         "gamma_event_confirmation_score": 0,
         "move_probability_confirmation_score": 0,
         "flip_alignment_score": 0,
+        "flip_zone_gamma_score": 0,
     }
 
     reasons = []
@@ -223,6 +225,17 @@ def compute_confirmation_filters(
         elif spot_vs_flip == "ABOVE_FLIP":
             breakdown["flip_alignment_score"] = cfg["flip_alignment_conflict"]
             reasons.append("above_flip_soft_conflict_put")
+
+    # 9) Gamma-regime-aware flip-zone penalty
+    # When spot is pinned at the flip and gamma structure is unfavorable,
+    # the engine has reduced structural edge regardless of direction.
+    if spot_vs_flip == "AT_FLIP":
+        if gamma_regime in ("NEGATIVE_GAMMA", "SHORT_GAMMA_ZONE"):
+            breakdown["flip_zone_gamma_score"] = cfg.get("flip_zone_gamma_penalty_negative", -3)
+            reasons.append("at_flip_negative_gamma_structural_conflict")
+        elif gamma_regime == "NEUTRAL_GAMMA":
+            breakdown["flip_zone_gamma_score"] = cfg.get("flip_zone_gamma_penalty_neutral", -2)
+            reasons.append("at_flip_neutral_gamma_reduced_edge")
 
     total = sum(breakdown.values())
 

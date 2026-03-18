@@ -1618,12 +1618,14 @@ def _summarize_alpha_decay(day_df: pd.DataFrame) -> str:
     dir_rows = _directional_rows(day_df)
     if dir_rows.empty:
         return "Insufficient data for alpha decay analysis."
-    peak_label, peak_val = "", -1e9
+    peak_label, peak_val = "", None
     for label, _, signed_col, _ in HORIZON_DEFS:
         s = _numeric(dir_rows.get(signed_col, pd.Series()))
         m = s.mean()
-        if pd.notna(m) and m > peak_val:
+        if pd.notna(m) and (peak_val is None or m > peak_val):
             peak_val, peak_label = m, label
+    if peak_val is None:
+        return "Insufficient horizon return data for alpha decay analysis."
     close_val = _numeric(dir_rows.get("signed_return_session_close_bps", pd.Series())).mean()
     reversal = "reversed to negative" if pd.notna(close_val) and close_val < 0 and peak_val > 0 else "remained positive"
     if pd.notna(close_val) and close_val < 0 and peak_val > 0:
@@ -2157,14 +2159,14 @@ def _summarize_exit_horizon(day_df: pd.DataFrame) -> str:
     dir_rows = _directional_rows(day_df)
     if dir_rows.empty:
         return "No data for exit horizon analysis."
-    best_label, best_val = "", -1e9
+    best_label, best_val = "", None
     for label, _, signed_col, _ in HORIZON_DEFS:
         s = _numeric(dir_rows.get(signed_col, pd.Series()))
         m = s.mean()
-        if pd.notna(m) and m > best_val:
+        if pd.notna(m) and (best_val is None or m > best_val):
             best_val, best_label = m, label
     close_val = _numeric(dir_rows.get("signed_return_session_close_bps", pd.Series())).mean()
-    if best_val > 0:
+    if best_val is not None and best_val > 0:
         if pd.notna(close_val) and close_val < best_val * 0.5:
             return (
                 f"Peak alpha at {best_label} ({_r(best_val, 2)} bps) decays significantly by close. "

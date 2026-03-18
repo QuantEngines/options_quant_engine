@@ -228,6 +228,22 @@ That order matters:
 - gamma-vol and dealer pressure handle convexity and path amplification
 - option efficiency asks whether the option itself is worth buying relative to the expected move
 
+### Gamma Flip-Zone Awareness
+
+The signal pipeline includes structural awareness of the gamma flip zone — the price level where dealer gamma exposure crosses zero. When spot sits at or near the flip, the microstructure becomes unpredictable: hedging flows can amplify moves in either direction, and the engine has no directional edge.
+
+This awareness is applied in two places:
+
+1. **Trade strength dampener** (`strategy/trade_strength.py`): a `flip_zone_dampener_score` component applies a configurable penalty when `spot_vs_flip == AT_FLIP` and the gamma regime is unfavorable (NEGATIVE_GAMMA: -12 pts, NEUTRAL_GAMMA: -8 pts). Positive gamma at the flip gets no penalty because mean-reversion support exists.
+
+2. **Confirmation filter** (`strategy/confirmation_filters.py`): a `flip_zone_gamma_score` component penalizes the confirmation total when the same AT_FLIP + non-positive gamma condition holds (-3 pts for negative gamma, -2 pts for neutral). This can degrade the confirmation status from CONFIRMED to MIXED or CONFLICT.
+
+3. **Direction vote breadth** (`engine/trading_support/signal_state.py`): the signal state now includes `direction_vote_count` — the number of independent vote sources behind the chosen direction. A thin base (e.g., 2 sources like FLOW+CHARM) is visible to downstream consumers for sizing or urgency decisions.
+
+The net effect: the engine continues to produce signals when the market moves through the flip zone, but the trade suggestions reflect the structural uncertainty. A typical AT_FLIP + neutral/negative gamma signal degrades from TRADE to WATCHLIST territory, which is the correct behavior — observe but don't act until the market resolves directionally.
+
+All flip-zone weights are tunable via `TRADE_STRENGTH_WEIGHTS` and `CONFIRMATION_FILTER_CONFIG` in `config/signal_policy.py` and are automatically registered in the parameter tuning registry.
+
 ### Research Flow
 
 1. each captured signal is assigned a stable `signal_id`

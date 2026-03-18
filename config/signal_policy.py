@@ -61,6 +61,8 @@ TRADE_STRENGTH_WEIGHTS = {
     "vacuum_watch_bonus": 4,
     "intraday_vol_expansion_bonus": 5,
     "intraday_gamma_decrease_bonus": 3,
+    "flip_zone_negative_gamma_penalty": -12,
+    "flip_zone_neutral_gamma_penalty": -8,
 }
 
 CONSENSUS_SCORE_CONFIG = {
@@ -107,6 +109,8 @@ CONFIRMATION_FILTER_CONFIG = {
     "move_probability_conflict_score": -2,
     "flip_alignment_support": 2,
     "flip_alignment_conflict": -1,
+    "flip_zone_gamma_penalty_negative": -3,
+    "flip_zone_gamma_penalty_neutral": -2,
     "veto_hard_conflicts": 3,
     "veto_move_probability_ceiling": 0.55,
 }

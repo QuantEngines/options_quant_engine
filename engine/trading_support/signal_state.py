@@ -543,6 +543,7 @@ def _compute_signal_state(
         return {
             "direction": None,
             "direction_source": None,
+            "direction_vote_count": 0,
             "trade_strength": 0,
             "scoring_breakdown": empty_scoring_breakdown(),
             "confirmation": empty_confirmation_state(),
@@ -586,11 +587,19 @@ def _compute_signal_state(
         gamma_event=market_state["gamma_event"],
         hybrid_move_probability=probability_state["hybrid_move_probability"],
         spot_vs_flip=market_state["spot_vs_flip"],
+        gamma_regime=market_state["gamma_regime"],
     )
+
+    # Direction vote count measures the breadth of conviction behind the
+    # chosen direction.  A thin base (e.g. 2 sources) indicates that fewer
+    # independent market mechanisms are aligned, which downstream consumers
+    # can use to temper sizing or urgency.
+    direction_vote_count = len(direction_source.split("+")) if direction_source else 0
 
     return {
         "direction": direction,
         "direction_source": direction_source,
+        "direction_vote_count": direction_vote_count,
         "trade_strength": trade_strength,
         "scoring_breakdown": scoring_breakdown,
         "confirmation": confirmation,

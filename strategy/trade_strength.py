@@ -164,6 +164,29 @@ def _spot_vs_flip_score(spot_vs_flip, direction):
     return 0
 
 
+def _flip_zone_dampener_score(spot_vs_flip, gamma_regime):
+    """Apply a trade-strength penalty when spot sits at the gamma flip zone
+    and the gamma regime offers no structural advantage.
+
+    Negative or short-gamma at the flip means the dealer-hedging flow is
+    unpredictable and the engine has no directional edge.  Neutral gamma is
+    slightly better but still weak.  Positive gamma at the flip provides
+    mean-reversion support, so no penalty is applied.
+    """
+    if spot_vs_flip != "AT_FLIP":
+        return 0
+
+    weights = get_trade_strength_weights()
+
+    if gamma_regime in ("NEGATIVE_GAMMA", "SHORT_GAMMA_ZONE"):
+        return weights.get("flip_zone_negative_gamma_penalty", -12)
+
+    if gamma_regime == "NEUTRAL_GAMMA":
+        return weights.get("flip_zone_neutral_gamma_penalty", -8)
+
+    return 0
+
+
 def _flow_score(flow_signal_value, direction):
     """
     Purpose:
@@ -472,6 +495,7 @@ def compute_trade_strength(
         "liquidity_map_score": 0,
         "move_model_score": 0,
         "directional_consensus_score": 0,
+        "flip_zone_dampener_score": 0,
     }
 
     breakdown["flow_signal_score"] = _flow_score(flow_signal_value, direction)
@@ -546,6 +570,11 @@ def compute_trade_strength(
         smart_money_signal_value,
         hedging_bias,
         spot_vs_flip,
+    )
+
+    breakdown["flip_zone_dampener_score"] = _flip_zone_dampener_score(
+        spot_vs_flip,
+        gamma_regime,
     )
 
     total_score = sum(breakdown.values())

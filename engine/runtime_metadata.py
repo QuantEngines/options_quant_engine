@@ -274,6 +274,7 @@ def empty_scoring_breakdown():
         "liquidity_map_score": 0,
         "move_model_score": 0,
         "directional_consensus_score": 0,
+        "flip_zone_dampener_score": 0,
         "global_risk_adjustment_score": 0,
         "gamma_vol_adjustment_score": 0,
         "dealer_pressure_adjustment_score": 0,
@@ -312,5 +313,6 @@ def empty_confirmation_state():
             "gamma_event_confirmation_score": 0,
             "move_probability_confirmation_score": 0,
             "flip_alignment_score": 0,
+            "flip_zone_gamma_score": 0,
         },
     }
