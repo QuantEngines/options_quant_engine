@@ -16,6 +16,33 @@ Downstream Usage:
 
 import numpy as np
 
+from models.expanded_feature_builder import (
+    FEATURE_NAMES as EXPANDED_FEATURE_NAMES,
+    N_FEATURES as N_EXPANDED_FEATURES,
+    extract_features as _extract_expanded,
+)
+
+
+# Check if a registry ML model is configured (replaces the old v2 joblib gate).
+_REGISTRY_MODEL_AVAILABLE = None
+
+def _check_registry_model():
+    global _REGISTRY_MODEL_AVAILABLE
+    if _REGISTRY_MODEL_AVAILABLE is not None:
+        return _REGISTRY_MODEL_AVAILABLE
+    try:
+        from config import settings as _settings
+        active = getattr(_settings, "ACTIVE_MODEL", None)
+        if not active:
+            _REGISTRY_MODEL_AVAILABLE = False
+            return False
+        from pathlib import Path
+        model_path = Path(__file__).parent.parent / "models_store" / "registry" / active / "model.joblib"
+        _REGISTRY_MODEL_AVAILABLE = model_path.exists()
+    except Exception:
+        _REGISTRY_MODEL_AVAILABLE = False
+    return _REGISTRY_MODEL_AVAILABLE
+
 
 def build_features(
     option_chain,
@@ -26,7 +53,9 @@ def build_features(
     hedging_bias=None,
     spot_vs_flip=None,
     vacuum_state=None,
-    atm_iv=None
+    atm_iv=None,
+    # Extended kwargs for 33-feature v2 model
+    **extra_context,
 ):
     """
     Purpose:
@@ -82,6 +111,21 @@ def build_features(
 
     vacuum_score = 1.0 if vacuum_state == "BREAKOUT_ZONE" else 0.0
     iv_level = float(atm_iv) / 100.0 if atm_iv is not None else 0.0
+
+    # If a registry ML model is active, build the 33-feature vector from context
+    if _check_registry_model() and extra_context:
+        row = {
+            "gamma_regime": gamma_regime,
+            "final_flow_signal": final_flow_signal,
+            "volatility_regime": vol_regime,
+            "dealer_hedging_bias": hedging_bias,
+            "spot_vs_flip": spot_vs_flip,
+            "liquidity_vacuum_state": vacuum_state,
+            "atm_iv_scaled": iv_level,
+            **extra_context,
+        }
+        expanded = _extract_expanded(row)
+        return expanded.reshape(1, -1)
 
     features = np.array([
         gamma_sign,

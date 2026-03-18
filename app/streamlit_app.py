@@ -1498,6 +1498,63 @@ def _render_signal_research_dashboard():
             caption="Quick coverage view so we can separate robust clusters from thin samples.",
         )
 
+    # ── ML Research Panel (optional, non-intrusive) ─────────────────
+    _render_ml_research_panel(dataset)
+
+
+def _render_ml_research_panel(dataset: pd.DataFrame):
+    """Render optional ML research metrics panel. Safe no-op if ML is disabled."""
+    try:
+        from research.ml_models.ml_config import ML_RESEARCH_ENABLED
+        if not ML_RESEARCH_ENABLED:
+            return
+    except ImportError:
+        return
+
+    with st.expander("ML Research (Dual-Model Shadow)", expanded=False):
+        st.caption("GBT ranking + LogReg calibration — observational only, does NOT affect trades")
+
+        ml_cols = ["ml_rank_score", "ml_confidence_score", "ml_rank_bucket",
+                    "ml_confidence_bucket", "ml_agreement_with_engine"]
+
+        if not all(c in dataset.columns for c in ml_cols[:2]):
+            st.info("ML scores not yet available in dataset. Run evaluation to populate.")
+            return
+
+        scored = dataset[dataset["ml_rank_score"].notna()]
+        if scored.empty:
+            st.info("No signals with ML scores yet.")
+            return
+
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            avg_rank = scored["ml_rank_score"].mean()
+            st.metric("Avg Rank Score", f"{avg_rank:.3f}" if avg_rank == avg_rank else "—")
+        with m2:
+            avg_conf = scored["ml_confidence_score"].mean() if "ml_confidence_score" in scored.columns else None
+            st.metric("Avg Confidence", f"{avg_conf:.3f}" if avg_conf and avg_conf == avg_conf else "—")
+        with m3:
+            if "ml_agreement_with_engine" in scored.columns:
+                agree_pct = (scored["ml_agreement_with_engine"] == "YES").mean()
+                st.metric("Agreement Rate", f"{agree_pct:.1%}")
+            else:
+                st.metric("Agreement Rate", "—")
+        with m4:
+            st.metric("ML Coverage", f"{len(scored)}/{len(dataset)}")
+
+        if "ml_rank_bucket" in scored.columns:
+            bucket_summary = (
+                scored.groupby("ml_rank_bucket")
+                .agg(
+                    n=("ml_rank_score", "count"),
+                    avg_rank=("ml_rank_score", "mean"),
+                    avg_conf=("ml_confidence_score", "mean"),
+                )
+                .round(4)
+                .reset_index()
+            )
+            st.dataframe(bucket_summary, use_container_width=True, hide_index=True)
+
 
 def _inject_autorefresh(interval_seconds: int):
     """

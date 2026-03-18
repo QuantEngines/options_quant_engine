@@ -162,8 +162,15 @@ VOL_EXPANSION_THRESHOLD = 1.3
 # Move Predictor Configuration
 # ================================
 
-MOVE_PROB_THRESHOLD = 0.60
-LARGE_MOVE_POINTS = (150, 300)
+# Active ML model from the registry.  Set to a registry model name
+# (e.g. "GBT_shallow_v1") to use a research model in production.
+# Leave empty or None to use the rule-based heuristic probability model.
+ACTIVE_MODEL = os.getenv("OQE_ACTIVE_MODEL", "").strip() or None
+
+# Prediction method — controls the pluggable predictor architecture.
+# Options: "blended" (default), "pure_ml", "pure_rule", "research_dual_model"
+# Set via env OQE_PREDICTION_METHOD or override here.
+PREDICTION_METHOD = os.getenv("OQE_PREDICTION_METHOD", "blended").strip() or "blended"
 
 
 # ================================

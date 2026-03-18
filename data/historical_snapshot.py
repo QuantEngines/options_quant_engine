@@ -120,7 +120,7 @@ def replay_historical_snapshot(
         "day_low": float(spot_data["low"]),
         "prev_close": prev_close,
         "timestamp": f"{trade_date}T15:30:00+05:30",
-        "lookback_avg_range_pct": None,
+        "lookback_avg_range_pct": _compute_lookback_avg_range_pct(trade_date),
     }
 
     # 3. Convert chain to backtest schema
@@ -224,6 +224,28 @@ def _get_prev_close(trade_date: date, symbol: str) -> float:
     if prev.empty:
         return 0.0
     return float(prev.iloc[-1]["close"])
+
+
+def _compute_lookback_avg_range_pct(
+    trade_date: date, lookback_days: int = 10
+) -> float | None:
+    """Compute trailing average daily range % from historical spot data.
+
+    Mirrors the live ``_compute_lookback_avg_range_pct`` in spot_downloader.py
+    but uses the historical spot parquet instead of yfinance.
+    """
+    spot = _load_spot_df()
+    if spot.empty:
+        return None
+    prior = spot[spot["date"] < trade_date]
+    if len(prior) < 2:
+        return None
+    tail = prior.tail(lookback_days)
+    highs = tail["high"].astype(float)
+    lows = tail["low"].astype(float)
+    closes = tail["close"].astype(float)
+    range_pct = ((highs.values - lows.values) / closes.values) * 100.0
+    return round(float(range_pct.mean()), 4)
 
 
 # ---------------------------------------------------------------

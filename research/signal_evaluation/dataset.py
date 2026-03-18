@@ -26,6 +26,7 @@ from config.settings import BASE_DIR
 
 
 SIGNAL_DATASET_PATH = Path(BASE_DIR) / "research" / "signal_evaluation" / "signals_dataset.csv"
+CUMULATIVE_DATASET_PATH = Path(BASE_DIR) / "research" / "signal_evaluation" / "signals_dataset_cumul.csv"
 
 SIGNAL_DATASET_COLUMNS = [
     "signal_id",
@@ -165,6 +166,11 @@ SIGNAL_DATASET_COLUMNS = [
     "signal_confidence_level",
     "signal_calibration_bucket",
     "probability_calibration_bucket",
+    "ml_rank_score",
+    "ml_confidence_score",
+    "ml_rank_bucket",
+    "ml_confidence_bucket",
+    "ml_agreement_with_engine",
     "notes",
 ]
 
@@ -676,6 +682,11 @@ def upsert_signal_rows(
 
     if not existing_signal_ids.intersection(incoming_signal_ids):
         _append_rows_to_dataset(incoming, dataset_path, existing_signal_ids=existing_signal_ids)
+
+        # Auto-sync to cumulative dataset when writing to the live dataset.
+        if Path(path) == SIGNAL_DATASET_PATH:
+            _sync_to_cumulative(incoming)
+
         return load_signals_dataset(dataset_path) if return_frame else None
 
     existing = load_signals_dataset(dataset_path)
@@ -694,4 +705,104 @@ def upsert_signal_rows(
 
     combined = _dedupe_signal_frame(combined)
     write_signals_dataset(combined, dataset_path)
+
+    # Auto-sync to cumulative dataset when writing to the live dataset.
+    if Path(path) == SIGNAL_DATASET_PATH:
+        _sync_to_cumulative(incoming)
+
     return combined if return_frame else None
+
+
+# ---------------------------------------------------------------------------
+# Cumulative (archival) dataset helpers
+# ---------------------------------------------------------------------------
+
+def load_cumulative_dataset(
+    path: str | Path | None = None,
+) -> pd.DataFrame:
+    """Load the cumulative signals dataset (CSV + SQLite fallback)."""
+    cumul_path = Path(path) if path else CUMULATIVE_DATASET_PATH
+    return load_signals_dataset(cumul_path)
+
+
+def _sync_to_cumulative(incoming: pd.DataFrame) -> None:
+    """Append *incoming* rows to the cumulative dataset, deduplicating by signal_id.
+
+    This is called automatically by ``upsert_signal_rows`` whenever the live
+    dataset is updated so that every captured signal is also persisted in the
+    long-lived cumulative store.
+    """
+    cumul_csv = CUMULATIVE_DATASET_PATH
+    cumul_sqlite = _dataset_store_path(cumul_csv)
+
+    if incoming.empty:
+        return
+
+    incoming = _normalize_dataset_frame(incoming)
+
+    # Load existing cumulative signal_ids to avoid duplicates.
+    existing_ids: set[str] = set()
+    if cumul_sqlite.exists():
+        try:
+            existing_ids = _load_existing_signal_ids(cumul_csv)
+        except Exception:
+            existing_ids = set()
+    elif cumul_csv.exists():
+        try:
+            existing_ids = _load_existing_signal_ids(cumul_csv)
+        except Exception:
+            existing_ids = set()
+
+    # Filter to only truly new rows.
+    if "signal_id" in incoming.columns and existing_ids:
+        new_rows = incoming[~incoming["signal_id"].isin(existing_ids)]
+    else:
+        new_rows = incoming
+
+    if new_rows.empty:
+        return
+
+    # Append new rows to cumulative CSV.
+    header = not cumul_csv.exists() or cumul_csv.stat().st_size == 0
+    new_rows.to_csv(cumul_csv, mode="a", index=False, header=header)
+
+    # Append new rows to cumulative SQLite.
+    _append_sqlite_rows(new_rows, cumul_sqlite)
+
+
+def sync_live_to_cumulative() -> int:
+    """Bulk-sync the live signal dataset into the cumulative archive.
+
+    Loads every signal from the live ``SIGNAL_DATASET_PATH``, filters out
+    rows already present in the cumulative store, and appends the new ones.
+    Called once at engine startup to guard against data loss if a prior
+    session wrote to the live dataset without the auto-archival hook.
+
+    Returns the number of newly archived rows.
+    """
+    live_path = SIGNAL_DATASET_PATH
+    if not live_path.exists():
+        return 0
+
+    live = load_signals_dataset(live_path)
+    if live.empty:
+        return 0
+
+    before_count = 0
+    cumul_csv = CUMULATIVE_DATASET_PATH
+    if cumul_csv.exists():
+        try:
+            before_count = len(load_cumulative_dataset())
+        except Exception:
+            before_count = 0
+
+    _sync_to_cumulative(live)
+
+    after_count = 0
+    if cumul_csv.exists():
+        try:
+            after_count = len(load_cumulative_dataset())
+        except Exception:
+            after_count = before_count
+
+    return after_count - before_count

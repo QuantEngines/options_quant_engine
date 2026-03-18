@@ -121,7 +121,7 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(row_a["signal_id"], row_b["signal_id"])
         self.assertEqual(row_a["symbol"], "NIFTY")
         self.assertEqual(row_a["provider_health_status"], "GOOD")
-        self.assertEqual(row_a["move_probability"], 0.72)
+        self.assertEqual(row_a["hybrid_move_probability"], 0.72)
         self.assertEqual(row_a["rule_move_probability"], 0.61)
         self.assertEqual(row_a["global_risk_state"], "GLOBAL_NEUTRAL")
         self.assertEqual(row_a["global_risk_score"], 24)
@@ -413,6 +413,128 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
 
         self.assertEqual(normalize_capture_policy("trade_only"), CAPTURE_POLICY_TRADE_ONLY)
         self.assertEqual(normalize_capture_policy("unknown"), CAPTURE_POLICY_ALL)
+
+
+class CumulativeDatasetArchivalTests(unittest.TestCase):
+    """Tests for the cumulative dataset syncing and archival mechanism."""
+
+    def _make_rows(self, signal_ids, date="2026-03-18"):
+        return [
+            {
+                "signal_id": sid,
+                "signal_date": date,
+                "updated_at": f"{date}T10:00:00+05:30",
+                "symbol": "NIFTY",
+            }
+            for sid in signal_ids
+        ]
+
+    def test_sync_to_cumulative_appends_new_rows(self):
+        from research.signal_evaluation.dataset import (
+            _sync_to_cumulative,
+            CUMULATIVE_DATASET_PATH,
+            _dataset_store_path,
+        )
+        import research.signal_evaluation.dataset as ds_mod
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cumul_csv = Path(tmp_dir) / "signals_dataset_cumul.csv"
+            cumul_sqlite = Path(tmp_dir) / "signals_dataset_cumul.sqlite"
+
+            # Temporarily override the module-level paths
+            orig_cumul = ds_mod.CUMULATIVE_DATASET_PATH
+            ds_mod.CUMULATIVE_DATASET_PATH = cumul_csv
+
+            try:
+                # First sync — creates cumulative from scratch
+                df1 = pd.DataFrame(self._make_rows(["sig_a", "sig_b"]))
+                _sync_to_cumulative(df1)
+                cumul = pd.read_csv(cumul_csv)
+                self.assertEqual(len(cumul), 2)
+
+                # Second sync — only new rows appended
+                df2 = pd.DataFrame(self._make_rows(["sig_b", "sig_c"]))
+                _sync_to_cumulative(df2)
+                cumul = pd.read_csv(cumul_csv)
+                self.assertEqual(len(cumul), 3)
+                self.assertSetEqual(set(cumul["signal_id"]), {"sig_a", "sig_b", "sig_c"})
+            finally:
+                ds_mod.CUMULATIVE_DATASET_PATH = orig_cumul
+
+    def test_sync_to_cumulative_skips_empty_frame(self):
+        from research.signal_evaluation.dataset import _sync_to_cumulative
+        import research.signal_evaluation.dataset as ds_mod
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cumul_csv = Path(tmp_dir) / "signals_dataset_cumul.csv"
+            orig_cumul = ds_mod.CUMULATIVE_DATASET_PATH
+            ds_mod.CUMULATIVE_DATASET_PATH = cumul_csv
+
+            try:
+                _sync_to_cumulative(pd.DataFrame())
+                self.assertFalse(cumul_csv.exists())
+            finally:
+                ds_mod.CUMULATIVE_DATASET_PATH = orig_cumul
+
+    def test_sync_live_to_cumulative_returns_new_count(self):
+        from research.signal_evaluation.dataset import (
+            sync_live_to_cumulative,
+            write_signals_dataset,
+        )
+        import research.signal_evaluation.dataset as ds_mod
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live_csv = Path(tmp_dir) / "signals_dataset.csv"
+            cumul_csv = Path(tmp_dir) / "signals_dataset_cumul.csv"
+
+            orig_live = ds_mod.SIGNAL_DATASET_PATH
+            orig_cumul = ds_mod.CUMULATIVE_DATASET_PATH
+            ds_mod.SIGNAL_DATASET_PATH = live_csv
+            ds_mod.CUMULATIVE_DATASET_PATH = cumul_csv
+
+            try:
+                # Write live dataset with 3 rows
+                live_df = pd.DataFrame(self._make_rows(["sig_1", "sig_2", "sig_3"]))
+                write_signals_dataset(live_df, live_csv)
+
+                # First sync — all 3 should be new
+                synced = sync_live_to_cumulative()
+                self.assertEqual(synced, 3)
+
+                # Second sync — idempotent, no new rows
+                synced = sync_live_to_cumulative()
+                self.assertEqual(synced, 0)
+            finally:
+                ds_mod.SIGNAL_DATASET_PATH = orig_live
+                ds_mod.CUMULATIVE_DATASET_PATH = orig_cumul
+
+    def test_upsert_auto_syncs_to_cumulative(self):
+        from research.signal_evaluation.dataset import upsert_signal_rows
+        import research.signal_evaluation.dataset as ds_mod
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live_csv = Path(tmp_dir) / "signals_dataset.csv"
+            cumul_csv = Path(tmp_dir) / "signals_dataset_cumul.csv"
+
+            orig_live = ds_mod.SIGNAL_DATASET_PATH
+            orig_cumul = ds_mod.CUMULATIVE_DATASET_PATH
+            ds_mod.SIGNAL_DATASET_PATH = live_csv
+            ds_mod.CUMULATIVE_DATASET_PATH = cumul_csv
+
+            try:
+                # Upsert to the live path — should auto-sync to cumulative
+                upsert_signal_rows(
+                    self._make_rows(["sig_x", "sig_y"]),
+                    path=live_csv,
+                    return_frame=False,
+                )
+                self.assertTrue(cumul_csv.exists())
+                cumul = pd.read_csv(cumul_csv)
+                self.assertEqual(len(cumul), 2)
+                self.assertSetEqual(set(cumul["signal_id"]), {"sig_x", "sig_y"})
+            finally:
+                ds_mod.SIGNAL_DATASET_PATH = orig_live
+                ds_mod.CUMULATIVE_DATASET_PATH = orig_cumul
 
 
 if __name__ == "__main__":

@@ -156,7 +156,7 @@ def _collect_neutralization_states(payload):
 
 def _build_decision_explainability(payload, *, trade_status, min_trade_strength):
     direction = payload.get("direction")
-    flow_signal = _as_upper(payload.get("flow_signal") or payload.get("final_flow_signal"))
+    flow_signal = _as_upper(payload.get("final_flow_signal") or payload.get("flow_signal"))
     smart_money_flow = _as_upper(payload.get("smart_money_flow"))
     confirmation_status = _as_upper(payload.get("confirmation_status"))
     signal_quality = _as_upper(payload.get("signal_quality"))
@@ -428,6 +428,21 @@ def _build_decision_explainability(payload, *, trade_status, min_trade_strength)
     return explainability
 
 
+def _safe_weekday(valuation_time):
+    """Return weekday int (0=Mon) from valuation_time, coercing strings via pd.Timestamp."""
+    if valuation_time is None:
+        import datetime as _dt
+        return _dt.datetime.now().weekday()
+    if hasattr(valuation_time, "weekday"):
+        return valuation_time.weekday()
+    try:
+        import pandas as _pd
+        return _pd.Timestamp(valuation_time).weekday()
+    except Exception:
+        import datetime as _dt
+        return _dt.datetime.now().weekday()
+
+
 def _estimate_days_to_expiry(option_chain_validation, valuation_time):
     """Estimate calendar days to expiry from chain validation and valuation time."""
     import datetime as _dt
@@ -523,6 +538,23 @@ def generate_trade(
         if previous_chain is not None else None
     )
     market_state = _collect_market_state(df, spot, symbol=symbol, prev_df=prev_df)
+
+    # Build global context for v2 ML model features (available before probability).
+    _grs = global_risk_state if isinstance(global_risk_state, dict) else {}
+    _grf = _grs.get("global_risk_features", {}) if isinstance(_grs.get("global_risk_features"), dict) else {}
+    _mes = macro_event_state if isinstance(macro_event_state, dict) else {}
+    _global_ctx = {
+        "india_vix_level": _grf.get("india_vix_level"),
+        "india_vix_change_24h": _grf.get("india_vix_change_24h"),
+        "oil_shock_score": _grf.get("oil_shock_score"),
+        "commodity_risk_score": _grf.get("commodity_risk_score"),
+        "volatility_shock_score": _grf.get("volatility_shock_score"),
+        "macro_event_risk_score": _mes.get("macro_event_risk_score", 0.0),
+        "macro_regime": _mes.get("macro_regime", "NO_EVENT"),
+        "days_to_expiry": _estimate_days_to_expiry(option_chain_validation, valuation_time),
+        "weekday": _safe_weekday(valuation_time),
+    }
+
     probability_state = _compute_probability_state(
         df,
         spot=spot,
@@ -533,6 +565,7 @@ def generate_trade(
         day_open=day_open,
         prev_close=prev_close,
         lookback_avg_range_pct=lookback_avg_range_pct,
+        global_context=_global_ctx,
     )
     intraday_range_pct = probability_state["components"]["intraday_range_pct"]
 
@@ -780,7 +813,7 @@ def generate_trade(
         "rule_move_probability": probability_state["rule_move_probability"],
         "ml_move_probability": probability_state["ml_move_probability"],
         "hybrid_move_probability": probability_state["hybrid_move_probability"],
-        "large_move_probability": probability_state["hybrid_move_probability"],
+        "large_move_probability": probability_state["hybrid_move_probability"],  # legacy alias — use hybrid_move_probability
         "move_probability_components": probability_state["components"],
         "spot_validation": spot_validation,
         "option_chain_validation": option_chain_validation,
@@ -806,7 +839,7 @@ def generate_trade(
         "active_event_name": active_event_name,
         "macro_regime": macro_news_adjustments["macro_regime"],
         "macro_sentiment_score": macro_news_adjustments["macro_sentiment_score"],
-        "volatility_shock_score": macro_news_adjustments["volatility_shock_score"],
+        "macro_news_volatility_shock_score": macro_news_adjustments["volatility_shock_score"],
         "news_confidence_score": macro_news_adjustments["news_confidence_score"],
         "macro_adjustment_score": macro_news_adjustments["macro_adjustment_score"],
         "macro_confirmation_adjustment": macro_news_adjustments["macro_confirmation_adjustment"],

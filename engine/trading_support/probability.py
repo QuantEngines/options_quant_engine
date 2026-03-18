@@ -319,13 +319,31 @@ def _get_move_predictor():
     """
     global _MOVE_PREDICTOR
 
-    predictor_class = getattr(ml_move_predictor_mod, "MovePredictor", None)
+    predictor_class = getattr(ml_move_predictor_mod, "MLMovePredictor", None)
     if predictor_class is None:
         return None
 
     if _MOVE_PREDICTOR is None:
         try:
-            _MOVE_PREDICTOR = predictor_class()
+            base_model = None
+            try:
+                import joblib
+                from pathlib import Path
+
+                project_root = Path(__file__).resolve().parent.parent.parent
+
+                # Check for registry model via ACTIVE_MODEL setting
+                from config import settings as _settings
+                active_name = getattr(_settings, "ACTIVE_MODEL", None)
+                if active_name:
+                    registry_path = project_root / "models_store" / "registry" / active_name / "model.joblib"
+                    if registry_path.exists():
+                        base_model = joblib.load(registry_path)
+
+
+            except Exception:
+                pass
+            _MOVE_PREDICTOR = predictor_class(base_model=base_model)
         except Exception:
             _MOVE_PREDICTOR = False
 
@@ -453,7 +471,7 @@ def _extract_probability(result):
     if result is None:
         return None
     if isinstance(result, dict):
-        for key in ("probability", "move_probability", "large_move_probability", "score"):
+        for key in ("probability", "move_probability", "score"):
             if key in result:
                 value = _safe_float(result.get(key), None)
                 if value is not None:
@@ -465,17 +483,20 @@ def _extract_probability(result):
     return round(_clip(value, cfg.probability_floor, cfg.probability_ceiling), 2)
 
 
-def _compute_probability_state(
-    df,
+def _compute_probability_state_impl(
+    df=None,
     *,
-    spot,
-    symbol,
-    market_state,
+    spot=None,
+    symbol=None,
+    market_state=None,
     day_high=None,
     day_low=None,
     day_open=None,
     prev_close=None,
     lookback_avg_range_pct=None,
+    global_context=None,
+    _force_rule_only=False,
+    _force_ml_only=False,
 ):
     """
     Purpose:
@@ -507,8 +528,7 @@ def _compute_probability_state(
     """
     cfg = get_probability_feature_policy_config()
 
-    # Reuse the feature-builder contract when available so the ML model sees
-    # the same structured inputs during live runs and offline evaluation.
+    # Build the 7-feature vector first (backward compat for heuristic path).
     model_features = _call_first(
         feature_builder_mod,
         ["build_features"],
@@ -561,6 +581,54 @@ def _compute_probability_state(
         lookback_avg_range_pct=lookback_avg_range_pct,
     )
 
+    # Rebuild features with full context for v2 model (33 features).
+    # This passes probability sub-components + market state context so the
+    # expanded_feature_builder can construct the complete feature vector.
+    gc = global_context or {}
+    model_features_v2 = _call_first(
+        feature_builder_mod,
+        ["build_features"],
+        df,
+        spot=spot,
+        gamma_regime=market_state["gamma_regime"],
+        final_flow_signal=market_state["final_flow_signal"],
+        vol_regime=market_state["vol_regime"],
+        hedging_bias=market_state["hedging_bias"],
+        spot_vs_flip=market_state["spot_vs_flip"],
+        vacuum_state=market_state["vacuum_state"],
+        atm_iv=market_state["atm_iv"],
+        # Extra context for 33-feature v2 model
+        gamma_flip_distance_pct=gamma_flip_distance_pct,
+        vacuum_strength=vacuum_strength,
+        hedging_flow_ratio=hedging_flow_ratio,
+        smart_money_flow_score=smart_money_flow_score,
+        atm_iv_percentile=atm_iv_percentile,
+        intraday_range_pct=intraday_range_pct,
+        lookback_avg_range_pct=lookback_avg_range_pct,
+        gap_pct=(((day_open - prev_close) / prev_close * 100)
+                 if day_open and prev_close and prev_close > 0 else 0.0),
+        close_vs_prev_close_pct=(((spot - prev_close) / prev_close * 100)
+                                  if spot and prev_close and prev_close > 0 else 0.0),
+        spot_in_day_range=(((spot - day_low) / (day_high - day_low))
+                           if day_high and day_low and day_high > day_low and spot else 0.5),
+        dealer_position=market_state.get("dealer_pos"),
+        vanna_regime=market_state.get("greek_exposures", {}).get("vanna_regime"),
+        charm_regime=market_state.get("greek_exposures", {}).get("charm_regime"),
+        confirmation_status=market_state.get("confirmation_status"),
+        macro_event_risk_score=gc.get("macro_event_risk_score", 0.0),
+        macro_regime=gc.get("macro_regime", "NO_EVENT"),
+        india_vix_level=gc.get("india_vix_level"),
+        india_vix_change_24h=gc.get("india_vix_change_24h"),
+        oil_shock_score=gc.get("oil_shock_score"),
+        commodity_risk_score=gc.get("commodity_risk_score"),
+        volatility_shock_score=gc.get("volatility_shock_score"),
+        days_to_expiry=gc.get("days_to_expiry"),
+        default=None,
+    )
+    # Use v2 features if available, fall back to v1
+    if model_features_v2 is not None:
+        model_features = model_features_v2
+
     rule_move_probability = _call_first(
         large_move_probability_mod,
         ["large_move_probability", "predict_large_move_probability"],
@@ -577,23 +645,26 @@ def _compute_probability_state(
         default=None,
     )
     rule_move_probability = _extract_probability(rule_move_probability)
+    if _force_ml_only:
+        rule_move_probability = None
 
     ml_move_probability = None
-    predictor = _get_move_predictor()
-    if predictor is not None:
-        try:
-            # The ML leg is optional by design. Any failure here should degrade
-            # gracefully back to the deterministic rule-based estimate.
-            if model_features is not None:
-                ml_move_probability = predictor.predict_probability(model_features)
-            ml_move_probability = _extract_probability(ml_move_probability)
-            if ml_move_probability is not None:
-                ml_move_probability = round(
-                    _clip(float(ml_move_probability), cfg.probability_floor, cfg.probability_ceiling),
-                    2,
-                )
-        except Exception:
-            ml_move_probability = None
+    if not _force_rule_only:
+        predictor = _get_move_predictor()
+        if predictor is not None:
+            try:
+                # The ML leg is optional by design. Any failure here should degrade
+                # gracefully back to the deterministic rule-based estimate.
+                if model_features is not None:
+                    ml_move_probability = predictor.predict_probability(model_features)
+                ml_move_probability = _extract_probability(ml_move_probability)
+                if ml_move_probability is not None:
+                    ml_move_probability = round(
+                        _clip(float(ml_move_probability), cfg.probability_floor, cfg.probability_ceiling),
+                        2,
+                    )
+            except Exception:
+                ml_move_probability = None
 
     components = {
         "gamma_flip_distance_pct": gamma_flip_distance_pct,
@@ -621,4 +692,79 @@ def _compute_probability_state(
         ),
         "model_features": model_features,
         "components": components,
+    }
+
+
+def _compute_probability_state(
+    df,
+    *,
+    spot,
+    symbol,
+    market_state,
+    day_high=None,
+    day_low=None,
+    day_open=None,
+    prev_close=None,
+    lookback_avg_range_pct=None,
+    global_context=None,
+):
+    """
+    Public entry point for computing probability state.
+
+    Routes through the pluggable predictor factory when a non-default
+    prediction method is configured.  Falls back to the blended implementation
+    when PREDICTION_METHOD is 'blended' (default) for zero-overhead backward
+    compatibility.
+    """
+    # Fast path: if method is default "blended", call impl directly to avoid
+    # any overhead from the factory/protocol layer.
+    # Check factory override first (set by prediction_method_override context manager).
+    from engine.predictors.factory import _METHOD_OVERRIDE
+    if _METHOD_OVERRIDE is not None:
+        method = _METHOD_OVERRIDE
+    else:
+        try:
+            from config import settings as _settings
+            method = getattr(_settings, "PREDICTION_METHOD", "blended") or "blended"
+        except Exception:
+            method = "blended"
+
+    if method == "blended":
+        return _compute_probability_state_impl(
+            df,
+            spot=spot,
+            symbol=symbol,
+            market_state=market_state,
+            day_high=day_high,
+            day_low=day_low,
+            day_open=day_open,
+            prev_close=prev_close,
+            lookback_avg_range_pct=lookback_avg_range_pct,
+            global_context=global_context,
+        )
+
+    # Non-default method: dispatch through the predictor factory.
+    from engine.predictors.factory import get_predictor
+
+    predictor = get_predictor()
+    market_ctx = dict(
+        df=df,
+        spot=spot,
+        symbol=symbol,
+        market_state=market_state,
+        day_high=day_high,
+        day_low=day_low,
+        day_open=day_open,
+        prev_close=prev_close,
+        lookback_avg_range_pct=lookback_avg_range_pct,
+        global_context=global_context,
+    )
+    result = predictor.predict(market_ctx)
+
+    return {
+        "rule_move_probability": result.rule_move_probability,
+        "ml_move_probability": result.ml_move_probability,
+        "hybrid_move_probability": result.hybrid_move_probability,
+        "model_features": result.model_features,
+        "components": result.components,
     }

@@ -23,7 +23,7 @@ import numpy as np
 from utils.numerics import clip as _clip  # noqa: F401
 
 
-class MovePredictor:
+class MLMovePredictor:
     """
     Purpose:
         Represent MovePredictor within the repository.

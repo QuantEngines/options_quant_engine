@@ -270,6 +270,17 @@ def build_signal_evaluation_row(
     saved_paths = result.get("saved_paths") or {}
     captured_ts = resolve_research_as_of(captured_at, default=signal_timestamp).isoformat()
 
+    # Extract probability sub-components for ML feature extraction
+    prob_components = trade.get("move_probability_components") or {}
+
+    # Compute weekday from signal timestamp (0=Mon .. 4=Fri)
+    sig_dt = _coerce_ts(signal_timestamp)
+    weekday = sig_dt.weekday() if sig_dt else None
+
+    # Compute atm_iv_scaled from raw atm_iv if available
+    raw_atm_iv = trade.get("atm_iv")
+    atm_iv_scaled = (raw_atm_iv / 100.0) if raw_atm_iv is not None else None
+
     row = {
         "signal_id": signal_id,
         "signal_timestamp": _coerce_ts(signal_timestamp).isoformat(),
@@ -309,7 +320,8 @@ def build_signal_evaluation_row(
         "global_risk_score": trade.get("global_risk_score"),
         "oil_shock_score": trade.get("oil_shock_score"),
         "commodity_risk_score": trade.get("commodity_risk_score"),
-        "volatility_shock_score": trade.get("market_volatility_shock_score", trade.get("volatility_shock_score")),
+        "volatility_shock_score": trade.get("market_volatility_shock_score"),
+        "macro_news_volatility_shock_score": trade.get("macro_news_volatility_shock_score"),
         "volatility_explosion_probability": trade.get("volatility_explosion_probability"),
         "overnight_gap_risk_score": trade.get("overnight_gap_risk_score"),
         "volatility_expansion_risk_score": trade.get("volatility_expansion_risk_score"),
@@ -351,13 +363,31 @@ def build_signal_evaluation_row(
         "provider_health_pairing": provider_health.get("pairing_health"),
         "provider_health_iv": provider_health.get("iv_health"),
         "provider_health_duplicate": provider_health.get("duplicate_health"),
-        "move_probability": trade.get("hybrid_move_probability"),
         "rule_move_probability": trade.get("rule_move_probability"),
         "hybrid_move_probability": trade.get("hybrid_move_probability"),
         "ml_move_probability": trade.get("ml_move_probability"),
-        "large_move_probability": trade.get("large_move_probability"),
         "saved_spot_snapshot_path": saved_paths.get("spot"),
         "saved_chain_snapshot_path": saved_paths.get("chain"),
+
+        # ML expanded features — probability sub-components
+        "gamma_flip_distance_pct": prob_components.get("gamma_flip_distance_pct"),
+        "vacuum_strength": prob_components.get("vacuum_strength"),
+        "hedging_flow_ratio": prob_components.get("hedging_flow_ratio"),
+        "smart_money_flow_score": prob_components.get("smart_money_flow_score"),
+        "atm_iv_percentile": prob_components.get("atm_iv_percentile"),
+
+        # ML expanded features — greek regimes
+        "vanna_regime": trade.get("vanna_regime"),
+        "charm_regime": trade.get("charm_regime"),
+
+        # ML expanded features — global market
+        "india_vix_level": trade.get("india_vix_level"),
+        "india_vix_change_24h": trade.get("india_vix_change_24h"),
+
+        # ML expanded features — derived
+        "atm_iv_scaled": atm_iv_scaled,
+        "weekday": weekday,
+
         "created_at": captured_ts,
         "updated_at": captured_ts,
         "outcome_last_updated_at": pd.NA,
@@ -369,6 +399,22 @@ def build_signal_evaluation_row(
         "probability_calibration_bucket": _bucket_probability(trade.get("hybrid_move_probability")),
         "notes": notes,
     }
+
+    # ── ML Research Layer (observational only) ──────────────────────
+    # Run dual-model inference if ML research is enabled.
+    # This NEVER affects trade decisions — purely for research logging.
+    try:
+        from research.ml_models.ml_config import ML_RESEARCH_ENABLED
+        if ML_RESEARCH_ENABLED:
+            from research.ml_models.ml_inference import infer_single
+            ml_result = infer_single(row)
+            row["ml_rank_score"] = ml_result.ml_rank_score
+            row["ml_confidence_score"] = ml_result.ml_confidence_score
+            row["ml_rank_bucket"] = ml_result.ml_rank_bucket
+            row["ml_confidence_bucket"] = ml_result.ml_confidence_bucket
+            row["ml_agreement_with_engine"] = ml_result.ml_agreement_with_engine
+    except Exception:
+        pass  # ML failure must never break signal capture
 
     for horizon in SIGNAL_EVALUATION_HORIZON_MINUTES:
         row[f"spot_{horizon}m"] = pd.NA

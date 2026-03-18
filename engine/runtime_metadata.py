@@ -96,7 +96,7 @@ TRADER_VIEW_KEYS = list(dict.fromkeys([
     "next_event_name",
     "macro_regime",
     "macro_sentiment_score",
-    "volatility_shock_score",
+    "macro_news_volatility_shock_score",
     "news_confidence_score",
     "macro_adjustment_score",
     "macro_position_size_multiplier",

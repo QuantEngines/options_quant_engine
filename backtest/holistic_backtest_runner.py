@@ -307,6 +307,7 @@ def run_holistic_backtest(
     min_quality_score: float = 40.0,
     evaluate_outcomes: bool = True,
     progress_callback=None,
+    prediction_method: str | None = None,
 ) -> dict:
     """Run a signal-centric historical backtest.
 
@@ -337,6 +338,10 @@ def run_holistic_backtest(
         Whether to evaluate signals against realized spot path.
     progress_callback : callable | None
         ``fn(current_idx, total, trade_date)`` for progress reporting.
+    prediction_method : str | None
+        Override the global ``PREDICTION_METHOD`` for this run.
+        E.g. ``"pure_ml"``, ``"pure_rule"``, ``"research_dual_model"``.
+        ``None`` (default) uses the global setting.
 
     Returns
     -------
@@ -372,145 +377,175 @@ def run_holistic_backtest(
     skipped_days = 0
     previous_chain: pd.DataFrame | None = None
 
-    for idx, trade_date in enumerate(available):
-        if progress_callback:
-            progress_callback(idx, total_days, trade_date)
+    # -- Activate predictor override for this backtest run --
+    _pred_factory = None
+    _saved_predictor = None
+    _saved_override = None
+    if prediction_method:
+        from engine.predictors import factory as _pf
+        _pred_factory = _pf
+        _saved_predictor = _pf._ACTIVE_PREDICTOR
+        _saved_override = _pf._METHOD_OVERRIDE
+        registry = _pf._ensure_registry()
+        cls = registry.get(prediction_method)
+        if cls is None:
+            return _empty_result(
+                symbol,
+                f"Unknown prediction_method: {prediction_method!r}. "
+                f"Available: {', '.join(sorted(registry))}",
+            )
+        _pf._ACTIVE_PREDICTOR = cls()
+        _pf._METHOD_OVERRIDE = prediction_method
+        log.info("Backtest predictor override → %s", prediction_method)
 
-        # 1. Build snapshot
-        snap = replay_historical_snapshot(
-            trade_date,
-            symbol,
-            compute_iv=compute_iv,
-            include_global_market=include_global_market,
-            include_macro_events=include_macro_events,
-        )
+    try:
 
-        if not snap["ok"]:
-            skipped_days += 1
-            daily_summary.append(_day_stat(trade_date, "NO_DATA", 0))
-            continue
+        for idx, trade_date in enumerate(available):
+            if progress_callback:
+                progress_callback(idx, total_days, trade_date)
 
-        if snap["quality_score"] < min_quality_score:
-            skipped_days += 1
-            daily_summary.append(_day_stat(trade_date, "LOW_QUALITY", snap["quality_score"]))
-            continue
-
-        option_chain = snap["option_chain"]
-        spot_snapshot = snap["spot_snapshot"]
-
-        # 2. Resolve upcoming expiries (nearest N)
-        expiries = ordered_expiries(option_chain)
-        if not expiries:
-            skipped_days += 1
-            daily_summary.append(_day_stat(trade_date, "NO_EXPIRY", snap["quality_score"]))
-            continue
-
-        target_expiries = expiries[:max_expiries]
-        day_signals = []
-
-        # 3. Run engine for each expiry
-        for expiry in target_expiries:
-            expiry_chain = filter_option_chain_by_expiry(option_chain, expiry)
-            if expiry_chain is None or expiry_chain.empty:
-                continue
-
-            signal_result = run_preloaded_engine_snapshot(
-                symbol=symbol,
-                mode="BACKTEST",
-                source="HISTORICAL_HOLISTIC",
-                spot_snapshot=spot_snapshot,
-                option_chain=expiry_chain,
-                previous_chain=previous_chain,
-                apply_budget_constraint=BACKTEST_ENABLE_BUDGET,
-                requested_lots=NUMBER_OF_LOTS,
-                lot_size=LOT_SIZE,
-                max_capital=MAX_CAPITAL_PER_TRADE,
-                capture_signal_evaluation=False,
-                enable_shadow_logging=False,
-                global_market_snapshot=snap["global_market_snapshot"],
-                macro_event_state=snap["macro_event_state"],
-                target_profit_percent=target_profit_percent,
-                stop_loss_percent=stop_loss_percent,
+            # 1. Build snapshot
+            snap = replay_historical_snapshot(
+                trade_date,
+                symbol,
+                compute_iv=compute_iv,
+                include_global_market=include_global_market,
+                include_macro_events=include_macro_events,
             )
 
-            if not signal_result.get("ok", False):
+            if not snap["ok"]:
+                skipped_days += 1
+                daily_summary.append(_day_stat(trade_date, "NO_DATA", 0))
                 continue
 
-            # 4. Capture signal evaluation row
-            trade = signal_result.get("trade")
-            if trade is None:
+            if snap["quality_score"] < min_quality_score:
+                skipped_days += 1
+                daily_summary.append(_day_stat(trade_date, "LOW_QUALITY", snap["quality_score"]))
                 continue
 
-            try:
-                sig_row = build_signal_evaluation_row(
-                    signal_result,
-                    notes=f"holistic_backtest|expiry={expiry}",
-                    captured_at=f"{trade_date}T15:30:00+05:30",
+            option_chain = snap["option_chain"]
+            spot_snapshot = snap["spot_snapshot"]
+
+            # 2. Resolve upcoming expiries (nearest N)
+            expiries = ordered_expiries(option_chain)
+            if not expiries:
+                skipped_days += 1
+                daily_summary.append(_day_stat(trade_date, "NO_EXPIRY", snap["quality_score"]))
+                continue
+
+            target_expiries = expiries[:max_expiries]
+            day_signals = []
+
+            # 3. Run engine for each expiry
+            for expiry in target_expiries:
+                expiry_chain = filter_option_chain_by_expiry(option_chain, expiry)
+                if expiry_chain is None or expiry_chain.empty:
+                    continue
+
+                signal_result = run_preloaded_engine_snapshot(
+                    symbol=symbol,
+                    mode="BACKTEST",
+                    source="HISTORICAL_HOLISTIC",
+                    spot_snapshot=spot_snapshot,
+                    option_chain=expiry_chain,
+                    previous_chain=previous_chain,
+                    apply_budget_constraint=BACKTEST_ENABLE_BUDGET,
+                    requested_lots=NUMBER_OF_LOTS,
+                    lot_size=LOT_SIZE,
+                    max_capital=MAX_CAPITAL_PER_TRADE,
+                    capture_signal_evaluation=False,
+                    enable_shadow_logging=False,
+                    global_market_snapshot=snap["global_market_snapshot"],
+                    macro_event_state=snap["macro_event_state"],
+                    target_profit_percent=target_profit_percent,
+                    stop_loss_percent=stop_loss_percent,
                 )
-            except (ValueError, KeyError):
-                continue
 
-            # 5. Evaluate against realized path
-            if evaluate_outcomes:
-                expiry_date = None
+                if not signal_result.get("ok", False):
+                    continue
+
+                # 4. Capture signal evaluation row
+                trade = signal_result.get("trade")
+                if trade is None:
+                    continue
+
                 try:
-                    expiry_date = pd.to_datetime(expiry).date()
-                except Exception:
-                    pass
-                spot_path = build_realized_spot_path(trade_date, expiry_date)
-                if not spot_path.empty:
-                    sig_row = evaluate_eod_outcomes(
-                        sig_row, spot_path, available,
+                    sig_row = build_signal_evaluation_row(
+                        signal_result,
+                        notes=f"holistic_backtest|expiry={expiry}",
+                        captured_at=f"{trade_date}T15:30:00+05:30",
                     )
+                except (ValueError, KeyError):
+                    continue
 
-            day_signals.append(sig_row)
+                # 5. Evaluate against realized path
+                if evaluate_outcomes:
+                    expiry_date = None
+                    try:
+                        expiry_date = pd.to_datetime(expiry).date()
+                    except Exception:
+                        pass
+                    spot_path = build_realized_spot_path(trade_date, expiry_date)
+                    if not spot_path.empty:
+                        sig_row = evaluate_eod_outcomes(
+                            sig_row, spot_path, available,
+                        )
 
-        all_signals.extend(day_signals)
+                day_signals.append(sig_row)
 
-        daily_summary.append({
-            "date": str(trade_date),
-            "status": "EVALUATED",
-            "quality": snap["quality_score"],
-            "expiries_evaluated": len(target_expiries),
-            "signals_generated": len(day_signals),
-            "trade_signals": sum(
-                1 for s in day_signals if s.get("trade_status") == "TRADE"
-            ),
-        })
+            all_signals.extend(day_signals)
 
-        previous_chain = option_chain.copy()
+            daily_summary.append({
+                "date": str(trade_date),
+                "status": "EVALUATED",
+                "quality": snap["quality_score"],
+                "expiries_evaluated": len(target_expiries),
+                "signals_generated": len(day_signals),
+                "trade_signals": sum(
+                    1 for s in day_signals if s.get("trade_status") == "TRADE"
+                ),
+            })
 
-    # Aggregate metrics
-    metrics = _compute_signal_metrics(all_signals)
-    elapsed = round(time.time() - t0, 2)
+            previous_chain = option_chain.copy()
 
-    return {
-        "ok": True,
-        "symbol": symbol,
-        "date_range": {
-            "start": str(available[0]) if available else None,
-            "end": str(available[-1]) if available else None,
-        },
-        "total_days": total_days,
-        "skipped_days": skipped_days,
-        "evaluated_days": total_days - skipped_days,
-        "total_signals": len(all_signals),
-        "signals": all_signals,
-        "daily_summary": daily_summary,
-        "elapsed_seconds": elapsed,
-        "data_source": "NSE_BHAV_COPY_PARQUET",
-        "global_market_enabled": include_global_market,
-        "macro_events_enabled": include_macro_events,
-        "parameters": {
-            "max_expiries": max_expiries,
-            "target_profit_percent": target_profit_percent,
-            "stop_loss_percent": stop_loss_percent,
-            "min_quality_score": min_quality_score,
-            "compute_iv": compute_iv,
-            "evaluate_outcomes": evaluate_outcomes,
-        },
-        "metrics": metrics,
-    }
+        # Aggregate metrics
+        metrics = _compute_signal_metrics(all_signals)
+        elapsed = round(time.time() - t0, 2)
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "date_range": {
+                "start": str(available[0]) if available else None,
+                "end": str(available[-1]) if available else None,
+            },
+            "total_days": total_days,
+            "skipped_days": skipped_days,
+            "evaluated_days": total_days - skipped_days,
+            "total_signals": len(all_signals),
+            "signals": all_signals,
+            "daily_summary": daily_summary,
+            "elapsed_seconds": elapsed,
+            "data_source": "NSE_BHAV_COPY_PARQUET",
+            "global_market_enabled": include_global_market,
+            "macro_events_enabled": include_macro_events,
+            "parameters": {
+                "max_expiries": max_expiries,
+                "target_profit_percent": target_profit_percent,
+                "stop_loss_percent": stop_loss_percent,
+                "min_quality_score": min_quality_score,
+                "compute_iv": compute_iv,
+                "evaluate_outcomes": evaluate_outcomes,
+                "prediction_method": prediction_method,
+            },
+            "metrics": metrics,
+        }
+
+    finally:
+        if _pred_factory is not None:
+            _pred_factory._ACTIVE_PREDICTOR = _saved_predictor
+            _pred_factory._METHOD_OVERRIDE = _saved_override
+            log.info("Backtest predictor restored")
 
 
 # ---------------------------------------------------------------

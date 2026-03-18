@@ -52,9 +52,28 @@ from research.signal_evaluation import (
     CAPTURE_POLICY_ALL,
     SIGNAL_DATASET_PATH,
     normalize_capture_policy,
+    sync_live_to_cumulative,
 )
 from tuning.runtime import get_active_parameter_pack, temporary_parameter_pack
 from tuning.promotion import get_promotion_runtime_context
+
+_cumulative_sync_done = False
+
+
+def _ensure_cumulative_sync() -> None:
+    """Run ``sync_live_to_cumulative`` at most once per process."""
+    global _cumulative_sync_done
+    if _cumulative_sync_done:
+        return
+    _cumulative_sync_done = True
+    try:
+        synced = sync_live_to_cumulative()
+        if synced:
+            logging.getLogger(__name__).info(
+                "Startup archival: synced %d live signal(s) to cumulative dataset", synced
+            )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Startup cumulative sync failed: %s", exc)
 
 
 def _set_runtime_credentials(source: str, credentials: Optional[Dict[str, str]] = None) -> None:
@@ -1271,6 +1290,10 @@ def run_engine_snapshot(
     source = source.upper().strip()
     replay_mode = mode == "REPLAY"
     managed_data_router = None
+
+    # One-time archival: sync any prior live signals into the cumulative store
+    # so data is never lost when the live dataset is overwritten.
+    _ensure_cumulative_sync()
 
     try:
         spot_snapshot, option_chain, replay_paths, managed_data_router = _load_market_inputs(

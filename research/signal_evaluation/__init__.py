@@ -15,10 +15,13 @@ Downstream Usage:
 """
 
 from research.signal_evaluation.dataset import (
+    CUMULATIVE_DATASET_PATH,
     SIGNAL_DATASET_PATH,
     SIGNAL_DATASET_COLUMNS,
     ensure_signals_dataset_exists,
+    load_cumulative_dataset,
     load_signals_dataset,
+    sync_live_to_cumulative,
     upsert_signal_rows,
     write_signals_dataset,
 )
@@ -59,6 +62,7 @@ __all__ = [
     "CAPTURE_POLICY_ACTIONABLE",
     "CAPTURE_POLICY_ALL",
     "CAPTURE_POLICY_TRADE_ONLY",
+    "CUMULATIVE_DATASET_PATH",
     "SIGNAL_DATASET_PATH",
     "SIGNAL_DATASET_COLUMNS",
     "ensure_signals_dataset_exists",
@@ -71,6 +75,7 @@ __all__ = [
     "fetch_realized_spot_path",
     "hit_rate_by_macro_regime",
     "hit_rate_by_trade_strength",
+    "load_cumulative_dataset",
     "load_signals_dataset",
     "move_probability_calibration",
     "normalize_capture_policy",
@@ -81,6 +86,7 @@ __all__ = [
     "SIGNAL_EVALUATION_REPORTS_DIR",
     "should_capture_signal",
     "update_signal_dataset_outcomes",
+    "sync_live_to_cumulative",
     "upsert_signal_rows",
     "write_signals_dataset",
     "build_signal_evaluation_summary",

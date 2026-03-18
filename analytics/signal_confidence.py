@@ -103,7 +103,7 @@ def _market_stability_component(trade: dict) -> float:
     }
     risk_score = risk_map.get(risk_state, 50)
 
-    vol_shock = _safe_float(trade.get("volatility_shock_score"), 0)
+    vol_shock = _safe_float(trade.get("market_volatility_shock_score"), 0)
     # Higher vol shock → lower stability; invert and normalise (0–100 scale)
     vol_stability = _clip(100 - vol_shock, 0, 100)
 

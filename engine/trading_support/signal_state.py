@@ -439,21 +439,15 @@ def decide_direction(
         elif spot_vs_flip == "BELOW_FLIP":
             add_vote("BEARISH", "DEALER_VOL")
 
-    if vanna_regime == "POSITIVE_VANNA" and spot_vs_flip == "ABOVE_FLIP":
+    if vanna_regime == "POSITIVE_VANNA" and spot_vs_flip in ("ABOVE_FLIP", "AT_FLIP"):
         add_vote("BULLISH", "VANNA")
-    elif vanna_regime == "NEGATIVE_VANNA" and spot_vs_flip == "BELOW_FLIP":
+    elif vanna_regime == "NEGATIVE_VANNA" and spot_vs_flip in ("BELOW_FLIP", "AT_FLIP"):
         add_vote("BEARISH", "VANNA")
 
-    if charm_regime == "POSITIVE_CHARM" and spot_vs_flip == "ABOVE_FLIP":
+    if charm_regime == "POSITIVE_CHARM" and spot_vs_flip in ("ABOVE_FLIP", "AT_FLIP"):
         add_vote("BULLISH", "CHARM")
-    elif charm_regime == "NEGATIVE_CHARM" and spot_vs_flip == "BELOW_FLIP":
+    elif charm_regime == "NEGATIVE_CHARM" and spot_vs_flip in ("BELOW_FLIP", "AT_FLIP"):
         add_vote("BEARISH", "CHARM")
-
-    if backtest_mode and not bullish_votes and not bearish_votes:
-        if spot_vs_flip == "ABOVE_FLIP" and dealer_pos == "Long Gamma":
-            add_vote("BULLISH", "BACKTEST_FALLBACK")
-        elif spot_vs_flip == "BELOW_FLIP" and dealer_pos == "Short Gamma":
-            add_vote("BEARISH", "BACKTEST_FALLBACK")
 
     bullish_score = round(sum(weight for _, weight in bullish_votes), 2)
     bearish_score = round(sum(weight for _, weight in bearish_votes), 2)
