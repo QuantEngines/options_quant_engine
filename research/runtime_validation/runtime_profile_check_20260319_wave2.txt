@@ -1,0 +1,43 @@
+/Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+=== PROFILE_TOP25_CUMULATIVE ===
+         24416606 function calls (24005240 primitive calls) in 8.196 seconds
+
+   Ordered by: cumulative time
+   List reduced from 3163 to 25 due to restriction <25>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      300    0.152    0.001    7.358    0.025 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/strategy/strike_selector.py:570(rank_strike_candidates)
+      300    0.015    0.000    3.440    0.011 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/strategy/enhanced_strike_scoring.py:348(compute_enhanced_strike_scores)
+    35200    0.023    0.000    1.818    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/ops/common.py:62(new_method)
+56450/54750    0.243    0.000    1.661    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/series.py:392(__init__)
+    13500    0.042    0.000    1.616    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/frame.py:4282(__setitem__)
+    13500    0.015    0.000    1.478    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/frame.py:4525(_set_item)
+      300    0.008    0.000    1.466    0.005 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/strategy/strike_selector.py:488(_score_candidate_frame)
+      300    0.012    0.000    1.343    0.004 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/strategy/enhanced_strike_scoring.py:222(compute_payoff_efficiency)
+    13500    0.036    0.000    1.331    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/frame.py:4492(_set_item_mgr)
+    35200    0.057    0.000    1.221    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/series.py:6222(_construct_result)
+    13250    0.059    0.000    1.167    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/internals/managers.py:1366(insert)
+    21400    0.014    0.000    1.089    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/series.py:6152(_arith_method)
+    21400    0.067    0.000    1.064    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/base.py:1380(_arith_method)
+14150/13250    0.061    0.000    0.781    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/indexes/base.py:7011(insert)
+      800    0.012    0.000    0.757    0.001 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/analytics/gamma_exposure.py:33(calculate_gamma_exposure)
+5065610/5037160    0.427    0.000    0.710    0.000 {built-in method builtins.isinstance}
+      325    0.003    0.000    0.668    0.002 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/frame.py:1568(itertuples)
+    16250    0.027    0.000    0.648    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/indexing.py:1177(__getitem__)
+     3294    0.002    0.000    0.608    0.000 {method 'extend' of 'list' objects}
+    15375    0.009    0.000    0.606    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/frame.py:1639(<genexpr>)
+      300    0.006    0.000    0.564    0.002 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/strategy/strike_selector.py:105(_normalize_candidate_rows)
+    72851    0.164    0.000    0.541    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/construction.py:517(sanitize_array)
+    10800    0.017    0.000    0.532    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/series.py:6129(_cmp_method)
+    20650    0.047    0.000    0.496    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/frame.py:4073(__getitem__)
+    15050    0.017    0.000    0.493    0.000 /Users/pramitdutta/Desktop/Trading Engines/options_quant_engine/.venv/lib/python3.9/site-packages/pandas/core/indexing.py:1690(_getitem_tuple)
+
+
+
+risk_missing_market_features_neutralized= True
+risk_missing_volatility_shock_score= 0.0
+risk_partial_coverage_ratio= 0.2
+risk_partial_volatility_shock_score= 0.7
+blend_prob_samples= [0.18, 0.92, 0.62, 0.27]
+blend_prob_all_in_0_1= True

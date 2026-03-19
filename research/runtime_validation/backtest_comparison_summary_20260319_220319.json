@@ -1,0 +1,139 @@
+{
+  "source_file": "backtest_comparison_results_20260319_220319.json",
+  "method_rows": [
+    {
+      "method": "blended",
+      "total_signals": 7554,
+      "trade_signals": 4071,
+      "trade_rate_pct": 53.89,
+      "avg_trade_strength": 83.64,
+      "avg_composite_score": 58.06,
+      "expiry_accuracy_pct": 45.79,
+      "target_hit_rate_pct": 43.85,
+      "stop_loss_hit_rate_pct": 51.54,
+      "elapsed_seconds": 1319.22
+    },
+    {
+      "method": "pure_rule",
+      "total_signals": 7554,
+      "trade_signals": 3983,
+      "trade_rate_pct": 52.73,
+      "avg_trade_strength": 82.53,
+      "avg_composite_score": 57.96,
+      "expiry_accuracy_pct": 45.62,
+      "target_hit_rate_pct": 43.79,
+      "stop_loss_hit_rate_pct": 51.72,
+      "elapsed_seconds": 1245.82
+    },
+    {
+      "method": "pure_ml",
+      "total_signals": 7554,
+      "trade_signals": 3408,
+      "trade_rate_pct": 45.12,
+      "avg_trade_strength": 83.14,
+      "avg_composite_score": 58.44,
+      "expiry_accuracy_pct": 45.33,
+      "target_hit_rate_pct": 42.22,
+      "stop_loss_hit_rate_pct": 52.85,
+      "elapsed_seconds": 1205.18
+    },
+    {
+      "method": "research_dual_model",
+      "total_signals": 7554,
+      "trade_signals": 4071,
+      "trade_rate_pct": 53.89,
+      "avg_trade_strength": 83.64,
+      "avg_composite_score": 58.06,
+      "expiry_accuracy_pct": 45.79,
+      "target_hit_rate_pct": 43.85,
+      "stop_loss_hit_rate_pct": 51.54,
+      "elapsed_seconds": 1191.75
+    },
+    {
+      "method": "research_decision_policy",
+      "total_signals": 7554,
+      "trade_signals": 2006,
+      "trade_rate_pct": 26.56,
+      "avg_trade_strength": 87.91,
+      "avg_composite_score": 59.57,
+      "expiry_accuracy_pct": 46.56,
+      "target_hit_rate_pct": 41.67,
+      "stop_loss_hit_rate_pct": 55.08,
+      "elapsed_seconds": 1208.99
+    },
+    {
+      "method": "ev_sizing",
+      "total_signals": 7554,
+      "trade_signals": 4071,
+      "trade_rate_pct": 53.89,
+      "avg_trade_strength": 83.64,
+      "avg_composite_score": 58.06,
+      "expiry_accuracy_pct": 45.79,
+      "target_hit_rate_pct": 43.85,
+      "stop_loss_hit_rate_pct": 51.54,
+      "elapsed_seconds": 1259.05
+    }
+  ],
+  "leaders": {
+    "best_composite": {
+      "method": "research_decision_policy",
+      "total_signals": 7554,
+      "trade_signals": 2006,
+      "trade_rate_pct": 26.56,
+      "avg_trade_strength": 87.91,
+      "avg_composite_score": 59.57,
+      "expiry_accuracy_pct": 46.56,
+      "target_hit_rate_pct": 41.67,
+      "stop_loss_hit_rate_pct": 55.08,
+      "elapsed_seconds": 1208.99
+    },
+    "best_strength": {
+      "method": "research_decision_policy",
+      "total_signals": 7554,
+      "trade_signals": 2006,
+      "trade_rate_pct": 26.56,
+      "avg_trade_strength": 87.91,
+      "avg_composite_score": 59.57,
+      "expiry_accuracy_pct": 46.56,
+      "target_hit_rate_pct": 41.67,
+      "stop_loss_hit_rate_pct": 55.08,
+      "elapsed_seconds": 1208.99
+    },
+    "best_expiry_accuracy": {
+      "method": "research_decision_policy",
+      "total_signals": 7554,
+      "trade_signals": 2006,
+      "trade_rate_pct": 26.56,
+      "avg_trade_strength": 87.91,
+      "avg_composite_score": 59.57,
+      "expiry_accuracy_pct": 46.56,
+      "target_hit_rate_pct": 41.67,
+      "stop_loss_hit_rate_pct": 55.08,
+      "elapsed_seconds": 1208.99
+    },
+    "best_target_hit_rate": {
+      "method": "blended",
+      "total_signals": 7554,
+      "trade_signals": 4071,
+      "trade_rate_pct": 53.89,
+      "avg_trade_strength": 83.64,
+      "avg_composite_score": 58.06,
+      "expiry_accuracy_pct": 45.79,
+      "target_hit_rate_pct": 43.85,
+      "stop_loss_hit_rate_pct": 51.54,
+      "elapsed_seconds": 1319.22
+    },
+    "lowest_stop_loss_hit_rate": {
+      "method": "blended",
+      "total_signals": 7554,
+      "trade_signals": 4071,
+      "trade_rate_pct": 53.89,
+      "avg_trade_strength": 83.64,
+      "avg_composite_score": 58.06,
+      "expiry_accuracy_pct": 45.79,
+      "target_hit_rate_pct": 43.85,
+      "stop_loss_hit_rate_pct": 51.54,
+      "elapsed_seconds": 1319.22
+    }
+  }
+}
