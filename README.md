@@ -201,6 +201,38 @@ Important distinction:
 - each runner reads from the canonical signal datasets, produces structured reports (`.md`, `.json`, `.csv`), and generates visualizations (`.png`)
 - all research outputs are version-controlled alongside the runner scripts
 
+## Scoring Modes (Production Defaults)
+
+The engine supports both `continuous` and `discrete` scoring in key decision modules.
+Production defaults are now set to `continuous` to reduce threshold-jump behavior while keeping hard safety gates intact.
+
+Current defaults:
+
+- `trade_strength.runtime_thresholds.trade_strength_scoring_mode = "continuous"`
+- `confirmation_filter.core.confirmation_scoring_mode = "continuous"`
+- `strike_selection.scoring.strike_scoring_mode = "continuous"`
+
+Where these are defined:
+
+- `config/signal_policy.py`
+- `config/strike_selection_policy.py`
+
+Behavioral notes:
+
+- Continuous mode smooths score contribution curves for market-state factors.
+- Final hard protections remain discrete by design (for example, veto and safety gates).
+- You can switch any module back to `discrete` through policy overrides for controlled A/B checks.
+
+Replay A/B helper for confirmation mode:
+
+```bash
+python scripts/backtest/compare_confirmation_mode_replay.py \
+  --snapshot-dir data_store/replay_snapshots \
+  --max-snapshots 200
+```
+
+This generates CSV/JSON/Markdown artifacts that quantify score deltas and decision-impact deltas between `continuous` and `discrete` confirmation scoring.
+
 ## Architecture
 
 ### Core Live Flow
@@ -365,10 +397,10 @@ variable is not set.
 ### Prediction Method
 
 ```bash
-OQE_PREDICTION_METHOD=blended   # blended | pure_ml | pure_rule | research_dual_model | research_decision_policy | ev_sizing
+OQE_PREDICTION_METHOD=blended   # blended | pure_ml | pure_rule | research_dual_model | research_decision_policy | ev_sizing | research_rank_gate | research_uncertainty_adjusted
 ```
 
-Set to `blended` (default) for the production rule + ML weighted blend. Set to `pure_ml` to use only the ML leg, `pure_rule` for only the rule-based heuristic, `research_dual_model` to use the research GBT ranking + LogReg calibration dual-model, `research_decision_policy` to use the decision-policy layer that applies ALLOW/BLOCK/DOWNGRADE policies over the dual-model output, or `ev_sizing` to use expected-value-based sizing from conditional return tables (blocks negative-EV signals, scales positive-EV proportionally). The backtester also accepts a per-run `prediction_method` parameter that overrides this setting for that run only.
+Set to `blended` (default) for the production rule + ML weighted blend. Set to `pure_ml` to use only the ML leg, `pure_rule` for only the rule-based heuristic, `research_dual_model` to use the research GBT ranking + LogReg calibration dual-model, `research_decision_policy` to use the decision-policy layer that applies ALLOW/BLOCK/DOWNGRADE policies over the dual-model output, `ev_sizing` to use expected-value-based sizing from conditional return tables (blocks negative-EV signals, scales positive-EV proportionally), `research_rank_gate` to block low-rank signals with a research rank threshold, or `research_uncertainty_adjusted` to downweight high-uncertainty signals using dual-model disagreement and confidence ambiguity. The backtester also accepts a per-run `prediction_method` parameter that overrides this setting for that run only.
 
 ### Common Provider Settings
 
@@ -509,6 +541,24 @@ Full suite (192 tests):
 ```bash
 pytest -q
 ```
+
+Warning governance (local + CI):
+
+- known benign platform noise is allowlisted: `urllib3.exceptions.NotOpenSSLWarning` on macOS LibreSSL environments
+- risky warnings are not broadly suppressed
+- in CI (`CI=1`), warnings are promoted to errors by `tests/conftest.py`, with only the known urllib3 macOS SSL warning exempted
+
+CI-style strict warning run:
+
+```bash
+CI=1 .venv/bin/python -m pytest -q
+```
+
+Notes:
+
+- `pytest.ini` keeps the urllib3 allowlist explicit and narrow
+- model deserialization version-mismatch warnings (for example sklearn `InconsistentVersionWarning`) are treated as actionable risk and should be resolved by model/runtime version alignment
+- report-generation numeric summaries guard empty/all-NaN slices to avoid silent invalid-statistics warnings
 
 Parameter tuning framework:
 
