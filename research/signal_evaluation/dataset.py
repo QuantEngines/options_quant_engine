@@ -17,6 +17,7 @@ Downstream Usage:
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 
@@ -244,7 +245,7 @@ def _read_sqlite_dataset(path: Path) -> pd.DataFrame:
     """
     if not path.exists():
         return _empty_dataset_frame()
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         frame = pd.read_sql_query("SELECT * FROM signals", connection)
     return _normalize_dataset_frame(frame)
 
@@ -268,7 +269,7 @@ def _write_sqlite_dataset(frame: pd.DataFrame, path: Path) -> None:
         The output is designed to remain serializable so experiments, reports, and governance decisions can be reproduced later.
     """
     _ensure_parent_dir(path)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         normalized = _normalize_dataset_frame(frame)
         normalized.to_sql("signals", connection, if_exists="replace", index=False)
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id)")
@@ -295,7 +296,7 @@ def _append_sqlite_rows(frame: pd.DataFrame, path: Path) -> None:
     if frame.empty:
         return
     _ensure_parent_dir(path)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         if not _sqlite_has_table(connection, "signals"):
             normalized = _normalize_dataset_frame(frame)
             normalized.to_sql("signals", connection, if_exists="replace", index=False)
@@ -449,7 +450,7 @@ def _load_existing_signal_ids(path: Path) -> set[str]:
     sqlite_path = _dataset_store_path(path)
     if sqlite_path.exists():
         try:
-            with sqlite3.connect(sqlite_path) as connection:
+            with closing(sqlite3.connect(sqlite_path)) as connection:
                 frame = pd.read_sql_query("SELECT signal_id FROM signals", connection)
         except Exception:
             frame = load_signals_dataset(path)[["signal_id"]]
