@@ -342,7 +342,7 @@ options_quant_engine/
 ├── risk/               # overlay layers and regime models
 ├── scripts/            # operational helpers, historical-data download, ML research, model registry builder, daily reports, multiyear backtest
 ├── strategy/           # confirmation, strike selection, enhanced scoring, exits, sizing, trade strength
-├── tests/              # regression and scenario coverage (192 tests)
+├── tests/              # regression and scenario coverage (238 tests)
 ├── tuning/             # registry, packs, experiments, search, validation, promotion code
 ├── utils/              # centralized numerics, math helpers, timestamp utilities
 ├── documentation/      # system monograph, academic papers, signal state dictionary, research notes
@@ -432,12 +432,18 @@ ICICI_BREEZE_SESSION_TOKEN=
 ### Macro / News Settings
 
 ```bash
+OQE_RUNTIME_ENV=DEV
 MACRO_EVENT_FILTER_ENABLED=true
 MACRO_EVENT_SCHEDULE_FILE=config/india_macro_schedule.json
-HEADLINE_PROVIDER=MOCK
+HEADLINE_PROVIDER=RSS
 HEADLINE_MOCK_FILE=config/mock_headlines.example.json
-HEADLINE_RSS_URLS=
+HEADLINE_RSS_URLS=https://www.livemint.com/rss/markets
 ```
+
+Production safety guard:
+
+- when `OQE_RUNTIME_ENV` is set to `PROD` or `PRODUCTION`, `HEADLINE_PROVIDER=MOCK` is rejected at startup
+- production deployments should use `HEADLINE_PROVIDER=RSS` (or another live provider)
 
 ### Global Market Overlay Settings
 
@@ -545,7 +551,7 @@ Targeted regression:
 pytest -q tests/test_live_engine_policy.py tests/test_signal_evaluation_dataset.py
 ```
 
-Full suite (192 tests):
+Full suite (238 tests):
 
 ```bash
 pytest -q
@@ -567,8 +573,8 @@ Notes:
 
 - `pytest.ini` keeps the urllib3 allowlist explicit and narrow
 - model deserialization version-mismatch warnings (for example sklearn `InconsistentVersionWarning`) are treated as actionable risk and should be resolved by model/runtime version alignment
-- report-generation numeric summaries guard empty/all-NaN slices to avoid silent invalid-statistics warnings
-
+- report-generation numeric summaries guard empty/all-NaN slices to avoid silent invalid-statistics warnings- data integrity tests (`test_live_data_anomaly_detection.py`) validate option chain consistency, IV anomalies, and spot price jumps
+- macro integration tests (`test_historical_macro_parity.py`) verify historical and live parity for event-based signals
 Parameter tuning framework:
 
 ```bash

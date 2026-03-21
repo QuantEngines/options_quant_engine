@@ -124,6 +124,11 @@ DEFAULT_DATA_SOURCE = "NSE"
 # Terminal output verbosity: COMPACT, STANDARD, or FULL_DEBUG
 OUTPUT_MODE = os.getenv("OQE_OUTPUT_MODE", "STANDARD").upper().strip()
 
+# Runtime environment label used for production safety checks.
+# Accepted production aliases: PROD, PRODUCTION.
+RUNTIME_ENV = os.getenv("OQE_RUNTIME_ENV", "DEV").upper().strip()
+IS_PRODUCTION = RUNTIME_ENV in {"PROD", "PRODUCTION"}
+
 REFRESH_INTERVAL = 10
 NSE_REFRESH_INTERVAL = 12
 ICICI_REFRESH_INTERVAL = 8

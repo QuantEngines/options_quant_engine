@@ -38,11 +38,24 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
             return frame
 
         with patch("data.global_market_snapshot.yf.download", side_effect=fake_download):
-            snapshot = build_global_market_snapshot("NIFTY", as_of="2026-03-14T10:00:00+05:30")
+            snapshot = build_global_market_snapshot(
+                "NIFTY",
+                as_of=pd.Timestamp.now(tz="Asia/Kolkata").isoformat(),
+            )
 
         self.assertEqual(len(download_calls), 1)
         self.assertTrue(snapshot["market_inputs"]["oil_change_24h"] is not None)
         self.assertTrue(snapshot["market_inputs"]["sp500_change_24h"] is not None)
+
+    def test_build_global_market_snapshot_returns_neutral_for_historical_as_of(self):
+        with patch("data.global_market_snapshot.yf.download") as mock_download:
+            snapshot = build_global_market_snapshot("NIFTY", as_of="2020-01-10T10:00:00+05:30")
+
+        self.assertFalse(snapshot["data_available"])
+        self.assertTrue(snapshot["neutral_fallback"])
+        self.assertIn("global_market_historical_as_of_not_supported", snapshot["warnings"])
+        self.assertEqual(snapshot["market_inputs"], {})
+        mock_download.assert_not_called()
 
     def test_build_global_risk_features_computes_cross_asset_scores(self):
         features = build_global_risk_features(

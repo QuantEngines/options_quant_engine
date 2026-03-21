@@ -702,6 +702,7 @@ def generate_trade(
     _grs = global_risk_state if isinstance(global_risk_state, dict) else {}
     _grf = _grs.get("global_risk_features", {}) if isinstance(_grs.get("global_risk_features"), dict) else {}
     _mes = macro_event_state if isinstance(macro_event_state, dict) else {}
+    _mns = macro_news_state if isinstance(macro_news_state, dict) else {}
     _global_ctx = {
         "india_vix_level": _grf.get("india_vix_level"),
         "india_vix_change_24h": _grf.get("india_vix_change_24h"),
@@ -709,7 +710,7 @@ def generate_trade(
         "commodity_risk_score": _grf.get("commodity_risk_score"),
         "volatility_shock_score": _grf.get("volatility_shock_score"),
         "macro_event_risk_score": _mes.get("macro_event_risk_score", 0.0),
-        "macro_regime": _mes.get("macro_regime", "NO_EVENT"),
+        "macro_regime": _mns.get("macro_regime", _mes.get("macro_regime", "MACRO_NEUTRAL")),
         "days_to_expiry": _estimate_days_to_expiry(option_chain_validation, valuation_time),
         "weekday": _safe_weekday(valuation_time),
     }

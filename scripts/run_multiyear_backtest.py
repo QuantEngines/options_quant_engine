@@ -151,7 +151,18 @@ def _enrich_signal_row(row: dict, spot_df: pd.DataFrame) -> dict:
     flip_map = {"ABOVE_FLIP": 1, "BELOW_FLIP": -1, "AT_FLIP": 0}
     row["spot_vs_flip_numeric"] = flip_map.get(row.get("spot_vs_flip"), 0)
 
-    macro_map = {"NO_EVENT": 0, "POST_EVENT": 1, "PRE_EVENT": 2, "DURING_EVENT": 3}
+    macro_map = {
+        "NO_EVENT": 0,
+        "NO_EVENT_DATA": 0,
+        "CLEAR": 0,
+        "POST_EVENT": 1,
+        "POST_EVENT_COOLDOWN": 1,
+        "PRE_EVENT": 2,
+        "PRE_EVENT_WATCH": 2,
+        "PRE_EVENT_LOCKDOWN": 3,
+        "DURING_EVENT": 3,
+        "LIVE_EVENT": 3,
+    }
     row["macro_event_numeric"] = macro_map.get(
         row.get("macro_regime", "NO_EVENT"), 0
     )

@@ -204,6 +204,50 @@ def _prepare_option_chain_frame(option_chain: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _build_option_chain_preview(option_chain: pd.DataFrame, spot: float, max_rows: int = 20) -> list[dict]:
+    """
+    Build a diagnostics preview centered around the current spot so operators
+    see nearby strikes instead of provider-order rows.
+    """
+    if option_chain is None or option_chain.empty:
+        return []
+
+    frame = option_chain.copy()
+    strike_col = "strikePrice" if "strikePrice" in frame.columns else ("strike" if "strike" in frame.columns else None)
+    if strike_col is None:
+        return frame.head(max_rows).to_dict(orient="records")
+
+    frame[strike_col] = pd.to_numeric(frame[strike_col], errors="coerce")
+    frame = frame.dropna(subset=[strike_col])
+    if frame.empty:
+        return option_chain.head(max_rows).to_dict(orient="records")
+
+    spot_value = pd.to_numeric(pd.Series([spot]), errors="coerce").iloc[0]
+    if pd.isna(spot_value):
+        return frame.head(max_rows).to_dict(orient="records")
+
+    nearest_strike_count = max(max_rows // 2, 1)
+    nearest_strikes = (
+        frame[[strike_col]]
+        .drop_duplicates()
+        .assign(_distance=lambda df: (df[strike_col] - spot_value).abs())
+        .sort_values(["_distance", strike_col], kind="mergesort")
+        .head(nearest_strike_count)[strike_col]
+        .tolist()
+    )
+
+    preview = frame[frame[strike_col].isin(nearest_strikes)].copy()
+    sort_cols = [strike_col]
+    if "optionType" in preview.columns:
+        sort_cols.append("optionType")
+    preview = preview.sort_values(sort_cols, kind="mergesort")
+
+    if len(preview) > max_rows:
+        preview = preview.head(max_rows)
+
+    return preview.to_dict(orient="records")
+
+
 def _is_replay_like_mode(mode: str) -> bool:
     """
     Purpose:
@@ -519,6 +563,23 @@ def _load_market_inputs(
             replay_spot = replay_spot or replay_selection.get("spot_path")
             replay_chain = replay_chain or replay_selection.get("chain_path")
 
+            # If the selected source label has no valid chain snapshots,
+            # retry with any source so replay can still run using available data.
+            if not replay_chain:
+                fallback_selection = resolve_replay_snapshot_paths(
+                    symbol,
+                    replay_dir=replay_dir,
+                    source_label=None,
+                )
+                replay_spot = replay_spot or fallback_selection.get("spot_path")
+                replay_chain = replay_chain or fallback_selection.get("chain_path")
+                if replay_chain:
+                    replay_selection = {
+                        **fallback_selection,
+                        "selection_reason": "fallback_latest_valid_any_source",
+                        "requested_source_label": str(source or "").upper().strip() or None,
+                    }
+
         if replay_selection is None:
             replay_selection = {
                 "spot_path": replay_spot,
@@ -693,7 +754,7 @@ def _build_result_payload(
         "option_chain_validation": option_chain_validation,
         "option_chain_rows": len(option_chain) if option_chain is not None else 0,
         "option_chain_frame": option_chain_frame,
-        "option_chain_preview": option_chain.head(20).to_dict(orient="records"),
+        "option_chain_preview": _build_option_chain_preview(option_chain, spot=spot, max_rows=20),
         "trade": trade,
         "execution_trade": execution_trade,
         "trade_audit": trade_audit,
@@ -925,18 +986,48 @@ def _evaluate_snapshot_for_pack(
     context_manager = temporary_parameter_pack(parameter_pack_name) if parameter_pack_name else nullcontext()
     with context_manager:
         active_pack_name = get_active_parameter_pack()["name"]
-        macro_news_state = build_macro_news_state(
-            event_state=macro_event_state,
-            headline_state=headline_state,
-            as_of=spot_timestamp,
-        ).to_dict()
-        global_risk_state = build_global_risk_state(
-            macro_event_state=macro_event_state,
-            macro_news_state=macro_news_state,
-            global_market_snapshot=global_market_snapshot,
-            holding_profile=holding_profile,
-            as_of=spot_timestamp,
-        )
+        
+        # Build macro_news_state with fallback to neutral on error
+        try:
+            macro_news_state = build_macro_news_state(
+                event_state=macro_event_state,
+                headline_state=headline_state,
+                as_of=spot_timestamp,
+            ).to_dict()
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "build_macro_news_state failed for %s: %s, using neutral fallback",
+                symbol, exc
+            )
+            from macro.macro_news_aggregator import _neutral_macro_news_state
+            macro_news_state = _neutral_macro_news_state(
+                event_state=macro_event_state,
+                warnings=["macro_news_state_construction_failed"],
+            ).to_dict()
+        
+        # Build global_risk_state with fallback to neutral on error
+        try:
+            global_risk_state = build_global_risk_state(
+                macro_event_state=macro_event_state,
+                macro_news_state=macro_news_state,
+                global_market_snapshot=global_market_snapshot,
+                holding_profile=holding_profile,
+                as_of=spot_timestamp,
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "build_global_risk_state failed for %s: %s, using neutral fallback",
+                symbol, exc
+            )
+            from risk.global_risk_layer import _fallback_global_risk_state
+            global_risk_state = _fallback_global_risk_state(
+                event_window_status=macro_event_state.get("event_window_status", "NO_EVENT_DATA") if macro_event_state else "NO_EVENT_DATA",
+                macro_event_risk_score=macro_event_state.get("macro_event_risk_score", 0) if macro_event_state else 0,
+                event_lockdown_flag=macro_event_state.get("event_lockdown_flag", False) if macro_event_state else False,
+                next_event_name=macro_event_state.get("next_event_name") if macro_event_state else None,
+                active_event_name=macro_event_state.get("active_event_name") if macro_event_state else None,
+                holding_profile=holding_profile,
+            )
 
         trade = None
         if spot_validation.get("is_valid", False) and option_chain_validation.get("is_valid", False):

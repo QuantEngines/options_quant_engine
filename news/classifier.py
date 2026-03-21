@@ -16,6 +16,7 @@ Downstream Usage:
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -34,6 +35,15 @@ from config.news_keyword_policy import (
 )
 from news.models import HeadlineRecord
 from utils.numerics import clip as _clip  # noqa: F401
+
+
+def _contains_keyword(text: str, keyword: str) -> bool:
+    """Match keyword using token boundaries to avoid noisy substring hits."""
+    token = str(keyword or "").strip().lower()
+    if not token:
+        return False
+    pattern = rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
+    return re.search(pattern, text) is not None
 
 
 @dataclass(frozen=True)
@@ -138,7 +148,7 @@ def classify_headline(record: HeadlineRecord) -> HeadlineClassification:
     global_bias = 0.0
 
     for rule in headline_rules:
-        keywords = [keyword for keyword in rule["keywords"] if keyword in text]
+        keywords = [keyword for keyword in rule["keywords"] if _contains_keyword(text, keyword)]
         if not keywords:
             continue
 
@@ -158,8 +168,8 @@ def classify_headline(record: HeadlineRecord) -> HeadlineClassification:
         india_bias += float(rule["india_macro_bias"]) * india_bias_multiplier
         global_bias += float(rule["global_risk_bias"]) * global_bias_multiplier
 
-    positive_hits = sum(1 for keyword in positive_keywords if keyword in text)
-    negative_hits = sum(1 for keyword in negative_keywords if keyword in text)
+    positive_hits = sum(1 for keyword in positive_keywords if _contains_keyword(text, keyword))
+    negative_hits = sum(1 for keyword in negative_keywords if _contains_keyword(text, keyword))
     sentiment += cfg.positive_hit_weight * positive_hits
     sentiment -= cfg.negative_hit_weight * negative_hits
 

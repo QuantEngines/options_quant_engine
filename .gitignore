@@ -51,3 +51,4 @@ models_store/registry/
 
 # Local oversized backtest payloads (>100MB)
 research/runtime_validation/backtest_runs/backtest_comparison_results_*.json
+scripts/backtest/backtest_comparison_results_*.json

@@ -41,8 +41,8 @@ def verify_macro_integration():
     try:
         macro_event_state = evaluate_scheduled_event_risk(symbol=symbol)
         print(f"✓ Macro event state evaluated")
-        print(f"  Event lockdown: {macro_event_state.get('event_lockdown', False)}")
-        print(f"  Event risk score: {macro_event_state.get('event_risk_score', 0)}")
+        print(f"  Event lockdown: {macro_event_state.get('event_lockdown_flag', False)}")
+        print(f"  Event risk score: {macro_event_state.get('macro_event_risk_score', 0)}")
         print(f"  Next event: {macro_event_state.get('next_event_name', 'None')}")
     except Exception as e:
         print(f"⚠ Macro event state evaluation: {e}")
@@ -111,7 +111,7 @@ def verify_macro_integration():
         print(f"\n  Risk Assessment:")
         print(f"    • global_risk_state    = {grs.get('global_risk_state', 'UNKNOWN')}")
         print(f"    • global_risk_score    = {grs.get('global_risk_score', 0)}")
-        print(f"    • risk_adjustment_pct  = {grs.get('risk_adjustment_percentage', 0):.1f}%")
+        print(f"    • global_risk_adj      = {grs.get('global_risk_adjustment_score', 0)}")
         
         grf_from_state = grs.get('global_risk_features', {})
         print(f"\n  Macro Indicators in Risk State:")

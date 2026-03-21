@@ -92,9 +92,14 @@ def _build_headline_state(headlines, as_of, provider_name="SCENARIO"):
     as_of_ts = coerce_headline_timestamp(as_of)
     latest_ts = max((record.timestamp for record in records), default=None)
     is_stale = True
+    age_minutes = None
     if latest_ts is not None and as_of_ts is not None:
         age_minutes = max((as_of_ts - latest_ts).total_seconds() / 60.0, 0.0)
         is_stale = age_minutes > HEADLINE_STALE_MINUTES
+
+    if latest_ts is not None and age_minutes is None:
+        # Keep stale warning deterministic even when as_of is unavailable.
+        age_minutes = float(HEADLINE_STALE_MINUTES)
 
     return HeadlineIngestionState(
         records=records,
@@ -106,7 +111,7 @@ def _build_headline_state(headlines, as_of, provider_name="SCENARIO"):
         neutral_fallback=(not records) or is_stale,
         stale_after_minutes=HEADLINE_STALE_MINUTES,
         provider_metadata={"scenario_record_count": len(records)},
-        warnings=[f"headline_data_stale:{round(age_minutes, 2)}m"] if records and is_stale else [],
+        warnings=[f"headline_data_stale:{round(age_minutes, 2)}m"] if records and is_stale and age_minutes is not None else [],
         issues=[],
     )
 

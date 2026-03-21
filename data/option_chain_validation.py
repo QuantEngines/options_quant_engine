@@ -82,6 +82,81 @@ def _series_or_empty(option_chain, canonical_name: str) -> pd.Series:
     return option_chain[column]
 
 
+def _detect_iv_anomalies(iv_series: pd.Series, thresholds: dict | None = None) -> list[str]:
+    """
+    Detect anomalous IV values that might indicate data corruption or feed issues.
+    
+    Returns list of warnings if anomalies detected.
+    """
+    warnings = []
+    if iv_series is None or iv_series.empty:
+        return warnings
+    
+    thresholds = thresholds or {}
+    max_iv_pct = float(thresholds.get("max_iv_percent", 500.0))  # 5.0x is normal, >500% is extreme
+    min_valid_iv = float(thresholds.get("min_valid_iv", 0.01))
+    
+    # Filter positive IVs
+    valid_iv = iv_series[(iv_series > min_valid_iv) & (iv_series < 10.0)]
+    if valid_iv.empty:
+        return warnings
+    
+    median_iv = valid_iv.median()
+    mean_iv = valid_iv.mean()
+    
+    if median_iv < min_valid_iv:
+        return warnings
+    
+    # Check for extreme spikes
+    spike_threshold = median_iv * (max_iv_pct / 100.0)
+    spike_count = int((iv_series > spike_threshold).sum())
+    if spike_count > 0:
+        max_iv = iv_series.max()
+        spike_ratio = max_iv / median_iv if median_iv > 0 else 0
+        warnings.append(f"iv_extreme_spike_detected:{spike_count}rows_max_ratio_{spike_ratio:.1f}x")
+    
+    # Check for abnormal variance
+    std_iv = valid_iv.std()
+    if std_iv > median_iv * 2.0:  # Std dev more than 2x median
+        warnings.append(f"iv_high_variance:{std_iv:.4f}_vs_median_{median_iv:.4f}")
+    
+    return warnings
+
+
+def _detect_spot_jump(current_spot: float, day_high: float, day_low: float, prev_close: float, thresholds: dict | None = None) -> list[str]:
+    """
+    Detect if current spot price jumped abnormally from previous close or day range.
+    
+    Returns list of warnings if anomalies detected.
+    """
+    warnings = []
+    if current_spot is None or prev_close is None or prev_close == 0:
+        return warnings
+    
+    thresholds = thresholds or {}
+    max_gap_pct = float(thresholds.get("max_normal_gap_percent", 3.0))  # 3% is normal for options expiry
+    max_intraday_pct = float(thresholds.get("max_intraday_move_percent", 8.0))  # 8% is normal
+    
+    # Check gap from previous close
+    gap_pct = abs((current_spot - prev_close) / prev_close) * 100.0
+    if gap_pct > max_gap_pct:
+        warnings.append(f"spot_gap_from_prev_close:{gap_pct:.2f}pct")
+    
+    # Check intraday range consistency
+    if day_high is not None and day_low is not None and day_high > day_low:
+        intraday_range_pct = ((day_high - day_low) / current_spot) * 100.0 if current_spot > 0 else 0
+        if intraday_range_pct > max_intraday_pct:
+            warnings.append(f"abnormal_intraday_range:{intraday_range_pct:.2f}pct")
+        
+        # Check if spot is wildly outside day range
+        if current_spot > day_high * 1.02:  # More than 2% above high
+            warnings.append(f"spot_above_day_high_by_{((current_spot/day_high - 1)*100):.2f}pct")
+        elif current_spot < day_low * 0.98:  # More than 2% below low
+            warnings.append(f"spot_below_day_low_by_{((1 - current_spot/day_low)*100):.2f}pct")
+    
+    return warnings
+
+
 def _as_bool(value, default=False):
     if isinstance(value, bool):
         return value
@@ -188,6 +263,10 @@ def validate_option_chain(option_chain):
     one_sided_quote_rows = int((bid_present_mask ^ ask_present_mask).sum()) if has_two_sided_quote_columns else 0
     iv_rows = int(iv_series.gt(0).sum()) if not iv_series.empty else 0
     strike_count = int(strike_series.dropna().nunique()) if not strike_series.empty else 0
+
+    # Check for IV anomalies
+    iv_anomalies = _detect_iv_anomalies(iv_series)
+    warnings.extend(iv_anomalies)
 
     unknown_option_type_rows = int((~option_type_series.isin(["CE", "PE"])).sum()) if not option_type_series.empty else 0
     if unknown_option_type_rows > 0:

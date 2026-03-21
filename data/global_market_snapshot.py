@@ -68,6 +68,12 @@ def _coerce_timestamp(value):
         return None
 
 
+def _is_historical_as_of(as_of_ts: pd.Timestamp) -> bool:
+    """Return True when the requested snapshot date is earlier than today in IST."""
+    now_ist = pd.Timestamp.now(tz=IST_TIMEZONE)
+    return as_of_ts.date() < now_ist.date()
+
+
 def _symbol_to_yfinance(symbol: str) -> str:
     """
     Purpose:
@@ -443,6 +449,17 @@ def build_global_market_snapshot(symbol: str, *, as_of=None) -> dict:
         )
 
     as_of_ts = _coerce_timestamp(as_of) or pd.Timestamp.now(tz=IST_TIMEZONE)
+
+    # Guard against look-ahead leakage in replay/backtest style calls: this
+    # loader only has live yfinance access and cannot produce true historical
+    # point-in-time cross-asset snapshots.
+    if _is_historical_as_of(as_of_ts):
+        return _neutral_market_snapshot(
+            symbol,
+            as_of=as_of_ts,
+            warnings=["global_market_historical_as_of_not_supported"],
+        )
+
     issues = []
     warnings = []
     market_inputs = {}

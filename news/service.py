@@ -27,6 +27,8 @@ from config.settings import (
     HEADLINE_RSS_URLS,
     HEADLINE_RSS_USER_AGENT,
     HEADLINE_STALE_MINUTES,
+    IS_PRODUCTION,
+    RUNTIME_ENV,
 )
 from news.models import HeadlineIngestionState, HeadlineRecord, coerce_headline_timestamp
 from news.providers import HeadlineProvider, build_headline_provider
@@ -265,6 +267,12 @@ def build_default_headline_service() -> HeadlineIngestionService:
     Notes:
         The helper keeps the surrounding module readable without changing runtime behavior.
     """
+    if IS_PRODUCTION and HEADLINE_PROVIDER == "MOCK":
+        raise ValueError(
+            "Invalid headline provider for production runtime: HEADLINE_PROVIDER=MOCK. "
+            f"Set HEADLINE_PROVIDER=RSS (or another live provider) when OQE_RUNTIME_ENV={RUNTIME_ENV}."
+        )
+
     provider = build_headline_provider(
         HEADLINE_PROVIDER,
         mock_file=HEADLINE_MOCK_FILE,

@@ -159,9 +159,9 @@ def _compute_lookback_avg_range_pct(daily_hist: pd.DataFrame, completed_days: in
     return round(float(tail["range_pct"].mean()), 4)
 
 
-def get_spot_snapshot(symbol: str) -> dict:
+def get_spot_snapshot(symbol: str, max_retries: int = 3) -> dict:
     """
-    Returns a richer live spot snapshot for the engine:
+    Returns a richer live spot snapshot for the engine with retry logic:
     - spot
     - day_open
     - day_high
@@ -169,17 +169,35 @@ def get_spot_snapshot(symbol: str) -> dict:
     - prev_close
     - timestamp
     - lookback_avg_range_pct
+    
+    Includes exponential backoff retry logic for transient failures.
     """
 
     normalized_symbol = normalize_underlying_symbol(symbol)
     ticker = _normalize_symbol(normalized_symbol)
-    data = yf.Ticker(ticker)
+    
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            data = yf.Ticker(ticker)
+            intraday = data.history(period="5d", interval="5m", auto_adjust=False)
+            daily = data.history(period="20d", interval="1d", auto_adjust=False)
 
-    intraday = data.history(period="5d", interval="5m", auto_adjust=False)
-    daily = data.history(period="20d", interval="1d", auto_adjust=False)
-
-    if intraday is None or intraday.empty:
-        raise ValueError("Unable to fetch intraday spot data")
+            if intraday is None or intraday.empty:
+                raise ValueError("Unable to fetch intraday spot data")
+            
+            # Successfully fetched, break retry loop
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                wait_seconds = 2 ** (attempt - 1) + _safe_float(pd.Series([pd.np.random.uniform(0, 1)]).iloc[0] if hasattr(pd, 'np') else 0, 0)
+                import time as time_module
+                time_module.sleep(min(wait_seconds, 8.0))  # Cap backoff at 8 seconds
+            continue
+    else:
+        # All retries exhausted
+        raise ValueError(f"Unable to fetch intraday spot data after {max_retries} attempts: {str(last_error)}")
 
     intraday = intraday.copy()
     intraday.index = [_to_ist_timestamp(x) for x in intraday.index]
@@ -230,8 +248,9 @@ def get_spot_snapshot(symbol: str) -> dict:
 
 def validate_spot_snapshot(snapshot: dict, replay_mode: bool = False) -> dict:
     """
-    Validate spot snapshot completeness and freshness.
+    Validate spot snapshot completeness, freshness, and data anomalies.
     """
+    from data.option_chain_validation import _detect_spot_jump
 
     issues = []
     warnings = []
@@ -260,6 +279,11 @@ def validate_spot_snapshot(snapshot: dict, replay_mode: bool = False) -> dict:
 
     if prev_close is None:
         warnings.append("missing_prev_close")
+    
+    # Check for spot price anomalies (gaps, jumps)
+    if spot is not None and prev_close is not None and day_high is not None and day_low is not None:
+        spot_anomalies = _detect_spot_jump(spot, day_high, day_low, prev_close)
+        warnings.extend(spot_anomalies)
 
     age_minutes = None
     is_stale = False

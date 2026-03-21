@@ -459,9 +459,7 @@ def _build_historical_macro_event_state(
     """Build macro event state from historical event schedule."""
     events = _load_macro_events()
     if not events:
-        return _neutral_macro_state(trade_date)
-
-    trade_date_str = str(trade_date)
+        return _neutral_macro_state(trade_date, event_data_available=False, status="NO_EVENT_DATA")
 
     # Find events within ±2 days window
     pre_window = trade_date - timedelta(days=2)
@@ -487,24 +485,19 @@ def _build_historical_macro_event_state(
             recent_events.append(evt)
 
     if not active_events and not upcoming_events and not recent_events:
-        return _neutral_macro_state(trade_date)
+        return _neutral_macro_state(trade_date, event_data_available=True, status="CLEAR")
 
     # Determine event window status
     if active_events:
-        window_status = "DURING_EVENT"
-        risk_score = max(
-            _event_risk_score(evt) for evt in active_events
-        )
+        window_status = "LIVE_EVENT"
+        # Historical risk uses the same 0-100 scale expected by live overlays.
+        risk_score = max(_event_risk_score(evt) for evt in active_events)
     elif upcoming_events:
-        window_status = "PRE_EVENT"
-        risk_score = max(
-            _event_risk_score(evt) * 0.6 for evt in upcoming_events
-        )
+        window_status = "PRE_EVENT_WATCH"
+        risk_score = max(_event_risk_score(evt) * 0.6 for evt in upcoming_events)
     else:
-        window_status = "POST_EVENT"
-        risk_score = max(
-            _event_risk_score(evt) * 0.3 for evt in recent_events
-        )
+        window_status = "POST_EVENT_COOLDOWN"
+        risk_score = max(_event_risk_score(evt) * 0.3 for evt in recent_events)
 
     _evt_name = lambda e: e.get("name") or e.get("event", "Unknown")
 
@@ -514,8 +507,10 @@ def _build_historical_macro_event_state(
         "enabled": True,
         "as_of": f"{trade_date}T15:30:00+05:30",
         "event_window_status": window_status,
-        "macro_event_risk_score": round(risk_score, 2),
-        "event_lockdown_flag": risk_score >= 0.7,
+        "macro_event_risk_score": int(round(risk_score)),
+        "event_lockdown_flag": window_status == "LIVE_EVENT",
+        "event_data_available": True,
+        "event_source": "HISTORICAL_EVENTS",
         "next_event_name": _evt_name(next_event) if next_event else None,
         "next_event_date": (next_event.get("timestamp") or next_event.get("date")) if next_event else None,
         "active_event_name": _evt_name(active_events[0]) if active_events else None,
@@ -528,13 +523,20 @@ def _build_historical_macro_event_state(
     }
 
 
-def _neutral_macro_state(trade_date: date) -> dict:
+def _neutral_macro_state(
+    trade_date: date,
+    *,
+    event_data_available: bool,
+    status: str,
+) -> dict:
     return {
         "enabled": True,
         "as_of": f"{trade_date}T15:30:00+05:30",
-        "event_window_status": "NO_EVENT",
-        "macro_event_risk_score": 0.0,
+        "event_window_status": status,
+        "macro_event_risk_score": 0,
         "event_lockdown_flag": False,
+        "event_data_available": bool(event_data_available),
+        "event_source": "HISTORICAL_EVENTS" if event_data_available else None,
         "next_event_name": None,
         "next_event_date": None,
         "active_event_name": None,
@@ -544,28 +546,28 @@ def _neutral_macro_state(trade_date: date) -> dict:
 
 
 def _event_risk_score(evt: dict) -> float:
-    """Assign 0-1 risk score based on event type."""
+    """Assign 0-100 risk score based on event type."""
     event_name = (evt.get("name") or evt.get("event", "")).lower()
     # Also use severity field if available
     severity = evt.get("severity", "").upper()
     if severity == "CRITICAL":
-        return 1.0
+        return 100.0
 
     scores = {
-        "rbi": 0.9, "mpc": 0.9, "monetary": 0.9,
-        "budget": 1.0, "union budget": 1.0,
-        "gdp": 0.7,
-        "cpi": 0.6, "inflation": 0.6,
-        "iip": 0.4,
-        "wpi": 0.4,
-        "pmi": 0.5,
-        "trade": 0.3,
-        "election": 0.8,
+        "rbi": 90.0, "mpc": 90.0, "monetary": 90.0,
+        "budget": 100.0, "union budget": 100.0,
+        "gdp": 70.0,
+        "cpi": 60.0, "inflation": 60.0,
+        "iip": 40.0,
+        "wpi": 40.0,
+        "pmi": 50.0,
+        "trade": 30.0,
+        "election": 80.0,
     }
     for keyword, score in scores.items():
         if keyword in event_name:
             return score
-    return 0.3
+    return 30.0
 
 
 # ---------------------------------------------------------------

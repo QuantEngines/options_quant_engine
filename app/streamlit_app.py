@@ -522,7 +522,7 @@ def _list_replay_source_labels(replay_dir: str, symbol: str) -> list[str]:
     """Scan chain snapshot filenames to extract available source labels."""
     replay_path = Path(replay_dir)
     if not replay_path.is_dir():
-        return ["REPLAY"]
+        return ["ANY"]
     symbol = (symbol or "").strip().upper()
     labels: set[str] = set()
     for path in replay_path.glob(f"{symbol}_*_option_chain_snapshot_*"):
@@ -532,7 +532,8 @@ def _list_replay_source_labels(replay_dir: str, symbol: str) -> list[str]:
         idx = remainder.find("_option_chain_snapshot_")
         if idx > 0:
             labels.add(remainder[:idx])
-    return sorted(labels) if labels else ["REPLAY"]
+    ordered = sorted(labels)
+    return ["ANY"] + ordered if ordered else ["ANY"]
 
 
 def _extract_snapshot_timestamp(path_str: str):
@@ -1560,21 +1561,27 @@ def _render_ml_research_panel(dataset: pd.DataFrame):
             st.info("ML scores not yet available in dataset. Run evaluation to populate.")
             return
 
-        scored = dataset[dataset["ml_rank_score"].notna()]
+        scored = dataset.copy()
+        scored["_ml_rank_score_num"] = pd.to_numeric(scored["ml_rank_score"], errors="coerce")
+        scored["_ml_confidence_score_num"] = pd.to_numeric(
+            scored.get("ml_confidence_score"),
+            errors="coerce",
+        )
+        scored = scored[scored["_ml_rank_score_num"].notna()]
         if scored.empty:
             st.info("No signals with ML scores yet.")
             return
 
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            avg_rank = scored["ml_rank_score"].mean()
+            avg_rank = scored["_ml_rank_score_num"].mean()
             st.metric("Avg Rank Score", f"{avg_rank:.3f}" if avg_rank == avg_rank else "—")
         with m2:
-            avg_conf = scored["ml_confidence_score"].mean() if "ml_confidence_score" in scored.columns else None
-            st.metric("Avg Confidence", f"{avg_conf:.3f}" if avg_conf and avg_conf == avg_conf else "—")
+            avg_conf = scored["_ml_confidence_score_num"].mean()
+            st.metric("Avg Confidence", f"{avg_conf:.3f}" if pd.notna(avg_conf) else "—")
         with m3:
             if "ml_agreement_with_engine" in scored.columns:
-                agree_pct = (scored["ml_agreement_with_engine"] == "YES").mean()
+                agree_pct = (scored["ml_agreement_with_engine"].astype(str).str.upper() == "YES").mean()
                 st.metric("Agreement Rate", f"{agree_pct:.1%}")
             else:
                 st.metric("Agreement Rate", "—")
@@ -1585,9 +1592,9 @@ def _render_ml_research_panel(dataset: pd.DataFrame):
             bucket_summary = (
                 scored.groupby("ml_rank_bucket")
                 .agg(
-                    n=("ml_rank_score", "count"),
-                    avg_rank=("ml_rank_score", "mean"),
-                    avg_conf=("ml_confidence_score", "mean"),
+                    n=("_ml_rank_score_num", "count"),
+                    avg_rank=("_ml_rank_score_num", "mean"),
+                    avg_conf=("_ml_confidence_score_num", "mean"),
                 )
                 .round(4)
                 .reset_index()
@@ -1685,7 +1692,7 @@ def main():
             replay_dir_index = replay_dir_options.index(saved_replay_dir) if saved_replay_dir in replay_dir_options else 0
             replay_dir = st.selectbox("Replay Directory", replay_dir_options, index=replay_dir_index, key="control_replay_dir")
             source_labels = _list_replay_source_labels(replay_dir, symbol)
-            saved_source = st.session_state.get("control_source", source_labels[0] if source_labels else "REPLAY")
+            saved_source = st.session_state.get("control_source", source_labels[0] if source_labels else "ANY")
             source_index = source_labels.index(saved_source) if saved_source in source_labels else 0
             source = st.selectbox("Replay Source Label", source_labels, index=source_index, key="control_source")
             save_live_snapshots = False
@@ -1718,12 +1725,23 @@ def main():
         if mode == "REPLAY":
             st.markdown("**Replay Snapshots**")
             spot_files, _ = _list_replay_files(replay_dir, symbol, "spot")
+            requested_source_label = None if source == "ANY" else source
             chain_files, skipped_chain_files = _list_replay_files(
                 replay_dir,
                 symbol,
                 "chain",
-                source_label=source,
+                source_label=requested_source_label,
             )
+            fallback_used = False
+            if not chain_files and requested_source_label is not None:
+                chain_files, skipped_chain_files = _list_replay_files(
+                    replay_dir,
+                    symbol,
+                    "chain",
+                    source_label=None,
+                )
+                fallback_used = bool(chain_files)
+
             default_chain = _select_default_option(chain_files)
             default_spot = _nearest_spot_for_chain(default_chain, spot_files) if default_chain else _select_default_option(spot_files)
             spot_options = [""] + spot_files
@@ -1748,6 +1766,8 @@ def main():
             with st.expander("Replay Snapshot Inventory", expanded=False):
                 st.write(f"Spot snapshots found: {len(spot_files)}")
                 st.write(f"Option-chain snapshots found: {len(chain_files)}")
+                if fallback_used:
+                    st.info("No valid chain snapshots were found for the selected source label. Showing latest valid chains across any source.")
                 if skipped_chain_files:
                     st.warning(f"Skipped {len(skipped_chain_files)} invalid/empty chain snapshot file(s).")
                 if replay_spot:
