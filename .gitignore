@@ -27,10 +27,12 @@ test_*Tests_*/
 
 # Research output artifacts — regenerable from code + raw data
 research/data_audit/
+research/audits/
 research/ml_research/
 research/ml_evaluation/**/*.csv
 research/ml_evaluation/**/*.json
 research/ml_evaluation/**/*.png
+research/ml_evaluation/run_logs/
 research/architecture_analysis/
 research/parameter_tuning/promotion_state.json
 research/parameter_tuning/*.jsonl
@@ -52,3 +54,4 @@ models_store/registry/
 # Local oversized backtest payloads (>100MB)
 research/runtime_validation/backtest_runs/backtest_comparison_results_*.json
 scripts/backtest/backtest_comparison_results_*.json
+scripts/backtest/reports/
