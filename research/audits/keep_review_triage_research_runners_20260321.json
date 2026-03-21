@@ -1,0 +1,150 @@
+{
+  "generated_on": "2026-03-21",
+  "scope": "KEEP_REVIEW triage for research runners",
+  "inputs": {
+    "prior_matrix": "research/audits/dead_code_sweep_matrix_20260321_second_pass.json",
+    "review_dimensions": [
+      "direct code imports",
+      "README workflow references",
+      "artifact footprint and recency",
+      "runner role overlap"
+    ]
+  },
+  "triage": [
+    {
+      "path": "research/ml_evaluation/ev_and_regime_policy/runner.py",
+      "decision": "KEEP",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "readme_references": [
+          "README.md"
+        ],
+        "artifacts_present": true,
+        "artifact_examples": [
+          "research/ml_evaluation/ev_and_regime_policy/combined_research_report.json",
+          "research/ml_evaluation/ev_and_regime_policy/ev_sizing_report.json",
+          "research/ml_evaluation/ev_and_regime_policy/regime_switching_report.json",
+          "research/ml_evaluation/ev_and_regime_policy/cross_method_comparison.json"
+        ],
+        "notes": "Central orchestrator for EV and regime-switching sub-pipelines with substantial output set."
+      }
+    },
+    {
+      "path": "research/ml_evaluation/policy_robustness/robustness_runner.py",
+      "decision": "KEEP",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "readme_references": [
+          "README.md"
+        ],
+        "artifacts_present": true,
+        "artifact_examples": [
+          "research/ml_evaluation/policy_robustness/policy_robustness_results.json",
+          "research/ml_evaluation/policy_robustness/policy_robustness_report.md",
+          "research/ml_evaluation/policy_robustness/rank_threshold_sweep.csv"
+        ],
+        "notes": "Documented canonical robustness workflow with complete report/chart outputs."
+      }
+    },
+    {
+      "path": "research/ml_evaluation/rank_gate_sizing/rank_gate_sizing_runner.py",
+      "decision": "KEEP",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "readme_references": [
+          "README.md"
+        ],
+        "artifacts_present": true,
+        "artifact_examples": [
+          "research/ml_evaluation/rank_gate_sizing/rank_gate_sizing_results.json",
+          "research/ml_evaluation/rank_gate_sizing/rank_gate_sizing_report.md",
+          "research/ml_evaluation/rank_gate_sizing/comparison.csv"
+        ],
+        "notes": "Documented research runner with dedicated output suite; no safe deletion signal."
+      }
+    },
+    {
+      "path": "research/ml_evaluation/ml_evaluation_runner.py",
+      "decision": "KEEP",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "readme_references": [
+          "README.md"
+        ],
+        "artifacts_present": true,
+        "artifact_examples": [
+          "research/ml_evaluation/ml_evaluation_summary.json",
+          "research/ml_evaluation/ml_evaluation_report.md",
+          "research/ml_evaluation/ml_extended_signals.csv"
+        ],
+        "notes": "Primary orchestrator for base ML report generation; outputs exist and align with file intent."
+      }
+    },
+    {
+      "path": "research/ml_evaluation/parameter_tuning/parameter_tuning_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "readme_references": [
+          "README.md"
+        ],
+        "artifacts_present": true,
+        "artifact_examples": [
+          "research/ml_evaluation/parameter_tuning/parameter_tuning_results.json",
+          "research/ml_evaluation/parameter_tuning/parameter_tuning_report.md",
+          "research/ml_evaluation/parameter_tuning/full_research_report.md"
+        ],
+        "notes": "Phase 1 runner appears historically superseded by phase2/phase3, but still referenced in phase progression narrative."
+      }
+    },
+    {
+      "path": "research/ml_evaluation/parameter_tuning/phase2_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "readme_references": [
+          "README.md"
+        ],
+        "artifacts_present": true,
+        "artifact_examples": [
+          "research/ml_evaluation/parameter_tuning/phase2/"
+        ],
+        "notes": "Phase 2 runner contributes to documented multi-phase parameter tuning lineage."
+      }
+    },
+    {
+      "path": "research/ml_evaluation/parameter_tuning/phase3_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "readme_references": [
+          "README.md"
+        ],
+        "artifacts_present": true,
+        "artifact_examples": [
+          "research/ml_evaluation/parameter_tuning/phase3/"
+        ],
+        "notes": "Latest targeted search phase; no direct coupling, but active phase artifact footprint exists."
+      }
+    }
+  ],
+  "proposed_second_safe_deletion_batch": {
+    "files": [],
+    "rationale": "No KEEP_REVIEW research runner meets safe-deletion criteria without losing documented workflows or artifact lineage."
+  },
+  "next_step_if_deletion_required": {
+    "action": "deprecate-then-delete",
+    "preconditions": [
+      "Replace README references with surviving canonical runners",
+      "Document migration from parameter_tuning_runner/phase2_runner/phase3_runner to one canonical entrypoint",
+      "Archive required historical reports in a non-executable folder"
+    ]
+  }
+}

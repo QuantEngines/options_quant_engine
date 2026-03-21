@@ -1,0 +1,244 @@
+{
+  "generated_on": "2026-03-21",
+  "scope": {
+    "ad_hoc": "scripts/ad_hoc/*.py",
+    "research_runners": "research/**/*runner*.py"
+  },
+  "policy": {
+    "KEEP": "Direct imports/usages in production code, ops scripts, or tests.",
+    "KEEP_REVIEW": "No direct import coupling, but documented as a supported workflow in README/docs.",
+    "DELETE_CANDIDATE": "No direct import coupling and no workflow documentation references."
+  },
+  "matrix": [
+    {
+      "path": "scripts/ad_hoc/extract_backtest_comparison_summary.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/fetch_macro_levels.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/oil_threshold_scenario_analysis.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/priority_1_impact_analysis.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/priority_2_regime_weighting_demo.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/priority_3_vol_adjusted_strikes_demo.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/production_validation_priority_123.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/runtime_regression_checks.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/signal_bias_analysis.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/verify_macro_integration.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "documentation/implementation_notes/OIL_SHOCK_THRESHOLD_UPDATE_SUMMARY.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "scripts/ad_hoc/verify_signal_data_flow.py",
+      "decision": "DELETE_CANDIDATE",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/ev_and_regime_policy/runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/ml_evaluation_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/parameter_tuning/parameter_tuning_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/parameter_tuning/phase2_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/parameter_tuning/phase3_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "MEDIUM",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/policy_robustness/robustness_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/predictor_comparison/predictor_comparison_runner.py",
+      "decision": "KEEP",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [
+          "scripts/ops/run_phase0_shadow_verdict.py",
+          "research/ml_evaluation/predictor_comparison/compare_scoring_modes_cumul.py"
+        ],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    },
+    {
+      "path": "research/ml_evaluation/rank_gate_sizing/rank_gate_sizing_runner.py",
+      "decision": "KEEP_REVIEW",
+      "confidence": "HIGH",
+      "evidence": {
+        "direct_imports": [],
+        "test_references": [],
+        "readme_or_docs_references": [
+          "README.md"
+        ],
+        "has_main_entrypoint": true
+      }
+    }
+  ]
+}
