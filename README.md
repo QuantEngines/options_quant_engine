@@ -233,6 +233,14 @@ python scripts/backtest/compare_confirmation_mode_replay.py \
 
 This generates CSV/JSON/Markdown artifacts that quantify score deltas and decision-impact deltas between `continuous` and `discrete` confirmation scoring.
 
+Full cross-predictor scoring mode comparison:
+
+```bash
+python scripts/backtest/compare_scoring_modes_full_backtest.py
+```
+
+Runs all 8 predictor methods under both `discrete` and `continuous` trade-strength scoring (16 backtest stages total) and writes CSV/JSON/Markdown artifacts to `scripts/backtest/reports/`. Use this to measure per-method accuracy, trade volume, and composite score deltas between scoring modes before changing production defaults.
+
 ## Architecture
 
 ### Core Live Flow
@@ -372,6 +380,7 @@ options_quant_engine/
 - [rank_gate_sizing_runner.py](research/ml_evaluation/rank_gate_sizing/rank_gate_sizing_runner.py): rank-gate + confidence-sizing research
 - [predictor_comparison_runner.py](research/ml_evaluation/predictor_comparison/predictor_comparison_runner.py): predictor method comparison
 - [run_multiyear_backtest.py](scripts/run_multiyear_backtest.py): 10-year multi-symbol backtest runner
+- [compare_scoring_modes_full_backtest.py](scripts/backtest/compare_scoring_modes_full_backtest.py): all-predictor discrete vs continuous scoring mode comparison (artifacts → `scripts/backtest/reports/`)
 - [dataset.py](research/signal_evaluation/dataset.py): canonical schema
 - [evaluator.py](research/signal_evaluation/evaluator.py): research row builder and outcome enrichment
 - [registry.py](tuning/registry.py): parameter registry and metadata
