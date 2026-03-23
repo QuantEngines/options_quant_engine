@@ -106,8 +106,8 @@ class ProbabilityFeaturePolicyConfig:
     # probability distribution so that confident setups reach higher values
     # and weak setups are pushed lower, improving discrimination.
     calibration_enabled: bool = True
-    calibration_midpoint: float = 0.40
-    calibration_steepness: float = 5.0
+    calibration_midpoint: float = 0.48
+    calibration_steepness: float = 3.5
 
 
 def get_probability_feature_policy_config() -> ProbabilityFeaturePolicyConfig:

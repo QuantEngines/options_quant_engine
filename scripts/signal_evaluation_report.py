@@ -28,7 +28,7 @@ else:
 PROJECT_ROOT = ensure_project_root_on_path(Path(__file__))
 
 from research.signal_evaluation import (
-    SIGNAL_DATASET_PATH,
+    CUMULATIVE_DATASET_PATH,
     load_signals_dataset,
     write_signal_evaluation_report,
 )
@@ -57,8 +57,11 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-path",
-        default=str(SIGNAL_DATASET_PATH),
-        help="Path to the canonical signals dataset CSV.",
+        default=str(CUMULATIVE_DATASET_PATH),
+        help=(
+            "Path to the canonical signals dataset CSV. "
+            f"Default: {CUMULATIVE_DATASET_PATH.name}"
+        ),
     )
     parser.add_argument(
         "--production-pack-name",

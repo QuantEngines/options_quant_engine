@@ -74,6 +74,8 @@ CONSENSUS_SCORE_CONFIG = {
 TRADE_RUNTIME_THRESHOLDS = {
     "min_trade_strength": 60,
     "min_composite_score": 55,
+    # Temporary guardrail while probability calibration is improved.
+    "move_probability_score_cap": 75,
     "strong_signal_threshold": 75,
     "medium_signal_threshold": 60,
     "weak_signal_threshold": 40,
@@ -91,7 +93,18 @@ TRADE_RUNTIME_THRESHOLDS = {
     "regime_strength_add_toxic": 8,
     "regime_composite_add_at_flip": 3,
     "regime_composite_add_toxic": 6,
+    # Positive gamma underperformed in recent evaluations; tighten gates there.
+    "regime_strength_add_positive_gamma": 5,
+    "regime_composite_add_positive_gamma": 3,
+    # Negative gamma performed strongly; modestly relax gates there.
+    "regime_strength_relief_negative_gamma": 2,
+    "regime_composite_relief_negative_gamma": 1,
+    # Regime-aware sizing multipliers.
+    "positive_gamma_size_multiplier": 0.85,
+    "negative_gamma_size_multiplier": 1.15,
     "gamma_vol_normalization_scale": 100,
+    "gamma_vol_winsor_lower": 12,
+    "gamma_vol_winsor_upper": 88,
     "trade_strength_scoring_mode": "continuous",
     # Confidence-weighted threshold adjustment.
     # When data quality is GOOD and confirmation is STRONG, the engine
@@ -582,13 +595,13 @@ class ExitTimingPolicyConfig:
     # Peak alpha window (minutes from entry)
     peak_alpha_minutes: int = 120
     # Maximum recommended holding period before forced exit consideration
-    max_hold_minutes: int = 240
+    max_hold_minutes: int = 180
     # Early session trades get longer runway
     early_session_cutoff_minutes_from_open: int = 60
     early_session_peak_alpha_minutes: int = 150
     # Late session trades get shorter runway
     late_session_cutoff_minutes_to_close: int = 90
-    late_session_max_hold_minutes: int = 60
+    late_session_max_hold_minutes: int = 45
     # Strong signals can hold longer
     strong_signal_hold_extension_minutes: int = 30
     strong_signal_threshold: int = 75

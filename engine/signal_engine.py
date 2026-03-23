@@ -155,16 +155,24 @@ def _collect_neutralization_states(payload):
     }
 
 
-def _normalize_gamma_vol_score(raw_score, normalization_scale):
+def _normalize_gamma_vol_score(raw_score, normalization_scale, winsor_lower=12, winsor_upper=88):
+    """Normalize gamma-vol score with winsorization to reduce outlier dominance."""
     scale = max(_safe_float(normalization_scale, 100.0), 1.0)
     raw = _safe_float(raw_score, 0.0)
-    return int(_clip((raw / scale) * 100.0, 0, 100))
+    scaled = _clip((raw / scale) * 100.0, 0.0, 100.0)
+
+    lower = _clip(_safe_float(winsor_lower, 12.0), 0.0, 95.0)
+    upper = _clip(_safe_float(winsor_upper, 88.0), lower + 1.0, 100.0)
+    winsorized = _clip(scaled, lower, upper)
+    normalized = ((winsorized - lower) / max(upper - lower, 1.0)) * 100.0
+    return int(_clip(round(normalized), 0, 100))
 
 
 def _compute_runtime_composite_score(
     *,
     trade_strength,
     hybrid_move_probability,
+    move_probability_score_cap,
     confirmation_status,
     data_quality_status,
     gamma_vol_acceleration_score_normalized,
@@ -185,6 +193,11 @@ def _compute_runtime_composite_score(
 
     trade_strength_score = _clip(_safe_float(trade_strength, 0.0), 0, 100)
     move_probability_score = _clip(_safe_float(hybrid_move_probability, 0.0) * 100.0, 0, 100)
+    move_probability_score = _clip(
+        move_probability_score,
+        0,
+        _safe_float(move_probability_score_cap, 75.0),
+    )
     confirmation_score = confirmation_map.get(_as_upper(confirmation_status), 45)
     data_quality_score = data_quality_map.get(_as_upper(data_quality_status), 50)
     gamma_stability_score = 100.0 - _clip(_safe_float(gamma_vol_acceleration_score_normalized, 0.0), 0, 100)
@@ -207,7 +220,7 @@ def _resolve_regime_thresholds(*, runtime_thresholds, base_min_trade_strength, b
     spot_vs_flip = _as_upper(market_state.get("spot_vs_flip"))
     gamma_regime = _as_upper(market_state.get("gamma_regime"))
     dealer_position = _as_upper(market_state.get("dealer_pos"))
-    toxic_gamma = gamma_regime in {"NEGATIVE_GAMMA", "SHORT_GAMMA_ZONE"}
+    toxic_gamma = gamma_regime in {"SHORT_GAMMA_ZONE"}
     dealer_short_gamma = ("SHORT" in dealer_position) and ("GAMMA" in dealer_position)
 
     if spot_vs_flip == "AT_FLIP":
@@ -223,6 +236,20 @@ def _resolve_regime_thresholds(*, runtime_thresholds, base_min_trade_strength, b
         effective_trade_strength += add_strength
         effective_composite += add_composite
         adjustments.append("toxic_regime_threshold_tightening")
+
+    if gamma_regime == "POSITIVE_GAMMA":
+        add_strength = int(_safe_float(runtime_thresholds.get("regime_strength_add_positive_gamma"), 5.0))
+        add_composite = int(_safe_float(runtime_thresholds.get("regime_composite_add_positive_gamma"), 3.0))
+        effective_trade_strength += add_strength
+        effective_composite += add_composite
+        adjustments.append("positive_gamma_threshold_tightening")
+
+    if gamma_regime == "NEGATIVE_GAMMA":
+        relief_strength = int(_safe_float(runtime_thresholds.get("regime_strength_relief_negative_gamma"), 2.0))
+        relief_composite = int(_safe_float(runtime_thresholds.get("regime_composite_relief_negative_gamma"), 1.0))
+        effective_trade_strength -= relief_strength
+        effective_composite -= relief_composite
+        adjustments.append("negative_gamma_threshold_relief")
 
     return {
         "effective_min_trade_strength": int(_clip(effective_trade_strength, 0, 100)),
@@ -1023,6 +1050,8 @@ def generate_trade(
     gamma_vol_acceleration_score_normalized = _normalize_gamma_vol_score(
         gamma_vol_trade_modifiers["gamma_vol_acceleration_score"],
         runtime_thresholds.get("gamma_vol_normalization_scale"),
+        runtime_thresholds.get("gamma_vol_winsor_lower"),
+        runtime_thresholds.get("gamma_vol_winsor_upper"),
     )
     structural_imbalance_audit = _compute_structural_imbalance_audit(
         market_state=market_state,
@@ -1654,6 +1683,12 @@ def generate_trade(
     # Macro and global-risk size caps can reduce exposure without vetoing the
     # idea entirely, which is useful for elevated-risk but still actionable setups.
     risk_size_cap = min(_safe_float(global_risk["global_risk_size_cap"], 1.0), _safe_float(at_flip_size_cap, 1.0))
+    gamma_regime_upper = _as_upper(market_state.get("gamma_regime"))
+    if gamma_regime_upper == "POSITIVE_GAMMA":
+        risk_size_cap *= _safe_float(runtime_thresholds.get("positive_gamma_size_multiplier"), 0.85)
+    elif gamma_regime_upper == "NEGATIVE_GAMMA":
+        risk_size_cap *= _safe_float(runtime_thresholds.get("negative_gamma_size_multiplier"), 1.15)
+    risk_size_cap = _clip(risk_size_cap, 0.0, 1.0)
     base_payload["effective_size_cap"] = round(risk_size_cap, 2)
     suggested_lots = max(0, int(base_payload["number_of_lots"] * risk_size_cap))
     if base_payload["number_of_lots"] > 0 and suggested_lots == 0 and risk_size_cap > 0:
@@ -1675,6 +1710,7 @@ def generate_trade(
     runtime_composite_score = _compute_runtime_composite_score(
         trade_strength=adjusted_trade_strength,
         hybrid_move_probability=probability_state["hybrid_move_probability"],
+        move_probability_score_cap=runtime_thresholds.get("move_probability_score_cap"),
         confirmation_status=confirmation["status"],
         data_quality_status=data_quality["status"],
         gamma_vol_acceleration_score_normalized=gamma_vol_acceleration_score_normalized,
