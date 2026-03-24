@@ -72,8 +72,8 @@ CONSENSUS_SCORE_CONFIG = {
 }
 
 TRADE_RUNTIME_THRESHOLDS = {
-    "min_trade_strength": 60,
-    "min_composite_score": 55,
+    "min_trade_strength": 62,
+    "min_composite_score": 58,
     # Temporary guardrail while probability calibration is improved.
     "move_probability_score_cap": 75,
     "strong_signal_threshold": 75,
@@ -81,7 +81,7 @@ TRADE_RUNTIME_THRESHOLDS = {
     "weak_signal_threshold": 40,
     "expansion_bias_threshold": 75,
     "directional_bias_threshold": 55,
-    "neutral_flow_probability_floor": 0.55,
+    "neutral_flow_probability_floor": 0.58,
     "wall_proximity_buffer": 50,
     "max_intraday_hold_minutes": 90,
     "toxic_regime_hold_cap_minutes": 60,
@@ -640,7 +640,7 @@ class ActivationScorePolicyConfig:
     dealer_structure_bonus: int = 14
     trade_strength_bonus: int = 14
     move_probability_bonus: int = 12
-    move_probability_floor: float = 0.55
+    move_probability_floor: float = 0.60
     trade_strength_min_ratio: float = 0.5
     activation_cap: int = 100
     dead_inactive_threshold: int = 35

@@ -1,5 +1,5 @@
 {
-    "_comment": "Regime-conditional parameter auto-switching map.",
+    "_comment": "Regime-conditional parameter auto-switching map. PROJECT CHECKPOINT 2026-03-24: keep disabled in production until explicit relaunch approval.",
     "_format": "Entries can match gamma/vol and optional macro-risk dimensions. Use '*' wildcard per field. Highest specificity wins; priority breaks ties.",
     "enabled": false,
     "fallback_pack": "baseline_v1",

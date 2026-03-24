@@ -57,6 +57,7 @@ from strategy.budget_optimizer import optimize_lots
 from strategy.exit_model import calculate_exit, compute_exit_timing
 from strategy.strike_selector import select_best_strike
 from engine.decision_journal import append_decision as _journal_append_decision
+from utils.regime_normalization import canonical_gamma_regime
 
 
 def _as_upper(value):
@@ -218,9 +219,9 @@ def _resolve_regime_thresholds(*, runtime_thresholds, base_min_trade_strength, b
     effective_composite = int(base_min_composite_score)
 
     spot_vs_flip = _as_upper(market_state.get("spot_vs_flip"))
-    gamma_regime = _as_upper(market_state.get("gamma_regime"))
+    gamma_regime = canonical_gamma_regime(market_state.get("gamma_regime"))
     dealer_position = _as_upper(market_state.get("dealer_pos"))
-    toxic_gamma = gamma_regime in {"SHORT_GAMMA_ZONE"}
+    toxic_gamma = gamma_regime == "NEGATIVE_GAMMA"
     dealer_short_gamma = ("SHORT" in dealer_position) and ("GAMMA" in dealer_position)
 
     if spot_vs_flip == "AT_FLIP":
@@ -1037,8 +1038,9 @@ def generate_trade(
         at_flip_penalty_applied = int(_safe_float(runtime_thresholds.get("at_flip_trade_strength_penalty"), 8.0))
         adjusted_trade_strength = int(_clip(adjusted_trade_strength - at_flip_penalty_applied, 0, 100))
         dealer_position_upper = _as_upper(market_state.get("dealer_pos"))
+        at_flip_gamma_regime = canonical_gamma_regime(market_state.get("gamma_regime"))
         at_flip_toxic_context = (
-            _as_upper(market_state.get("gamma_regime")) == "POSITIVE_GAMMA"
+            at_flip_gamma_regime == "POSITIVE_GAMMA"
             and ("SHORT" in dealer_position_upper)
             and ("GAMMA" in dealer_position_upper)
         )
@@ -1683,7 +1685,7 @@ def generate_trade(
     # Macro and global-risk size caps can reduce exposure without vetoing the
     # idea entirely, which is useful for elevated-risk but still actionable setups.
     risk_size_cap = min(_safe_float(global_risk["global_risk_size_cap"], 1.0), _safe_float(at_flip_size_cap, 1.0))
-    gamma_regime_upper = _as_upper(market_state.get("gamma_regime"))
+    gamma_regime_upper = canonical_gamma_regime(market_state.get("gamma_regime"))
     if gamma_regime_upper == "POSITIVE_GAMMA":
         risk_size_cap *= _safe_float(runtime_thresholds.get("positive_gamma_size_multiplier"), 0.85)
     elif gamma_regime_upper == "NEGATIVE_GAMMA":

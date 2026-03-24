@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from utils.numerics import clip, safe_float
+from utils.regime_normalization import normalize_iv_decimal
 
 
 # ---------------------------------------------------------------------------
@@ -235,9 +236,7 @@ def compute_premium_efficiency(
         return pd.Series(0.5, index=rows.index)
     
     if expected_move is None:
-        iv = safe_float(atm_iv, 0.15)
-        if iv > 1.5:
-            iv = iv / 100.0
+        iv = normalize_iv_decimal(atm_iv, default=0.15)
         dte = max(safe_float(days_to_expiry, 1.0), 0.1)
         expected_move = float(spot) * iv * math.sqrt(dte / 365.0)
 
@@ -293,9 +292,7 @@ def compute_payoff_efficiency(
         pe_dist_target, pe_iv_eff (each 0–100).
     """
     if expected_move is None:
-        iv_val = safe_float(atm_iv, 0.15)
-        if iv_val > 1.5:
-            iv_val = iv_val / 100.0
+        iv_val = normalize_iv_decimal(atm_iv, default=0.15)
         dte = max(safe_float(days_to_expiry, 1.0), 0.1)
         expected_move = float(spot) * iv_val * math.sqrt(dte / 365.0)
 
@@ -388,9 +385,7 @@ def compute_tradeability_flags(
     premium = _safe_series(rows, "_normalized_last_price", "lastPrice", "LAST_PRICE")
 
     if expected_move is None:
-        iv_val = safe_float(atm_iv, 0.15)
-        if iv_val > 1.5:
-            iv_val = iv_val / 100.0
+        iv_val = normalize_iv_decimal(atm_iv, default=0.15)
         dte = max(safe_float(days_to_expiry, 1.0), 0.1)
         expected_move = float(spot_safe) * iv_val * math.sqrt(dte / 365.0)
 
@@ -464,9 +459,7 @@ def compute_enhanced_strike_scores(
     )
     convexity = compute_volatility_convexity(rows)
     # Compute expected_move once for all sub-functions
-    _iv = safe_float(atm_iv, 0.15)
-    if _iv > 1.5:
-        _iv = _iv / 100.0
+    _iv = normalize_iv_decimal(atm_iv, default=0.15)
     _dte = max(safe_float(days_to_expiry, 1.0), 0.1)
     _expected_move = float(spot_safe) * _iv * math.sqrt(_dte / 365.0)
 

@@ -16,6 +16,8 @@ Downstream Usage:
 import pandas as pd
 import numpy as np
 
+from utils.regime_normalization import normalize_iv_decimal
+
 
 def build_vol_surface(option_chain):
     """
@@ -60,13 +62,14 @@ def vol_regime(atm_iv):
     Determine volatility regime.
     """
 
-    if atm_iv is None:
+    iv_decimal = normalize_iv_decimal(atm_iv, default=None)
+    if iv_decimal is None:
         return "UNKNOWN"
 
-    if atm_iv > 25:
+    if iv_decimal > 0.25:
         return "HIGH_VOL"
 
-    if atm_iv < 15:
+    if iv_decimal < 0.15:
         return "LOW_VOL"
 
     return "NORMAL_VOL"
@@ -112,6 +115,10 @@ def compute_risk_reversal(option_chain, spot: float, delta_target: float = 0.25)
         df[col] = pd.to_numeric(df.get(col), errors="coerce")
     df = df.dropna(subset=["STRIKE_PR", "IV"])
     df = df[df["IV"] > 0]
+    # Normalize IV to decimal internally so outputs are unit-invariant.
+    df["IV"] = df["IV"].apply(lambda value: normalize_iv_decimal(value, default=np.nan))
+    df = df.dropna(subset=["IV"])
+    df = df[df["IV"] > 0]
 
     if df.empty:
         return result
@@ -137,9 +144,10 @@ def compute_risk_reversal(option_chain, spot: float, delta_target: float = 0.25)
         """Return IV at the strike closest to the moneyness implied by delta_target."""
         if side_df.empty:
             return None
-        # Approximate 25-delta strike via log-moneyness: ln(K/S) ≈ ±1.28 * atm_vol * sqrt(T)
-        # We use a simplified proxy: 1.5% OTM for 25-delta at typical index vol.
-        moneyness_offset = spot * 0.015 * (1.0 / delta_target)  # scales with target delta
+        # Approximate 25-delta strike via moneyness proxy.
+        # At delta_target=0.25 this is 1.5% OTM; smaller deltas move farther OTM.
+        target_delta = max(float(delta_target), 1e-6)
+        moneyness_offset = spot * 0.015 * (0.25 / target_delta)
         target_strike = spot + target_moneyness_sign * moneyness_offset
         side_df = side_df.copy()
         side_df["_dist"] = (side_df["STRIKE_PR"] - target_strike).abs()
@@ -156,10 +164,14 @@ def compute_risk_reversal(option_chain, spot: float, delta_target: float = 0.25)
     if call_iv is None or put_iv is None:
         return result
 
-    rr = round(put_iv - call_iv, 4)
+    # Report RR and component IVs in volatility points to preserve familiar
+    # thresholds (e.g., +/-0.5 vol points).
+    put_iv_points = put_iv * 100.0
+    call_iv_points = call_iv * 100.0
+    rr = round(put_iv_points - call_iv_points, 4)
     result["rr_value"] = rr
-    result["put_iv_25d"] = round(put_iv, 4)
-    result["call_iv_25d"] = round(call_iv, 4)
+    result["put_iv_25d"] = round(put_iv_points, 4)
+    result["call_iv_25d"] = round(call_iv_points, 4)
     if rr > 0.5:
         result["rr_regime"] = "PUT_SKEW"
     elif rr < -0.5:

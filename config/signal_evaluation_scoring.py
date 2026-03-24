@@ -49,12 +49,12 @@ SIGNAL_EVALUATION_THRESHOLDS = {
 }
 
 SIGNAL_EVALUATION_SELECTION_POLICY = {
-    "trade_strength_floor": 50.0,
+    "trade_strength_floor": 60.0,
     "composite_signal_score_floor": 75.0,
-    "tradeability_score_floor": 60.0,
-    "move_probability_floor": 0.40,
+    "tradeability_score_floor": 65.0,
+    "move_probability_floor": 0.60,
     "option_efficiency_score_floor": 40.0,
-    "global_risk_score_cap": 85.0,
+    "global_risk_score_cap": 75.0,
     "require_overnight_hold_allowed": False,
 }
 

@@ -412,9 +412,23 @@ def main():
             base_model.fit(X_train_short, y_train_short)
 
             print(f"    Fitting Platt calibrator on 2023 ({len(y_cal)} samples)...")
-            calibrated = CalibratedClassifierCV(
-                base_model, method="sigmoid", cv="prefit",
-            )
+            try:
+                # sklearn>=1.6: "prefit" is removed. Wrap a fitted model with
+                # FrozenEstimator and set cv=None.
+                from sklearn.frozen import FrozenEstimator
+
+                calibrated = CalibratedClassifierCV(
+                    estimator=FrozenEstimator(base_model),
+                    method="sigmoid",
+                    cv=None,
+                )
+            except Exception:
+                # Backward-compat fallback for older sklearn releases.
+                calibrated = CalibratedClassifierCV(
+                    base_model,
+                    method="sigmoid",
+                    cv="prefit",
+                )
             calibrated.fit(X_cal, y_cal)
             sklearn_model = calibrated
             train_split_desc = "2016-2022 (base) + 2023 (Platt calibration)"

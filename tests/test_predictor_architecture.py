@@ -89,6 +89,60 @@ def test_all_predictors_satisfy_protocol():
         assert isinstance(inst.name, str)
 
 
+def test_blended_does_not_mimic_pure_rule_when_ml_available(monkeypatch):
+    """Blended should carry ML influence; pure_rule must not."""
+    from engine.predictors.builtin_predictors import DefaultBlendedPredictor, PureRulePredictor
+    import engine.trading_support.probability as prob
+
+    calls = []
+
+    def fake_impl(*args, **kwargs):
+        calls.append(dict(kwargs))
+        rule = 0.62
+        ml = None if kwargs.get("_force_rule_only") else 0.20
+        return {
+            "rule_move_probability": rule,
+            "ml_move_probability": ml,
+            "hybrid_move_probability": 0.62 if kwargs.get("_force_rule_only") else 0.41,
+            "model_features": [1.0, 2.0],
+            "components": {"test": True},
+        }
+
+    monkeypatch.setattr(prob, "_compute_probability_state_impl", fake_impl)
+
+    market_ctx = {
+        "df": None,
+        "spot": 1.0,
+        "symbol": "NIFTY",
+        "market_state": {
+            "gamma_regime": "NEGATIVE_GAMMA",
+            "final_flow_signal": "NEUTRAL",
+            "vol_regime": "NORMAL_VOL",
+            "hedging_bias": "PINNING",
+            "spot_vs_flip": "ABOVE_FLIP",
+            "vacuum_state": "NONE",
+            "atm_iv": 0.2,
+            "vacuum_zones": [],
+            "hedging_flow": {},
+            "flow_signal_value": "NEUTRAL",
+            "smart_money_signal_value": "NEUTRAL",
+            "flip": None,
+            "voids": [],
+        },
+    }
+
+    blended = DefaultBlendedPredictor().predict(market_ctx)
+    pure_rule = PureRulePredictor().predict(market_ctx)
+
+    assert blended.ml_move_probability == 0.20
+    assert blended.hybrid_move_probability == 0.41
+    assert pure_rule.ml_move_probability is None
+    assert pure_rule.hybrid_move_probability == pure_rule.rule_move_probability == 0.62
+    assert len(calls) == 2
+    assert calls[0].get("_force_rule_only") is None
+    assert calls[1].get("_force_rule_only") is True
+
+
 def test_holistic_backtest_accepts_prediction_method_param():
     """Verify the backtester signature accepts prediction_method."""
     import inspect

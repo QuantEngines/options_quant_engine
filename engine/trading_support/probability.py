@@ -20,6 +20,7 @@ from config.symbol_microstructure import get_microstructure_config
 import models.feature_builder as feature_builder_mod
 import models.large_move_probability as large_move_probability_mod
 import models.ml_move_predictor as ml_move_predictor_mod
+from utils.regime_normalization import normalize_iv_decimal
 
 from .common import _call_first, _clip, _safe_float
 
@@ -251,11 +252,16 @@ def _compute_atm_iv_percentile(atm_iv):
         Keeping this step explicit makes it easier to audit how the final feature, score, or trade decision was assembled.
     """
     cfg = get_probability_feature_policy_config()
-    iv = _safe_float(atm_iv, None)
+    iv = normalize_iv_decimal(atm_iv, default=None)
     if iv is None:
         return None
 
-    pct = (iv - cfg.atm_iv_low) / max(cfg.atm_iv_high - cfg.atm_iv_low, 1e-6)
+    iv_low = normalize_iv_decimal(cfg.atm_iv_low, default=None)
+    iv_high = normalize_iv_decimal(cfg.atm_iv_high, default=None)
+    if iv_low is None or iv_high is None or iv_high <= iv_low:
+        return None
+
+    pct = (iv - iv_low) / max(iv_high - iv_low, 1e-6)
     return round(_clip(pct, 0.0, 1.0), 4)
 
 
@@ -281,17 +287,23 @@ def _blend_move_probability(rule_prob, ml_prob):
 
     cfg = get_probability_feature_policy_config()
     rule_prob = _safe_float(rule_prob, cfg.probability_default_rule)
+    used_ml_leg = ml_prob is not None
     if ml_prob is None:
+        # Explicit fallback contract: with no ML leg, use rule probability
+        # directly (bounded) without post-blend recalibration.
         raw = round(_clip(rule_prob, cfg.probability_floor, cfg.probability_ceiling), 2)
     else:
         ml_prob = _safe_float(ml_prob, rule_prob)
-        hybrid = (cfg.probability_rule_weight * rule_prob) + (cfg.probability_ml_weight * ml_prob)
+        w_rule = max(_safe_float(cfg.probability_rule_weight, 0.0), 0.0)
+        w_ml = max(_safe_float(cfg.probability_ml_weight, 0.0), 0.0)
+        w_total = max(w_rule + w_ml, 1e-9)
+        hybrid = ((w_rule / w_total) * rule_prob) + ((w_ml / w_total) * ml_prob)
         hybrid = cfg.probability_intercept + (cfg.probability_scale * hybrid)
         raw = round(_clip(hybrid, cfg.probability_floor, cfg.probability_ceiling), 2)
 
     # Post-blend logistic recalibration: stretches the compressed distribution
     # so confident setups reach higher values and weak setups are pushed lower.
-    if cfg.calibration_enabled:
+    if cfg.calibration_enabled and used_ml_leg:
         exponent = -cfg.calibration_steepness * (raw - cfg.calibration_midpoint)
         exponent = max(min(exponent, 500.0), -500.0)
         calibrated = 1.0 / (1.0 + math.exp(exponent))
@@ -303,7 +315,7 @@ def _blend_move_probability(rule_prob, ml_prob):
 def _get_move_predictor():
     """
     Purpose:
-        Return move predictor for downstream use.
+        Return the ML-leg predictor used by the blended probability path.
     
     Context:
         Internal helper within the signal-engine layer. It isolates a reusable transformation so the surrounding code remains easy to follow.
@@ -315,7 +327,9 @@ def _get_move_predictor():
         Any: Result returned by the helper.
     
     Notes:
-        Keeping this step explicit makes it easier to audit how the final feature, score, or trade decision was assembled.
+        If ACTIVE_MODEL points to a registry model, it is loaded as base_model.
+        If ACTIVE_MODEL is empty, MLMovePredictor still runs with its internal
+        heuristic implementation. Only hard init failures disable the ML leg.
     """
     global _MOVE_PREDICTOR
 

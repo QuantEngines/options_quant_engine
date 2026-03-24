@@ -21,6 +21,12 @@ This directory is organized by purpose.
 - simulations/: synthetic regime replay tools
 - ad_hoc/: one-off diagnostics and analysis scripts
 - ops/: operational diagnostics, rollout checks, and resumable offline replay pack suites
+- reports/: signal evaluation report generation and report PDF conversion utilities
+
+## Canonical entrypoints
+
+- Data prep scripts live in `scripts/data_prep/`.
+- Simulation scripts live in `scripts/simulations/`.
 
 Notes:
 
@@ -31,4 +37,5 @@ Notes:
 PDF generation workflow:
 
 - Use `scripts/generate_documentation_pdfs.sh` for strict all-documentation rendering.
-- The run report is written to `documentation/_pdf_assets/render_reports/docs_pdf_render_latest.json`.
+- Use scripts under `scripts/reports/` for signal-evaluation report generation and PDF conversion.
+- The PDF render run report is written to the local docs-render report path configured by the renderer.

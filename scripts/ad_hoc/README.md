@@ -7,4 +7,4 @@ Guidelines:
 
 - Keep script names descriptive and date/context aware where possible.
 - Prefer promoting stable utilities into `scripts/` root once they become reusable.
-- Preserve generated artifacts under `research/`, `documentation/`, or `logs/`.
+- Preserve generated artifacts under `research/`, local docs archives, or `logs/`.

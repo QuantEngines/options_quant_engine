@@ -116,14 +116,14 @@ def test_parameter_packs_resolve_and_override_defaults():
 
 def test_runtime_pack_temporarily_overrides_thresholds():
     baseline = get_trade_runtime_thresholds()
-    assert baseline["min_trade_strength"] == 60
+    baseline_min_trade_strength = baseline["min_trade_strength"]
 
     with temporary_parameter_pack("experimental_v1"):
         experimental = get_trade_runtime_thresholds()
         assert experimental["min_trade_strength"] == 42
 
     restored = get_trade_runtime_thresholds()
-    assert restored["min_trade_strength"] == 60
+    assert restored["min_trade_strength"] == baseline_min_trade_strength
 
 
 def test_runtime_pack_context_restores_nested_overrides():

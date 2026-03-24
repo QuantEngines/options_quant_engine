@@ -46,6 +46,7 @@ from research.signal_evaluation.market_data import (
     resolve_research_as_of,
 )
 from utils.numerics import safe_float as _safe_float  # noqa: F401
+from utils.regime_normalization import normalize_iv_decimal
 
 
 def _coerce_ts(value) -> pd.Timestamp:
@@ -279,7 +280,7 @@ def build_signal_evaluation_row(
 
     # Compute atm_iv_scaled from raw atm_iv if available
     raw_atm_iv = trade.get("atm_iv")
-    atm_iv_scaled = (raw_atm_iv / 100.0) if raw_atm_iv is not None else None
+    atm_iv_scaled = normalize_iv_decimal(raw_atm_iv, default=None)
 
     row = {
         "signal_id": signal_id,

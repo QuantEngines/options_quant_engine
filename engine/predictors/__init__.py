@@ -6,10 +6,14 @@ to swap between different prediction methods via configuration, with no
 code changes required.
 
 Available predictors:
-  - blended (default)       : Current production pipeline (rule + ML blend)
-  - pure_ml                 : ML-only probability, rule leg disabled
-  - pure_rule               : Rule-only probability, ML leg disabled
-  - research_dual_model     : Research dual-model (GBT ranking + LogReg calibration)
+  - blended (default)           : Production blend (rule + ML leg + calibration)
+  - pure_ml                     : ML-only probability, rule leg disabled
+  - pure_rule                   : Rule-only probability, ML leg disabled
+  - research_dual_model         : Research dual-model (rank + confidence overlay)
+  - research_decision_policy    : Dual-model + decision-policy gate
+  - ev_sizing                   : Dual-model + expected-value sizing overlay
+  - research_rank_gate          : Dual-model + rank threshold block
+  - research_uncertainty_adjusted : Dual-model + uncertainty discount
 
 Usage:
     from engine.predictors import get_predictor

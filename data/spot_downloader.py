@@ -14,6 +14,8 @@ Downstream Usage:
     Consumed by analytics, the signal engine, replay tooling, and research datasets.
 """
 import json
+import random
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -159,6 +161,82 @@ def _compute_lookback_avg_range_pct(daily_hist: pd.DataFrame, completed_days: in
     return round(float(tail["range_pct"].mean()), 4)
 
 
+def _safe_history_fetch(ticker_obj, *, period: str, interval: str) -> pd.DataFrame | None:
+    """Best-effort wrapper around yfinance history fetch."""
+    try:
+        frame = ticker_obj.history(period=period, interval=interval, auto_adjust=False)
+    except Exception:
+        return None
+    if isinstance(frame, pd.DataFrame):
+        return frame
+    return None
+
+
+def _extract_quote_fallback(ticker_obj) -> dict | None:
+    """Extract a minimal spot snapshot from fast-info/info when candles are unavailable."""
+    values = {}
+
+    try:
+        fast_info = getattr(ticker_obj, "fast_info", None)
+        if fast_info is not None:
+            for key in (
+                "last_price",
+                "lastPrice",
+                "regularMarketPrice",
+                "open",
+                "dayHigh",
+                "dayLow",
+                "previousClose",
+                "regularMarketPreviousClose",
+            ):
+                if key in fast_info:
+                    values[key] = fast_info.get(key)
+    except Exception:
+        pass
+
+    if _safe_float(values.get("last_price"), None) is None and _safe_float(values.get("lastPrice"), None) is None:
+        try:
+            info = getattr(ticker_obj, "info", None) or {}
+            for key in (
+                "regularMarketPrice",
+                "open",
+                "dayHigh",
+                "dayLow",
+                "previousClose",
+                "regularMarketPreviousClose",
+            ):
+                if key in info:
+                    values[key] = info.get(key)
+        except Exception:
+            pass
+
+    spot = _safe_float(
+        values.get("last_price")
+        or values.get("lastPrice")
+        or values.get("regularMarketPrice"),
+        None,
+    )
+    if spot is None:
+        return None
+
+    day_open = _safe_float(values.get("open"), None)
+    day_high = _safe_float(values.get("dayHigh"), None)
+    day_low = _safe_float(values.get("dayLow"), None)
+    prev_close = _safe_float(
+        values.get("previousClose") or values.get("regularMarketPreviousClose"),
+        None,
+    )
+
+    return {
+        "spot": spot,
+        "day_open": day_open,
+        "day_high": day_high,
+        "day_low": day_low,
+        "prev_close": prev_close,
+        "timestamp": pd.Timestamp.now(tz=IST_TIMEZONE).isoformat(),
+    }
+
+
 def get_spot_snapshot(symbol: str, max_retries: int = 3) -> dict:
     """
     Returns a richer live spot snapshot for the engine with retry logic:
@@ -175,25 +253,55 @@ def get_spot_snapshot(symbol: str, max_retries: int = 3) -> dict:
 
     normalized_symbol = normalize_underlying_symbol(symbol)
     ticker = _normalize_symbol(normalized_symbol)
-    
+
     last_error = None
+    intraday = None
+    daily = None
     for attempt in range(1, max_retries + 1):
         try:
             data = yf.Ticker(ticker)
-            intraday = data.history(period="5d", interval="5m", auto_adjust=False)
-            daily = data.history(period="20d", interval="1d", auto_adjust=False)
+            intraday = None
+            for period, interval in (("5d", "5m"), ("1d", "1m"), ("5d", "15m"), ("1d", "5m")):
+                frame = _safe_history_fetch(data, period=period, interval=interval)
+                if frame is not None and not frame.empty:
+                    intraday = frame
+                    break
+
+            daily = _safe_history_fetch(data, period="20d", interval="1d")
+            if daily is None or daily.empty:
+                daily = _safe_history_fetch(data, period="1mo", interval="1d")
 
             if intraday is None or intraday.empty:
+                quote_fallback = _extract_quote_fallback(data)
+                if quote_fallback is not None:
+                    lookback_avg_range_pct = _compute_lookback_avg_range_pct(daily)
+                    snapshot = {
+                        "symbol": normalized_symbol,
+                        "ticker": ticker,
+                        "spot": round(float(quote_fallback["spot"]), 4),
+                        "day_open": round(float(quote_fallback["day_open"]), 4)
+                        if quote_fallback.get("day_open") is not None else None,
+                        "day_high": round(float(quote_fallback["day_high"]), 4)
+                        if quote_fallback.get("day_high") is not None else None,
+                        "day_low": round(float(quote_fallback["day_low"]), 4)
+                        if quote_fallback.get("day_low") is not None else None,
+                        "prev_close": round(float(quote_fallback["prev_close"]), 4)
+                        if quote_fallback.get("prev_close") is not None else None,
+                        "timestamp": quote_fallback["timestamp"],
+                        "lookback_avg_range_pct": lookback_avg_range_pct,
+                        "spot_source": "quote_fallback",
+                    }
+                    snapshot["validation"] = validate_spot_snapshot(snapshot)
+                    return snapshot
                 raise ValueError("Unable to fetch intraday spot data")
-            
+
             # Successfully fetched, break retry loop
             break
         except Exception as e:
             last_error = e
             if attempt < max_retries:
-                wait_seconds = 2 ** (attempt - 1) + _safe_float(pd.Series([pd.np.random.uniform(0, 1)]).iloc[0] if hasattr(pd, 'np') else 0, 0)
-                import time as time_module
-                time_module.sleep(min(wait_seconds, 8.0))  # Cap backoff at 8 seconds
+                wait_seconds = (2 ** (attempt - 1)) + random.uniform(0.0, 1.0)
+                time.sleep(min(wait_seconds, 8.0))
             continue
     else:
         # All retries exhausted

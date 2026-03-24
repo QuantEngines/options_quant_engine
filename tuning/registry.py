@@ -452,6 +452,8 @@ def _from_dataclass(
     config_obj: Any,
     description_prefix: str,
     live_safe: bool = True,
+    min_values: dict[str, float | int] | None = None,
+    max_values: dict[str, float | int] | None = None,
 ) -> list[ParameterDefinition]:
     """
     Purpose:
@@ -487,6 +489,8 @@ def _from_dataclass(
                 default_value=value,
                 description=f"{description_prefix}: {field.name}",
                 live_safe=live_safe,
+                min_value=(min_values or {}).get(field.name),
+                max_value=(max_values or {}).get(field.name),
             )
         )
     return definitions
@@ -600,14 +604,93 @@ def build_default_parameter_registry() -> ParameterRegistry:
         )
     )
     definitions.extend(
-        _from_dataclass(
-            prefix="signal_engine.probability",
-            module="config.probability_feature_policy",
-            group="signal_engine",
-            category="probability",
-            config_obj=ProbabilityFeaturePolicyConfig(),
-            description_prefix="Signal-engine probability parameter",
-        )
+        [
+            _parameter_definition(
+                key=f"signal_engine.probability.{field.name}",
+                module="config.probability_feature_policy",
+                group="signal_engine",
+                category="probability",
+                default_value=getattr(ProbabilityFeaturePolicyConfig(), field.name),
+                description=f"Signal-engine probability parameter: {field.name}",
+                min_value={
+                    "vacuum_breakout_strength": 0.0,
+                    "vacuum_near_strength": 0.0,
+                    "vacuum_watch_strength": 0.0,
+                    "vacuum_default_strength": 0.0,
+                    "vacuum_gap_pct_cap": 0.1,
+                    "vacuum_gap_base_weight": 0.0,
+                    "vacuum_gap_proximity_weight": 0.0,
+                    "vacuum_void_count_cap": 0,
+                    "vacuum_void_increment": 0.0,
+                    "hedging_bias_upside_acceleration_score": -1.0,
+                    "hedging_bias_downside_acceleration_score": -1.0,
+                    "hedging_bias_upside_pinning_score": -1.0,
+                    "hedging_bias_downside_pinning_score": -1.0,
+                    "hedging_bias_pinning_score": -1.0,
+                    "smart_money_bullish_score": -1.0,
+                    "smart_money_bearish_score": -1.0,
+                    "smart_money_neutral_score": -1.0,
+                    "smart_money_categorical_weight": 0.0,
+                    "smart_money_flow_imbalance_weight": 0.0,
+                    "intraday_range_anchor_multiplier": 0.5,
+                    "intraday_range_baseline_floor_pct": 0.05,
+                    "intraday_range_denominator_floor_pct": 0.05,
+                    "intraday_range_clip_cap": 0.1,
+                    "atm_iv_low": 1.0,
+                    "atm_iv_high": 1.0,
+                    "probability_default_rule": 0.0,
+                    "probability_floor": 0.0,
+                    "probability_ceiling": 0.0,
+                    "probability_rule_weight": 0.0,
+                    "probability_ml_weight": 0.0,
+                    "probability_intercept": -1.0,
+                    "probability_scale": 0.0,
+                    "categorical_flow_weight": 0.0,
+                    "smart_money_flow_weight": 0.0,
+                    "calibration_midpoint": 0.0,
+                    "calibration_steepness": 0.1,
+                }.get(field.name),
+                max_value={
+                    "vacuum_breakout_strength": 1.0,
+                    "vacuum_near_strength": 1.0,
+                    "vacuum_watch_strength": 1.0,
+                    "vacuum_default_strength": 1.0,
+                    "vacuum_gap_pct_cap": 5.0,
+                    "vacuum_gap_base_weight": 1.0,
+                    "vacuum_gap_proximity_weight": 1.0,
+                    "vacuum_void_count_cap": 20,
+                    "vacuum_void_increment": 0.2,
+                    "hedging_bias_upside_acceleration_score": 1.0,
+                    "hedging_bias_downside_acceleration_score": 1.0,
+                    "hedging_bias_upside_pinning_score": 1.0,
+                    "hedging_bias_downside_pinning_score": 1.0,
+                    "hedging_bias_pinning_score": 1.0,
+                    "smart_money_bullish_score": 1.0,
+                    "smart_money_bearish_score": 1.0,
+                    "smart_money_neutral_score": 1.0,
+                    "smart_money_categorical_weight": 1.0,
+                    "smart_money_flow_imbalance_weight": 1.0,
+                    "intraday_range_anchor_multiplier": 5.0,
+                    "intraday_range_baseline_floor_pct": 5.0,
+                    "intraday_range_denominator_floor_pct": 5.0,
+                    "intraday_range_clip_cap": 5.0,
+                    "atm_iv_low": 80.0,
+                    "atm_iv_high": 80.0,
+                    "probability_default_rule": 1.0,
+                    "probability_floor": 1.0,
+                    "probability_ceiling": 1.0,
+                    "probability_rule_weight": 1.0,
+                    "probability_ml_weight": 1.0,
+                    "probability_intercept": 1.0,
+                    "probability_scale": 2.0,
+                    "categorical_flow_weight": 1.0,
+                    "smart_money_flow_weight": 1.0,
+                    "calibration_midpoint": 1.0,
+                    "calibration_steepness": 10.0,
+                }.get(field.name),
+            )
+            for field in fields(ProbabilityFeaturePolicyConfig())
+        ]
     )
     definitions.extend(
         _from_dataclass(
@@ -728,6 +811,26 @@ def build_default_parameter_registry() -> ParameterRegistry:
             category="adjustment",
             config_obj=MacroNewsAdjustmentConfig(),
             description_prefix="Macro news engine adjustment parameter",
+            min_values={
+                "risk_off_call_size_high_vol": 0.25,
+                "risk_off_call_size_normal": 0.40,
+                "risk_off_put_size_medium_vol": 0.50,
+                "risk_on_call_size_medium_vol": 0.50,
+                "risk_on_put_size_high_vol": 0.25,
+                "risk_on_put_size_normal": 0.40,
+                "generic_high_vol_size_cap": 0.30,
+                "generic_medium_vol_size_cap": 0.50,
+            },
+            max_values={
+                "risk_off_call_size_high_vol": 0.85,
+                "risk_off_call_size_normal": 1.00,
+                "risk_off_put_size_medium_vol": 1.00,
+                "risk_on_call_size_medium_vol": 1.00,
+                "risk_on_put_size_high_vol": 0.85,
+                "risk_on_put_size_normal": 1.00,
+                "generic_high_vol_size_cap": 0.90,
+                "generic_medium_vol_size_cap": 1.00,
+            },
         )
     )
     definitions.extend(
@@ -948,17 +1051,34 @@ def build_default_parameter_registry() -> ParameterRegistry:
         )
     )
     definitions.extend(
-        _from_mapping(
-            prefix="evaluation_thresholds.selection",
-            module="config.signal_evaluation_scoring",
-            group="evaluation_thresholds",
-            category="selection",
-            mapping=SIGNAL_EVALUATION_SELECTION_POLICY,
-            description_prefix="Dataset experiment selection threshold",
-            min_value=0.0,
-            max_value=100.0,
-            live_safe=False,
-        )
+        [
+            _parameter_definition(
+                key=f"evaluation_thresholds.selection.{name}",
+                module="config.signal_evaluation_scoring",
+                group="evaluation_thresholds",
+                category="selection",
+                default_value=value,
+                description=f"Dataset experiment selection threshold: {name}",
+                min_value={
+                    "trade_strength_floor": 0.0,
+                    "composite_signal_score_floor": 0.0,
+                    "tradeability_score_floor": 0.0,
+                    "move_probability_floor": 0.0,
+                    "option_efficiency_score_floor": 0.0,
+                    "global_risk_score_cap": 0.0,
+                }.get(name),
+                max_value={
+                    "trade_strength_floor": 100.0,
+                    "composite_signal_score_floor": 100.0,
+                    "tradeability_score_floor": 100.0,
+                    "move_probability_floor": 1.0,
+                    "option_efficiency_score_floor": 100.0,
+                    "global_risk_score_cap": 100.0,
+                }.get(name),
+                live_safe=False,
+            )
+            for name, value in SIGNAL_EVALUATION_SELECTION_POLICY.items()
+        ]
     )
 
     return ParameterRegistry(definitions)

@@ -25,6 +25,7 @@ from datetime import date
 from analytics.greeks_engine import compute_option_greeks, _parse_expiry_years
 from analytics.signal_confidence import compute_signal_confidence
 from engine.runtime_metadata import TRADER_VIEW_KEYS
+from utils.regime_normalization import canonical_gamma_regime
 
 
 def _resolve_next_expiry_from_candidates(expiry_candidates, current_expiry_date):
@@ -206,6 +207,75 @@ def _fmt(value, max_items=8):
     return value
 
 
+def _resolve_move_sigma_points(trade):
+    """Resolve a 1-sigma move estimate in points for breakout odds."""
+    if not isinstance(trade, dict):
+        return None
+
+    expected_move = trade.get("expected_move_points")
+    if isinstance(expected_move, (int, float)) and expected_move > 0:
+        return float(expected_move)
+
+    spot = trade.get("spot")
+    atm_iv = trade.get("atm_iv")
+    if not isinstance(spot, (int, float)) or spot <= 0:
+        return None
+    if not isinstance(atm_iv, (int, float)) or atm_iv <= 0:
+        return None
+
+    tte_years = _parse_expiry_years(trade.get("selected_expiry"))
+    if tte_years is None:
+        dte = trade.get("days_to_expiry")
+        if isinstance(dte, (int, float)) and dte > 0:
+            tte_years = float(dte) / 365.0
+
+    if not isinstance(tte_years, (int, float)) or tte_years <= 0:
+        return None
+
+    iv_decimal = float(atm_iv) / 100.0
+    sigma_points = float(spot) * iv_decimal * math.sqrt(float(tte_years))
+    return sigma_points if sigma_points > 0 else None
+
+
+def _compute_breakout_probability_rows(trade, thresholds=(100, 150, 200)):
+    """Compute directional breakout probabilities for point thresholds."""
+    sigma_points = _resolve_move_sigma_points(trade)
+    if not isinstance(sigma_points, (int, float)) or sigma_points <= 0:
+        return []
+
+    hybrid_prob = trade.get("hybrid_move_probability") if isinstance(trade, dict) else None
+    if not isinstance(hybrid_prob, (int, float)):
+        hybrid_prob = 0.5
+    hybrid_prob = max(0.0, min(1.0, float(hybrid_prob)))
+
+    direction = str((trade or {}).get("direction") or "").upper().strip()
+    direction_bias = 1.0 if "CALL" in direction else (-1.0 if "PUT" in direction else 0.0)
+    confidence_tilt = min(abs(hybrid_prob - 0.5) * 2.0, 1.0)
+    up_share = 0.5 + (0.25 * direction_bias * confidence_tilt)
+    up_share = max(0.0, min(1.0, up_share))
+    down_share = 1.0 - up_share
+
+    rows = []
+    sqrt_two = math.sqrt(2.0)
+    for threshold in thresholds:
+        try:
+            k = float(threshold)
+        except (TypeError, ValueError):
+            continue
+        if k <= 0:
+            continue
+
+        z = k / sigma_points
+        two_sided_tail = math.erfc(z / sqrt_two)
+        two_sided_tail = max(0.0, min(1.0, two_sided_tail))
+
+        up_prob = two_sided_tail * up_share
+        down_prob = two_sided_tail * down_share
+        rows.append((int(round(k)), up_prob, down_prob))
+
+    return rows
+
+
 def _print_section(title, fields):
     """Print a titled key-value section."""
     print(f"\n{title}")
@@ -247,7 +317,7 @@ def _get_regime_impact_note(trade):
         return None
 
     spot_vs_flip = str(trade.get("spot_vs_flip") or "").upper()
-    gamma_regime = str(trade.get("gamma_regime") or "").upper()
+    gamma_regime = canonical_gamma_regime(trade.get("gamma_regime"))
     vol_regime = str(trade.get("vol_surface_regime") or "").upper()
 
     notes = []
@@ -1014,7 +1084,7 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         regime_extras = _resolve_regime_extras(trade)
 
         # Add visual icons to gamma and flow regimes
-        gamma_regime = trade.get("gamma_regime")
+        gamma_regime = canonical_gamma_regime(trade.get("gamma_regime"))
         gamma_icon = "🟢" if gamma_regime == "POSITIVE_GAMMA" else ("🔴" if gamma_regime == "NEGATIVE_GAMMA" else "")
 
         flow_signal = trade.get("final_flow_signal")
@@ -1284,6 +1354,14 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
     if no_trade:
         risk_fields["no_trade_reason"] = no_trade
     _print_section("RISK SUMMARY", risk_fields)
+
+    # ── 7. BREAKOUT PROBABILITY (POINTS) ───────────────────────────────
+    breakout_rows = _compute_breakout_probability_rows(trade)
+    if breakout_rows:
+        print("\nBREAKOUT PROBABILITY (POINTS)")
+        print("---------------------------")
+        for threshold, up_prob, down_prob in breakout_rows:
+            print(f"{f'+/- {threshold} pts':26}: up {up_prob:.0%} | down {down_prob:.0%}")
 
 # ---------------------------------------------------------------------------
 # STANDARD mode — compact + scoring/confirmation diagnostics

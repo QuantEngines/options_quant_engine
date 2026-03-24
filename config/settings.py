@@ -119,10 +119,10 @@ def get_icici_runtime_config() -> dict:
 # ================================
 
 DEFAULT_SYMBOL = "NIFTY"
-DEFAULT_DATA_SOURCE = "NSE"
+DEFAULT_DATA_SOURCE = "ICICI"
 
 # Terminal output verbosity: COMPACT, STANDARD, or FULL_DEBUG
-OUTPUT_MODE = os.getenv("OQE_OUTPUT_MODE", "STANDARD").upper().strip()
+OUTPUT_MODE = os.getenv("OQE_OUTPUT_MODE", "COMPACT").upper().strip()
 
 # Runtime environment label used for production safety checks.
 # Accepted production aliases: PROD, PRODUCTION.
@@ -167,9 +167,12 @@ VOL_EXPANSION_THRESHOLD = 1.3
 # Move Predictor Configuration
 # ================================
 
-# Active ML model from the registry.  Set to a registry model name
-# (e.g. "GBT_shallow_v1") to use a research model in production.
-# Leave empty or None to use the rule-based heuristic probability model.
+# Active ML model from the registry. Set to a registry model name
+# (e.g. "GBT_shallow_v1") to load that persisted model into the blended
+# pipeline ML leg.
+# Leave empty/None to skip registry-model loading; the blended path will still
+# use the built-in ML heuristic leg (and only falls back to pure rule if the
+# ML leg is unavailable at runtime).
 ACTIVE_MODEL = os.getenv("OQE_ACTIVE_MODEL", "").strip() or None
 
 # Prediction method — controls the pluggable predictor architecture.

@@ -83,8 +83,8 @@ class VolatilityRegimePolicyConfig:
     Notes:
         Explicit field-level documentation makes policy tuning safer because threshold and weighting semantics stay visible at the point of definition.
     """
-    low_vol_threshold: float = 0.01
-    normal_vol_threshold: float = 0.03
+    low_vol_threshold: float = 0.15
+    normal_vol_threshold: float = 0.25
 
 
 def get_flow_imbalance_policy_config() -> FlowImbalancePolicyConfig:

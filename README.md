@@ -129,7 +129,7 @@ To keep the repository maintainable and reproducible, use these artifact path co
 - Backtest logs and comparison outputs: store under `research/runtime_validation/backtest_runs/`.
 - Signal-evaluation reports and generated tables: store under `research/signal_evaluation/reports/`.
 - One-off analysis outputs from ad-hoc scripts: store under `research/` with a date-stamped subfolder.
-- Audit reports, deployment reviews, and ad-hoc documentation snapshots: store under `documentation/` (local archive; intentionally excluded from git).
+- Audit reports, deployment reviews, and ad-hoc docs snapshots: store in the local docs archive (intentionally excluded from git).
 - Avoid writing generated artifacts to repository root.
 
 Commit hygiene:
@@ -293,7 +293,7 @@ Or in backtests:
 python scripts/run_multiyear_backtest.py --prediction-method research_dual_model
 ```
 
-For more details, see [Developer Guide: Pluggable Predictor Architecture](documentation/system_docs/developer_guide.md#pluggable-predictor-architecture).
+For more details, see the local developer guide for pluggable predictor architecture.
 
 ## ML Model Registry and Selection
 
@@ -332,7 +332,7 @@ Without `ACTIVE_MODEL` set, the system falls back to legacy `move_predictor_v2.j
 python scripts/build_model_registry.py
 ```
 
-For details, see [Developer Guide: Model Registry](documentation/system_docs/developer_guide.md#model-registry-and-switching).
+For details, see the local developer guide section on model registry and switching.
 
 ## Decision Policy Layer
 
@@ -360,7 +360,7 @@ Test under any policy with:
 python scripts/run_multiyear_backtest.py --prediction-method research_decision_policy
 ```
 
-See [Developer Guide: Decision Policy Layer](documentation/system_docs/developer_guide.md#decision-policy-layer) for implementation details.
+See the local developer guide section on the decision policy layer for implementation details.
 
 ## Performance Profile
 
@@ -380,7 +380,7 @@ Recent optimizations achieve **31-45x speedup** over baseline engine (warm runs)
 3. **yfinance TTL cache** (~350ms/tick): 5-minute cache for market snapshots
 4. **Redundant call removal**: Eliminated duplicate `attach_trade_views` and `split_trade_payload` iterations
 
-For profiling details, see [Developer Guide: Performance Caching Systems](documentation/system_docs/developer_guide.md#performance-caching-systems).
+For profiling details, see the local developer guide section on performance caching systems.
 
 ## Parameter Tuning and Governance
 
@@ -412,7 +412,7 @@ Tighter thresholds improve hit rate from 62.4% → 100% (on holdout set) but red
 - **Registry range bug**: `evaluation_thresholds.selection.move_probability_floor` has range [0, 100] but actual values are 0-1 (unit mismatch). Use `allow_live_unsafe=True` for parameter searches on `evaluation_thresholds` group.
 - **Score-computation groups** (`trade_strength`, `confirmation_filter`, `large_move_probability`) don't affect pre-computed backtest datasets — must re-run signal generation to tune these.
 
-For full governance workflow details, see [Developer Guide](documentation/system_docs/developer_guide.md#tuning-workflow) or [Parameter Governance](documentation/system_docs/developer_guide.md#tuning-workflow).
+For full governance workflow details, see the local developer guide tuning-workflow section.
 
 ## Architecture
 
@@ -621,7 +621,6 @@ options_quant_engine/
 ├── tests/              # regression and scenario coverage (238 tests)
 ├── tuning/             # registry, packs, experiments, search, validation, promotion code
 ├── utils/              # centralized numerics, math helpers, timestamp utilities
-├── documentation/      # system monograph, academic papers, signal state dictionary, research notes
 ├── main.py
 └── README.md
 ```

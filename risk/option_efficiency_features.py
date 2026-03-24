@@ -21,6 +21,7 @@ import math
 import pandas as pd
 
 from config.option_efficiency_policy import get_option_efficiency_policy_config
+from utils.regime_normalization import detect_iv_unit, normalize_iv_decimal
 from utils.numerics import clip as _clip, safe_float as _safe_float  # noqa: F401
 
 
@@ -75,13 +76,15 @@ def _normalize_iv(value):
         The helper intentionally produces bounded, serializable values so overlays can be inspected alongside the final trade decision.
     """
     cfg = get_option_efficiency_policy_config()
-    iv = _safe_float(value, None)
-    if iv is None or iv <= 0:
+    iv_decimal = normalize_iv_decimal(
+        value,
+        percent_unit_threshold=cfg.iv_percent_unit_threshold,
+        default=None,
+    )
+    if iv_decimal is None:
         return None, None
 
-    if iv > cfg.iv_percent_unit_threshold:
-        return iv / 100.0, "PERCENT"
-    return iv, "DECIMAL"
+    return iv_decimal, detect_iv_unit(value, percent_unit_threshold=cfg.iv_percent_unit_threshold)
 
 
 def _parse_time_to_expiry_years(expiry_value=None, valuation_time=None, tte=None):
