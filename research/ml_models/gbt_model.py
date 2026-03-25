@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 _cached_model = None
 _cached_meta = None
+_WARN_ONCE_KEYS: set[str] = set()
+
+
+def _warn_once(key: str, message: str, *args) -> None:
+    if key in _WARN_ONCE_KEYS:
+        return
+    _WARN_ONCE_KEYS.add(key)
+    logger.warning(message, *args)
 
 
 def _load_model():
@@ -111,8 +119,8 @@ def predict_rank_score(feature_vector: np.ndarray) -> Optional[float]:
             arr = arr[:, mask]
         proba = model.predict_proba(arr)[:, 1]
         return round(float(proba[0]), 4)
-    except Exception:
-        logger.exception("GBT inference failed")
+    except Exception as exc:
+        _warn_once("gbt_inference_failed", "GBT inference failed (suppressing further): %s", exc)
         return None
 
 
@@ -143,6 +151,6 @@ def predict_rank_scores_batch(feature_matrix: np.ndarray) -> Optional[np.ndarray
             arr = arr[:, mask]
         proba = model.predict_proba(arr)[:, 1]
         return np.round(proba, 4)
-    except Exception:
-        logger.exception("GBT batch inference failed")
+    except Exception as exc:
+        _warn_once("gbt_batch_inference_failed", "GBT batch inference failed (suppressing further): %s", exc)
         return None
