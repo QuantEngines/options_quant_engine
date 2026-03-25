@@ -78,8 +78,16 @@ def load_spot_history(
     if not symbol_dir.exists():
         return pd.DataFrame(columns=["timestamp", "spot"])
 
-    start = pd.Timestamp(start_ts).tz_convert(IST_TIMEZONE) if start_ts is not None else None
-    end = pd.Timestamp(end_ts).tz_convert(IST_TIMEZONE) if end_ts is not None else None
+    def _to_ist(ts_value):
+        if ts_value is None:
+            return None
+        ts = pd.Timestamp(ts_value)
+        if ts.tzinfo is None:
+            return ts.tz_localize(IST_TIMEZONE)
+        return ts.tz_convert(IST_TIMEZONE)
+
+    start = _to_ist(start_ts)
+    end = _to_ist(end_ts)
 
     frames: list[pd.DataFrame] = []
     for csv_file in sorted(symbol_dir.glob("*.csv")):
@@ -92,7 +100,14 @@ def load_spot_history(
         if df.empty or "timestamp" not in df.columns or "spot" not in df.columns:
             continue
 
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(IST_TIMEZONE)
+        # Support mixed timestamp precision (e.g. seconds and fractional seconds)
+        # across appenders while remaining deterministic for replay/evaluation.
+        df["timestamp"] = pd.to_datetime(
+            df["timestamp"],
+            utc=True,
+            errors="coerce",
+            format="mixed",
+        ).dt.tz_convert(IST_TIMEZONE)
         df["spot"] = pd.to_numeric(df["spot"], errors="coerce")
         df = df.dropna(subset=["timestamp", "spot"])
 

@@ -78,6 +78,22 @@ python main.py
 streamlit run app/streamlit_app.py
 ```
 
+**Structure Tab Visualization:**
+
+The Structure tab now includes four market-structure charts plus a new ATM-centered Put-Call OI Ratio (PCR) widget:
+
+1. **Open Interest by Strike** — Bar chart of PE/CE cumulative OI across strikes
+2. **IV Smile** — Line chart showing implied volatility skew by strike
+3. **Option Premium Curve** — Line chart of last prices (CE/PE) by strike  
+4. **Change in OI by Strike** — Bar chart of PE/CE daily OI changes
+5. **Put-Call OI Ratio (ATM-Centered)** — Line chart of PE/CE OI ratio focused around At-The-Money (ATM) with adjustable ±N strikes window for intraday actionability
+
+The PCR chart:
+- Auto-anchors to ATM using median underlying value when available, or highest combined OI as fallback
+- Includes slider to zoom in/out (±1 to ±20 strikes, default ±8)
+- Shows only the focused window for cleaner intraday reads
+- Displays PCR anchor and signal count in caption
+
 ### Refresh Research Outcomes
 
 ```bash

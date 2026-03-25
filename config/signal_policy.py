@@ -152,6 +152,43 @@ TRADE_RUNTIME_THRESHOLDS = {
     "max_pain_pin_penalty_base": -2,
     "max_pain_pin_penalty_strong": -4,
     "max_pain_overlay_weight": 0.12,
+    # ============================================================================
+    # IMPROVEMENTS LAYER: Score Calibration, Time-Decay, Path Filtering, Regime Thresholds
+    # ============================================================================
+    # Score Calibration (Isotonic Regression + Temperature Scaling)
+    "enable_score_calibration": 1,
+    "calibration_backend": "isotonic",  # or "temperature"
+    "runtime_score_calibrator_path": "models_store/runtime_score_calibrator.json",
+    # Time-Decay Model (Regime-Aware Half-Lives)
+    "enable_time_decay_model": 1,
+    "time_decay_lambda": 1.5,
+    # Optional fixed elapsed minutes for replay experiments; None means auto signal-age tracking.
+    "time_decay_elapsed_minutes": None,
+    # Fallback conversion when reversal_age is available (steps -> minutes).
+    "time_decay_minutes_per_snapshot": 5,
+    "time_decay_positive_gamma_half_life_m": 240,
+    "time_decay_negative_gamma_half_life_m": 240,
+    "time_decay_neutral_gamma_half_life_m": 230,
+    # Path-Aware Entry Filtering
+    "enable_path_aware_filtering": 1,
+    "path_filtering_mae_zscore_threshold": 1.5,
+    "path_filtering_mfe_mae_ratio_threshold": 0.87,
+    "path_filtering_hostile_score_penalty": 15,
+    "path_filtering_delay_entry_on_hostile": 1,
+    "path_filtering_entry_confirmation_window_m": 5,
+    # Regime-Conditional Thresholds
+    "enable_regime_conditional_thresholds": 1,
+    "regime_positive_gamma_composite_delta": 3,
+    "regime_positive_gamma_strength_delta": 2,
+    "regime_positive_gamma_position_size_mult": 0.85,
+    "regime_positive_gamma_holding_delta_m": -60,
+    "regime_negative_gamma_composite_delta": -5,
+    "regime_negative_gamma_strength_delta": -3,
+    "regime_negative_gamma_position_size_mult": 1.15,
+    "regime_negative_gamma_holding_delta_m": 60,
+    "regime_neutral_gamma_composite_delta": 0,
+    "regime_neutral_gamma_strength_delta": 0,
+    "regime_neutral_gamma_position_size_mult": 1.0,
 }
 
 CONFIRMATION_FILTER_CONFIG = {

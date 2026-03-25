@@ -58,6 +58,10 @@ from strategy.exit_model import calculate_exit, compute_exit_timing
 from strategy.strike_selector import select_best_strike
 from engine.decision_journal import append_decision as _journal_append_decision
 from utils.regime_normalization import canonical_gamma_regime
+from strategy.score_calibration import initialize_calibrator, apply_score_calibration, get_calibrator_runtime_metadata
+from strategy.time_decay_model import initialize_time_decay, apply_time_decay
+from strategy.path_aware_filtering import PathAwareFilter, PathPatternLibrary
+from strategy.regime_conditional_thresholds import initialize_regime_thresholds, compute_regime_thresholds
 
 
 def _as_upper(value):
@@ -97,6 +101,203 @@ def _dedupe_keep_order(items):
         seen.add(normalized)
         out.append(normalized)
     return out
+
+
+_DECAY_SIGNAL_STATE = {}
+_PATH_SIGNAL_STATE = {}
+_PATH_FILTER = None
+_TIME_DECAY_MODEL_CONFIG_KEY = None
+_REGIME_THRESHOLDS_CONFIG_KEY = None
+
+
+def _coerce_timestamp(value):
+    if value is None:
+        return None
+    try:
+        import pandas as _pd
+        return _pd.Timestamp(value)
+    except Exception:
+        return None
+
+
+def _compute_signal_elapsed_minutes(*, symbol, selected_expiry, valuation_time, direction):
+    """Track signal age (minutes) by symbol+expiry and direction for time-decay."""
+    if _as_upper(direction) not in {"CALL", "PUT"}:
+        return 0.0
+
+    ts = _coerce_timestamp(valuation_time)
+    if ts is None:
+        return 0.0
+
+    key = f"{symbol}:{selected_expiry or 'NO_EXPIRY'}"
+    state = _DECAY_SIGNAL_STATE.get(key) or {}
+    prev_direction = _as_upper(state.get("direction"))
+    start_ts = state.get("start_ts")
+
+    # Reset age when direction flips or we see this key for the first time.
+    if prev_direction != _as_upper(direction) or start_ts is None:
+        start_ts = ts
+
+    elapsed_minutes = 0.0
+    try:
+        elapsed_minutes = max(0.0, float((ts - start_ts).total_seconds() / 60.0))
+    except Exception:
+        elapsed_minutes = 0.0
+        start_ts = ts
+
+    _DECAY_SIGNAL_STATE[key] = {
+        "direction": _as_upper(direction),
+        "start_ts": start_ts,
+        "last_ts": ts,
+    }
+
+    # Prune stale entries opportunistically to keep in-memory state bounded.
+    if len(_DECAY_SIGNAL_STATE) > 512:
+        stale_keys = []
+        for k, v in _DECAY_SIGNAL_STATE.items():
+            last_ts = v.get("last_ts")
+            try:
+                age_m = (ts - last_ts).total_seconds() / 60.0
+            except Exception:
+                age_m = 0.0
+            if age_m > 24 * 60:
+                stale_keys.append(k)
+        for k in stale_keys:
+            _DECAY_SIGNAL_STATE.pop(k, None)
+
+    return elapsed_minutes
+
+
+def _compute_path_observation_bps(*, symbol, selected_expiry, valuation_time, spot, direction):
+    """Build micro-path proxy (MFE/MAE bps) from consecutive snapshot spot deltas."""
+    if _as_upper(direction) not in {"CALL", "PUT"}:
+        return None, None
+
+    ts = _coerce_timestamp(valuation_time)
+    spot_now = _safe_float(spot, None)
+    if ts is None or spot_now is None or spot_now <= 0:
+        return None, None
+
+    key = f"{symbol}:{selected_expiry or 'NO_EXPIRY'}"
+    state = _PATH_SIGNAL_STATE.get(key) or {}
+    last_spot = _safe_float(state.get("last_spot"), None)
+    last_ts = state.get("last_ts")
+
+    delta_bps = 0.0
+    if last_spot and last_spot > 0:
+        delta_bps = ((spot_now - last_spot) / last_spot) * 10000.0
+
+    if _as_upper(direction) == "CALL":
+        mfe_bps = max(0.0, delta_bps)
+        mae_bps = min(0.0, delta_bps)
+    else:
+        # For PUT, down move is favorable.
+        mfe_bps = max(0.0, -delta_bps)
+        mae_bps = min(0.0, -delta_bps)
+
+    _PATH_SIGNAL_STATE[key] = {
+        "last_spot": spot_now,
+        "last_ts": ts,
+    }
+
+    if len(_PATH_SIGNAL_STATE) > 512:
+        stale_keys = []
+        for k, v in _PATH_SIGNAL_STATE.items():
+            _lts = v.get("last_ts")
+            try:
+                age_m = (ts - _lts).total_seconds() / 60.0
+            except Exception:
+                age_m = 0.0
+            if age_m > 24 * 60:
+                stale_keys.append(k)
+        for k in stale_keys:
+            _PATH_SIGNAL_STATE.pop(k, None)
+
+    # If we do not yet have a previous spot, do not force a penalty.
+    if last_spot is None or last_ts is None:
+        return None, None
+
+    return float(mfe_bps), float(mae_bps)
+
+
+def _get_path_filter():
+    global _PATH_FILTER
+    if _PATH_FILTER is None:
+        _PATH_FILTER = PathAwareFilter(pattern_library=PathPatternLibrary())
+    return _PATH_FILTER
+
+
+def _canonical_vol_regime(value):
+    txt = _as_upper(value)
+    if txt in {"VOL_EXPANSION", "HIGH_VOL", "SHOCK_VOL", "VOLATILE"}:
+        return "VOL_EXPANSION"
+    if txt in {"VOL_CONTRACTION", "LOW_VOL", "COMPRESSED_VOL"}:
+        return "VOL_CONTRACTION"
+    return "NORMAL_VOL"
+
+
+def _ensure_time_decay_model_config(runtime_thresholds):
+    global _TIME_DECAY_MODEL_CONFIG_KEY
+    cfg_key = (
+        _safe_float(runtime_thresholds.get("time_decay_positive_gamma_half_life_m"), 90.0),
+        _safe_float(runtime_thresholds.get("time_decay_negative_gamma_half_life_m"), 45.0),
+        _safe_float(runtime_thresholds.get("time_decay_neutral_gamma_half_life_m"), 70.0),
+        _safe_float(runtime_thresholds.get("time_decay_lambda"), 1.5),
+    )
+    if _TIME_DECAY_MODEL_CONFIG_KEY == cfg_key:
+        return
+
+    initialize_time_decay(
+        positive_gamma_half_life_m=cfg_key[0],
+        negative_gamma_half_life_m=cfg_key[1],
+        neutral_gamma_half_life_m=cfg_key[2],
+        steepness=max(0.1, _safe_float(cfg_key[3], 1.5)),
+    )
+    _TIME_DECAY_MODEL_CONFIG_KEY = cfg_key
+
+
+def _ensure_regime_thresholds_config(runtime_thresholds, base_min_trade_strength, base_min_composite_score):
+    global _REGIME_THRESHOLDS_CONFIG_KEY
+    cfg_key = (
+        int(_safe_float(base_min_composite_score, 55.0)),
+        int(_safe_float(base_min_trade_strength, 62.0)),
+        int(_safe_float(runtime_thresholds.get("max_intraday_hold_minutes"), 90.0)),
+        1.0,
+        int(_safe_float(runtime_thresholds.get("regime_positive_gamma_composite_delta"), -3.0)),
+        int(_safe_float(runtime_thresholds.get("regime_positive_gamma_strength_delta"), -2.0)),
+        int(_safe_float(runtime_thresholds.get("regime_positive_gamma_holding_delta_m"), 60.0)),
+        _safe_float(runtime_thresholds.get("regime_positive_gamma_position_size_mult"), 1.2),
+        int(_safe_float(runtime_thresholds.get("regime_negative_gamma_composite_delta"), 5.0)),
+        int(_safe_float(runtime_thresholds.get("regime_negative_gamma_strength_delta"), 3.0)),
+        int(_safe_float(runtime_thresholds.get("regime_negative_gamma_holding_delta_m"), -60.0)),
+        _safe_float(runtime_thresholds.get("regime_negative_gamma_position_size_mult"), 0.7),
+        int(_safe_float(runtime_thresholds.get("regime_neutral_gamma_composite_delta"), 0.0)),
+        int(_safe_float(runtime_thresholds.get("regime_neutral_gamma_strength_delta"), 0.0)),
+        0,
+        _safe_float(runtime_thresholds.get("regime_neutral_gamma_position_size_mult"), 1.0),
+    )
+    if _REGIME_THRESHOLDS_CONFIG_KEY == cfg_key:
+        return
+
+    initialize_regime_thresholds(
+        base_composite=cfg_key[0],
+        base_strength=cfg_key[1],
+        base_max_holding_m=cfg_key[2],
+        base_position_size=cfg_key[3],
+        positive_gamma_composite_delta=cfg_key[4],
+        positive_gamma_strength_delta=cfg_key[5],
+        positive_gamma_holding_delta_m=cfg_key[6],
+        positive_gamma_position_size_mult=cfg_key[7],
+        negative_gamma_composite_delta=cfg_key[8],
+        negative_gamma_strength_delta=cfg_key[9],
+        negative_gamma_holding_delta_m=cfg_key[10],
+        negative_gamma_position_size_mult=cfg_key[11],
+        neutral_gamma_composite_delta=cfg_key[12],
+        neutral_gamma_strength_delta=cfg_key[13],
+        neutral_gamma_holding_delta_m=cfg_key[14],
+        neutral_gamma_position_size_mult=cfg_key[15],
+    )
+    _REGIME_THRESHOLDS_CONFIG_KEY = cfg_key
 
 
 def _collect_neutralization_states(payload):
@@ -214,6 +415,30 @@ def _compute_runtime_composite_score(
 
 
 def _resolve_regime_thresholds(*, runtime_thresholds, base_min_trade_strength, base_min_composite_score, market_state):
+    # Use new RegimeAdaptiveThresholds if enabled, otherwise fall back to legacy logic
+    use_new_regime_thresholds = bool(int(_safe_float(runtime_thresholds.get("enable_regime_conditional_thresholds"), 1.0)))
+    
+    if use_new_regime_thresholds:
+        _ensure_regime_thresholds_config(runtime_thresholds, base_min_trade_strength, base_min_composite_score)
+        gamma_regime = canonical_gamma_regime(market_state.get("gamma_regime"))
+        vol_regime = _canonical_vol_regime(market_state.get("vol_regime"))
+        
+        new_thresholds = compute_regime_thresholds(
+            gamma_regime=gamma_regime,
+            volatility_regime=vol_regime,
+            spot_vs_flip=market_state.get("spot_vs_flip")
+        )
+        
+        return {
+            "effective_min_trade_strength": int(_clip(new_thresholds["effective_trade_strength"], 0, 100)),
+            "effective_min_composite_score": int(_clip(new_thresholds["effective_composite_score"], 0, 100)),
+            "effective_max_holding_m": int(_clip(new_thresholds.get("effective_max_holding_m", 90), 30, 480)),
+            "position_size_multiplier": _safe_float(new_thresholds.get("position_size_multiplier"), 1.0),
+            "adjustments": new_thresholds.get("rationale", []),
+            "toxic_context": gamma_regime == "NEGATIVE_GAMMA",
+        }
+    
+    # Legacy logic (fallback if disabled)
     adjustments = []
     effective_trade_strength = int(base_min_trade_strength)
     effective_composite = int(base_min_composite_score)
@@ -255,6 +480,8 @@ def _resolve_regime_thresholds(*, runtime_thresholds, base_min_trade_strength, b
     return {
         "effective_min_trade_strength": int(_clip(effective_trade_strength, 0, 100)),
         "effective_min_composite_score": int(_clip(effective_composite, 0, 100)),
+        "effective_max_holding_m": int(_safe_float(runtime_thresholds.get("max_intraday_hold_minutes"), 90.0)),
+        "position_size_multiplier": 1.0,
         "adjustments": adjustments,
         "toxic_context": bool(toxic_gamma or dealer_short_gamma),
     }
@@ -766,6 +993,8 @@ def generate_trade(
     if option_chain is None or option_chain.empty:
         return None
 
+    selected_expiry = option_chain_validation.get("selected_expiry") if isinstance(option_chain_validation, dict) else None
+
     # Normalize provider-specific column names and enrich missing Greeks once so
     # every downstream model works off a consistent option-chain schema.
     df = normalize_option_chain(option_chain, spot=spot, valuation_time=valuation_time)
@@ -859,6 +1088,44 @@ def generate_trade(
     trade_strength = signal_state["trade_strength"]
     scoring_breakdown = signal_state["scoring_breakdown"]
     confirmation = signal_state["confirmation"]
+
+    # Path-aware filter uses consecutive snapshot spot deltas as a micro-path proxy.
+    path_filtering_enabled = bool(int(_safe_float(get_trade_runtime_thresholds().get("enable_path_aware_filtering"), 1.0)))
+    path_check = {
+        "path_status": "DISABLED",
+        "score_penalty": 0,
+        "entry_veto": False,
+        "mfe_observed_bps": None,
+        "mae_observed_bps": None,
+        "mae_zscore": None,
+        "reasons": [],
+    }
+    if path_filtering_enabled and direction in {"CALL", "PUT"}:
+        _mfe_bps, _mae_bps = _compute_path_observation_bps(
+            symbol=symbol,
+            selected_expiry=option_chain_validation.get("selected_expiry") if isinstance(option_chain_validation, dict) else None,
+            valuation_time=valuation_time,
+            spot=spot,
+            direction=direction,
+        )
+        path_filter = _get_path_filter()
+        path_check = path_filter.check_path_geometry(
+            gamma_regime=market_state.get("gamma_regime"),
+            direction=direction,
+            mfe_observed_bps=_mfe_bps,
+            mae_observed_bps=_mae_bps,
+            window=f"{int(_safe_float(get_trade_runtime_thresholds().get('path_filtering_entry_confirmation_window_m'), 5.0))}m",
+            mae_zscore_threshold=_safe_float(get_trade_runtime_thresholds().get("path_filtering_mae_zscore_threshold"), 1.5),
+            hostile_path_score_penalty=-abs(int(_safe_float(get_trade_runtime_thresholds().get("path_filtering_hostile_score_penalty"), 15.0))),
+            allow_veto=bool(int(_safe_float(get_trade_runtime_thresholds().get("path_filtering_delay_entry_on_hostile"), 1.0))),
+        )
+
+        if _safe_float(path_check.get("score_penalty"), 0.0) != 0:
+            confirmation["score_adjustment"] += int(_safe_float(path_check.get("score_penalty"), 0.0))
+            confirmation["reasons"].append("path_aware_filter_adjustment")
+            confirmation_breakdown = confirmation.get("breakdown") if isinstance(confirmation.get("breakdown"), dict) else {}
+            confirmation_breakdown["path_aware_filter_score"] = int(_safe_float(path_check.get("score_penalty"), 0.0))
+            confirmation["breakdown"] = confirmation_breakdown
 
     macro_news_adjustments = compute_macro_news_adjustments(
         direction=direction,
@@ -1151,6 +1418,13 @@ def generate_trade(
         "confirmation_veto": confirmation["veto"],
         "confirmation_reasons": confirmation["reasons"],
         "confirmation_breakdown": confirmation["breakdown"],
+        "path_aware_status": path_check.get("path_status"),
+        "path_aware_score_penalty": int(_safe_float(path_check.get("score_penalty"), 0.0)),
+        "path_aware_entry_veto": bool(path_check.get("entry_veto", False)),
+        "path_aware_mfe_observed_bps": _to_python_number(path_check.get("mfe_observed_bps")),
+        "path_aware_mae_observed_bps": _to_python_number(path_check.get("mae_observed_bps")),
+        "path_aware_mae_zscore": _to_python_number(path_check.get("mae_zscore")),
+        "path_aware_reasons": path_check.get("reasons", []),
         "direction_source": direction_source,
         "trade_strength": adjusted_trade_strength,
         "signal_quality": classify_signal_quality(adjusted_trade_strength),
@@ -1237,7 +1511,17 @@ def generate_trade(
         "regime_threshold_adjustments": regime_thresholds["adjustments"],
         "min_trade_strength_threshold": min_trade_strength,
         "min_composite_score_threshold": min_composite_score,
+        "score_calibration_enabled": bool(int(_safe_float(runtime_thresholds.get("enable_score_calibration"), 1.0))),
+        "score_calibration_applied": False,
+        "score_calibration_backend": runtime_thresholds.get("calibration_backend", "isotonic"),
+        "score_calibration_artifact_path": runtime_thresholds.get("runtime_score_calibrator_path"),
+        "time_decay_enabled": bool(int(_safe_float(runtime_thresholds.get("enable_time_decay_model"), 1.0))),
+        "time_decay_applied": False,
+        "time_decay_fallback_used": False,
+        "time_decay_elapsed_source": None,
         "runtime_composite_score": None,
+        "time_decay_elapsed_minutes": None,
+        "time_decay_factor": None,
         "backtest_mode": backtest_mode,
     }
 
@@ -1425,6 +1709,9 @@ def generate_trade(
     if direction is None:
         return _finalize(base_payload, "NO_SIGNAL", "No trade signal")
 
+    if bool(base_payload.get("path_aware_entry_veto")):
+        return _finalize(base_payload, "WATCHLIST", "Path-aware filter vetoed entry")
+
     if (
         market_state["final_flow_signal"] == "NEUTRAL_FLOW"
         and probability_state["hybrid_move_probability"] is not None
@@ -1557,6 +1844,7 @@ def generate_trade(
         minutes_to_close=_mtc,
     )
     hold_cap_minutes = int(_safe_float(runtime_thresholds.get("max_intraday_hold_minutes"), 90.0))
+    hold_cap_minutes = min(hold_cap_minutes, int(_safe_float(regime_thresholds.get("effective_max_holding_m"), hold_cap_minutes)))
     if regime_thresholds["toxic_context"] or at_flip_toxic_context:
         hold_cap_minutes = min(
             hold_cap_minutes,
@@ -1715,11 +2003,14 @@ def generate_trade(
     # Macro and global-risk size caps can reduce exposure without vetoing the
     # idea entirely, which is useful for elevated-risk but still actionable setups.
     risk_size_cap = min(_safe_float(global_risk["global_risk_size_cap"], 1.0), _safe_float(at_flip_size_cap, 1.0))
-    gamma_regime_upper = canonical_gamma_regime(market_state.get("gamma_regime"))
-    if gamma_regime_upper == "POSITIVE_GAMMA":
-        risk_size_cap *= _safe_float(runtime_thresholds.get("positive_gamma_size_multiplier"), 0.85)
-    elif gamma_regime_upper == "NEGATIVE_GAMMA":
-        risk_size_cap *= _safe_float(runtime_thresholds.get("negative_gamma_size_multiplier"), 1.15)
+    if bool(int(_safe_float(runtime_thresholds.get("enable_regime_conditional_thresholds"), 1.0))):
+        risk_size_cap *= _safe_float(regime_thresholds.get("position_size_multiplier"), 1.0)
+    else:
+        gamma_regime_upper = canonical_gamma_regime(market_state.get("gamma_regime"))
+        if gamma_regime_upper == "POSITIVE_GAMMA":
+            risk_size_cap *= _safe_float(runtime_thresholds.get("positive_gamma_size_multiplier"), 0.85)
+        elif gamma_regime_upper == "NEGATIVE_GAMMA":
+            risk_size_cap *= _safe_float(runtime_thresholds.get("negative_gamma_size_multiplier"), 1.15)
     risk_size_cap = _clip(risk_size_cap, 0.0, 1.0)
     base_payload["effective_size_cap"] = round(risk_size_cap, 2)
     suggested_lots = max(0, int(base_payload["number_of_lots"] * risk_size_cap))
@@ -1747,6 +2038,67 @@ def generate_trade(
         data_quality_status=data_quality["status"],
         gamma_vol_acceleration_score_normalized=gamma_vol_acceleration_score_normalized,
     )
+    
+    # Apply score calibration if enabled
+    enable_calibration = bool(int(_safe_float(runtime_thresholds.get("enable_score_calibration"), 1.0)))
+    calibration_backend = runtime_thresholds.get("calibration_backend", "isotonic")
+    calibrator_path = runtime_thresholds.get("runtime_score_calibrator_path")
+    base_payload["score_calibration_enabled"] = enable_calibration
+    base_payload["score_calibration_backend"] = calibration_backend if enable_calibration else None
+    base_payload["score_calibration_artifact_path"] = calibrator_path if enable_calibration else None
+    if enable_calibration:
+        runtime_composite_score = apply_score_calibration(
+            raw_composite_score=runtime_composite_score,
+            calibration_backend=calibration_backend,
+            calibrator_path=calibrator_path,
+        )
+        calibration_metadata = get_calibrator_runtime_metadata(calibrator_path)
+        base_payload["score_calibration_applied"] = bool(calibration_metadata.get("calibrator_loaded"))
+        loaded_artifact_path = calibration_metadata.get("loaded_artifact_path")
+        if loaded_artifact_path:
+            base_payload["score_calibration_artifact_path"] = loaded_artifact_path
+    
+    # Apply time-decay model if enabled
+    enable_decay = bool(int(_safe_float(runtime_thresholds.get("enable_time_decay_model"), 1.0)))
+    base_payload["time_decay_enabled"] = enable_decay
+    decay_elapsed_source = None
+    decay_minutes_elapsed = _safe_float(runtime_thresholds.get("time_decay_elapsed_minutes"), None)
+    if decay_minutes_elapsed is not None:
+        decay_elapsed_source = "configured_minutes"
+    if decay_minutes_elapsed is None:
+        decay_minutes_elapsed = _compute_signal_elapsed_minutes(
+            symbol=symbol,
+            selected_expiry=selected_expiry,
+            valuation_time=valuation_time,
+            direction=direction,
+        )
+        decay_elapsed_source = "signal_tracking"
+    if decay_minutes_elapsed in (None, 0.0) and reversal_age is not None:
+        per_snapshot_m = _safe_float(runtime_thresholds.get("time_decay_minutes_per_snapshot"), 5.0)
+        decay_minutes_elapsed = max(0.0, _safe_float(reversal_age, 0.0)) * max(0.0, _safe_float(per_snapshot_m, 5.0))
+        decay_elapsed_source = "reversal_age_fallback"
+        base_payload["time_decay_fallback_used"] = True
+
+    decay_minutes_elapsed = max(0.0, _safe_float(decay_minutes_elapsed, 0.0))
+    base_payload["time_decay_elapsed_source"] = decay_elapsed_source
+    base_payload["time_decay_elapsed_minutes"] = round(decay_minutes_elapsed, 2)
+
+    if enable_decay and decay_minutes_elapsed > 0:
+        _ensure_time_decay_model_config(runtime_thresholds)
+        gamma_regime = canonical_gamma_regime(market_state.get("gamma_regime"))
+        vol_regime = _canonical_vol_regime(market_state.get("vol_regime"))
+        decay_factor = apply_time_decay(
+            minutes_elapsed=decay_minutes_elapsed,
+            gamma_regime=gamma_regime,
+            lambda_param=runtime_thresholds.get("time_decay_lambda", 1.5),
+            volatility_regime=vol_regime,
+        )
+        base_payload["time_decay_factor"] = round(_safe_float(decay_factor, 1.0), 6)
+        base_payload["time_decay_applied"] = True
+        runtime_composite_score = int(runtime_composite_score * decay_factor)
+    elif enable_decay:
+        base_payload["time_decay_factor"] = 1.0
+    
     base_payload["runtime_composite_score"] = runtime_composite_score
 
     if runtime_composite_score < min_composite_score:

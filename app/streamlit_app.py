@@ -1102,6 +1102,248 @@ def _render_option_chain_charts(option_chain: pd.DataFrame):
         st.bar_chart(coi_view, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
+    if {"strikePrice", "OPTION_TYP", "openInterest"}.issubset(df.columns):
+        pcr_view = (
+            df.dropna(subset=["strikePrice"])
+            .pivot_table(index="strikePrice", columns="OPTION_TYP", values="openInterest", aggfunc="sum")
+            .sort_index()
+            .fillna(0)
+        )
+        st.markdown('<div class="oqe-panel">', unsafe_allow_html=True)
+        st.markdown("**Put-Call OI Ratio by Strike (ATM-Centered)**")
+        if {"PE", "CE"}.issubset(pcr_view.columns):
+            pcr_series = pcr_view["PE"] / pcr_view["CE"].replace(0, pd.NA)
+            pcr_series = pcr_series.dropna()
+            if not pcr_series.empty:
+                strikes = list(pcr_series.index)
+                atm_reference = None
+                if "underlyingValue" in df.columns:
+                    spot_series = pd.to_numeric(df["underlyingValue"], errors="coerce").dropna()
+                    if not spot_series.empty:
+                        atm_reference = float(spot_series.median())
+                if atm_reference is None:
+                    oi_total = pcr_view["PE"].fillna(0) + pcr_view["CE"].fillna(0)
+                    if not oi_total.empty:
+                        atm_reference = float(oi_total.idxmax())
+
+                if atm_reference is None:
+                    atm_strike = strikes[len(strikes) // 2]
+                else:
+                    atm_strike = min(strikes, key=lambda strike: abs(strike - atm_reference))
+
+                atm_idx = strikes.index(atm_strike)
+                max_window = max(1, min(20, len(strikes) // 2 if len(strikes) > 2 else 1))
+                default_window = min(8, max_window)
+                strike_window = st.slider(
+                    "PCR window (ATM ± N strikes)",
+                    min_value=1,
+                    max_value=max_window,
+                    value=default_window,
+                    key="structure_pcr_atm_window",
+                    help="Focuses PCR around ATM for cleaner intraday read.",
+                )
+
+                start_idx = max(0, atm_idx - strike_window)
+                end_idx = min(len(strikes), atm_idx + strike_window + 1)
+                centered_pcr = pcr_series.iloc[start_idx:end_idx]
+
+                st.line_chart(centered_pcr, use_container_width=True)
+                st.caption(
+                    f"ATM anchor: {atm_strike:.2f}. Showing {len(centered_pcr)} strikes around ATM. "
+                    "Values above 1 indicate relatively higher put OI vs call OI at that strike."
+                )
+            else:
+                st.caption("PCR unavailable: CE OI is zero or missing across strikes.")
+        else:
+            st.caption("PCR unavailable: both CE and PE legs are required.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_signal_processing_diagnostics(trade: dict):
+    """
+    Purpose:
+        Render signal processing diagnostics panel showing runtime improvements.
+
+    Context:
+        Function inside the `streamlit app` module. Displays time decay, score calibration,
+        path filtering, and regime-conditional thresholds applied during signal generation.
+
+    Inputs:
+        trade (dict): Trade payload containing signal processing metadata.
+
+    Returns:
+        None: Side effect only.
+
+    Notes:
+        New dashboard section highlighting the four core signal processing improvements.
+    """
+    if not trade:
+        return
+
+    st.markdown('<div class="oqe-panel">', unsafe_allow_html=True)
+    st.subheader("Signal Processing Diagnostics")
+
+    time_decay_elapsed = trade.get("time_decay_elapsed_minutes")
+    time_decay_factor = trade.get("time_decay_factor")
+    time_decay_enabled = trade.get("time_decay_enabled")
+    time_decay_applied = trade.get("time_decay_applied")
+    time_decay_fallback_used = trade.get("time_decay_fallback_used")
+    time_decay_elapsed_source = trade.get("time_decay_elapsed_source")
+    path_aware_status = trade.get("path_aware_status")
+    path_aware_score_penalty = trade.get("path_aware_score_penalty")
+    path_aware_entry_veto = trade.get("path_aware_entry_veto")
+    path_aware_mae_zscore = trade.get("path_aware_mae_zscore")
+    path_aware_reasons = trade.get("path_aware_reasons")
+
+    effective_size_cap = trade.get("effective_size_cap")
+    macro_size_applied = trade.get("macro_size_applied")
+    gamma_regime = trade.get("gamma_regime")
+    regime_threshold_adjustments = trade.get("regime_threshold_adjustments")
+    min_trade_strength_threshold = trade.get("min_trade_strength_threshold")
+    min_composite_score_threshold = trade.get("min_composite_score_threshold")
+
+    runtime_composite_score = trade.get("runtime_composite_score")
+    score_calibration_enabled = trade.get("score_calibration_enabled")
+    score_calibration_applied = trade.get("score_calibration_applied")
+    score_calibration_backend = trade.get("score_calibration_backend")
+    score_calibration_artifact_path = trade.get("score_calibration_artifact_path")
+
+    if not time_decay_enabled:
+        time_decay_status = "Disabled"
+    elif time_decay_applied and time_decay_fallback_used:
+        time_decay_status = "Fallback Applied"
+    elif time_decay_applied:
+        time_decay_status = "Applied"
+    else:
+        time_decay_status = "Enabled / Baseline"
+    if score_calibration_enabled:
+        runtime_score_status = "Applied" if score_calibration_applied else "Enabled / Fallback"
+    else:
+        runtime_score_status = "Disabled"
+    path_filter_status = path_aware_status or "Unavailable"
+    regime_adjustment_active = bool(regime_threshold_adjustments) or (macro_size_applied is True)
+    regime_adjustment_status = "Adjusted" if regime_adjustment_active else "Baseline"
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.markdown(
+            """
+            <div class="oqe-summary-card">
+                <div class="oqe-summary-label">Time Decay</div>
+                <div class="oqe-summary-value">{}</div>
+                <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                    {} min | factor {}
+                </div>
+            </div>
+            """.format(
+                esc(time_decay_status),
+                esc("-" if time_decay_elapsed is None else round(time_decay_elapsed, 1)),
+                esc("-" if time_decay_factor is None else round(time_decay_factor, 3))
+            ),
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        st.markdown(
+            """
+            <div class="oqe-summary-card">
+                <div class="oqe-summary-label">Runtime Score</div>
+                <div class="oqe-summary-value">{}</div>
+                <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                    Composite: {}
+                </div>
+            </div>
+            """.format(
+                esc(runtime_score_status),
+                esc("-" if runtime_composite_score is None else round(runtime_composite_score, 0))
+            ),
+            unsafe_allow_html=True,
+        )
+
+    with col3:
+        st.markdown(
+            """
+            <div class="oqe-summary-card">
+                <div class="oqe-summary-label">Path Filtering</div>
+                <div class="oqe-summary-value">{}</div>
+                <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                    Penalty: {} | veto: {}
+                </div>
+            </div>
+            """.format(
+                esc(path_filter_status),
+                esc("-" if path_aware_score_penalty is None else path_aware_score_penalty),
+                esc("YES" if path_aware_entry_veto else "NO")
+            ),
+            unsafe_allow_html=True,
+        )
+
+    with col4:
+        st.markdown(
+            """
+            <div class="oqe-summary-card">
+                <div class="oqe-summary-label">Regime Adjustments</div>
+                <div class="oqe-summary-value">{}</div>
+                <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                    {} | cap: {}
+                </div>
+            </div>
+            """.format(
+                esc(regime_adjustment_status),
+                esc(gamma_regime or "-"),
+                esc("-" if effective_size_cap is None else round(effective_size_cap, 2))
+            ),
+            unsafe_allow_html=True,
+        )
+
+    with st.expander("Detailed Signal Processing", expanded=False):
+        detail_cols = st.columns(2)
+
+        with detail_cols[0]:
+            st.markdown("**Time Decay Model**")
+            st.json({
+                "time_decay_enabled": time_decay_enabled,
+                "time_decay_applied": time_decay_applied,
+                "time_decay_fallback_used": time_decay_fallback_used,
+                "time_decay_elapsed_source": time_decay_elapsed_source,
+                "elapsed_minutes": None if time_decay_elapsed is None else round(time_decay_elapsed, 2),
+                "decay_factor": None if time_decay_factor is None else round(time_decay_factor, 6),
+            }, expanded=False)
+
+        with detail_cols[1]:
+            st.markdown("**Score Calibration**")
+            st.json({
+                "score_calibration_enabled": score_calibration_enabled,
+                "score_calibration_applied": score_calibration_applied,
+                "score_calibration_backend": score_calibration_backend,
+                "score_calibration_artifact_path": score_calibration_artifact_path,
+                "runtime_composite_score": None if runtime_composite_score is None else round(runtime_composite_score, 0),
+            }, expanded=False)
+
+        with detail_cols[0]:
+            st.markdown("**Path-Aware Filtering**")
+            st.json({
+                "path_aware_status": path_aware_status,
+                "path_aware_score_penalty": path_aware_score_penalty,
+                "path_aware_entry_veto": path_aware_entry_veto,
+                "path_aware_mae_zscore": None if path_aware_mae_zscore is None else round(path_aware_mae_zscore, 4),
+                "path_aware_reasons": path_aware_reasons,
+            }, expanded=False)
+
+        with detail_cols[1]:
+            st.markdown("**Regime-Conditional Thresholds**")
+            st.json({
+                "gamma_regime": gamma_regime,
+                "effective_size_cap": None if effective_size_cap is None else round(effective_size_cap, 2),
+                "size_applied": macro_size_applied,
+                "min_trade_strength_threshold": min_trade_strength_threshold,
+                "min_composite_score_threshold": min_composite_score_threshold,
+                "regime_threshold_adjustments": regime_threshold_adjustments,
+            }, expanded=False)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
 
 def _render_macro_lab(macro_news_state: dict, headline_records: pd.DataFrame, macro_event_state: dict):
     """
@@ -1185,6 +1427,7 @@ def _render_workstation(result: dict):
     with overview_tab:
         if trade:
             _render_explainability_scorecard(trade)
+            _render_signal_processing_diagnostics(trade)
 
         top_left, top_right = st.columns(2)
         with top_left:

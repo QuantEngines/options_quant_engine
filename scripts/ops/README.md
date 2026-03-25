@@ -38,3 +38,20 @@ for diagnostics, backfills, and rollout checks.
   - Optionally records manual approval/rejection in promotion state and always writes a decision artifact under `research/parameter_tuning/promotion_gate_decisions/`.
   - Run: `.venv/bin/python scripts/ops/enforce_strict_promotion_gate.py --candidate-pack <pack> --replay-summary-csv research/parameter_tuning/offline_replay_runs/<suite>/candidate_robustness_edge_summary.csv`
   - Record decision in state: `.venv/bin/python scripts/ops/enforce_strict_promotion_gate.py --candidate-pack <pack> --replay-summary-csv <path> --record-manual-approval --reviewer <name>`
+
+- `run_runtime_model_refresh.py`
+  - Runs both runtime retraining steps in one pass: time-decay half-life fit and score calibrator fit.
+  - Evaluates simple promotion gates (`max_decay_fit_mse`, `max_abs_calibration_gap`) and writes an auditable decision artifact.
+  - Writes outputs under `documentation/improvement_reports/` and appends to `runtime_model_refresh_history.csv` without overwriting previous runs.
+  - Run: `.venv/bin/python scripts/ops/run_runtime_model_refresh.py`
+  - Strict gate mode: `.venv/bin/python scripts/ops/run_runtime_model_refresh.py --strict --max-decay-fit-mse 0.45 --max-abs-calibration-gap 0.10`
+  - Failure webhook alert: `.venv/bin/python scripts/ops/run_runtime_model_refresh.py --strict --failure-webhook-url https://example.com/hook`
+  - Failure notify command: `.venv/bin/python scripts/ops/run_runtime_model_refresh.py --strict --failure-notify-command "osascript -e 'display notification \"Runtime refresh gate failed\" with title \"options_quant_engine\"'"`
+
+- `macos/install_daily_runtime_model_refresh_launchd.sh`
+  - Installs a daily macOS LaunchAgent to run runtime refresh automatically at 18:05 local time.
+  - Installer: `bash scripts/ops/macos/install_daily_runtime_model_refresh_launchd.sh`
+  - Optional Python path override: `bash scripts/ops/macos/install_daily_runtime_model_refresh_launchd.sh /absolute/path/to/python`
+  - Optional failure webhook via env before install:
+    `export RUNTIME_MODEL_REFRESH_FAILURE_WEBHOOK_URL=https://example.com/hook`
+  - Generated LaunchAgent path: `~/Library/LaunchAgents/com.optionsquant.runtime_model_refresh.plist`
