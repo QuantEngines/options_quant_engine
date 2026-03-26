@@ -16,6 +16,7 @@ Downstream Usage:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from config.probability_feature_policy import get_probability_feature_policy_config
 from config.symbol_microstructure import get_microstructure_config
@@ -28,6 +29,7 @@ from .common import _call_first, _clip, _safe_float
 
 
 _MOVE_PREDICTOR = None
+_MOVE_PREDICTOR_SIGNATURE = None
 _WARN_ONCE_KEYS: set[str] = set()
 _LOG = logging.getLogger(__name__)
 
@@ -346,58 +348,67 @@ def _get_move_predictor():
         If ACTIVE_MODEL is empty, MLMovePredictor still runs with its internal
         heuristic implementation. Only hard init failures disable the ML leg.
     """
-    global _MOVE_PREDICTOR
+    global _MOVE_PREDICTOR, _MOVE_PREDICTOR_SIGNATURE
 
     predictor_class = getattr(ml_move_predictor_mod, "MLMovePredictor", None)
     if predictor_class is None:
         return None
 
-    if _MOVE_PREDICTOR is None:
+    model_path = None
+    model_signature = (None, None, None)
+    try:
+        from config import settings as _settings
+
+        active_name = getattr(_settings, "ACTIVE_MODEL", None)
+        if active_name:
+            project_root = Path(__file__).resolve().parent.parent.parent
+            candidate = project_root / "models_store" / "registry" / active_name / "model.joblib"
+            if candidate.exists():
+                model_path = candidate
+                model_signature = (active_name, str(candidate.resolve()), candidate.stat().st_mtime)
+            else:
+                model_signature = (active_name, None, None)
+    except Exception:
+        model_path = None
+        model_signature = (None, None, None)
+
+    should_reload = _MOVE_PREDICTOR is None or _MOVE_PREDICTOR_SIGNATURE != model_signature
+
+    if should_reload:
         try:
             base_model = None
-            try:
-                import joblib
-                from pathlib import Path
+            if model_path is not None:
+                try:
+                    import joblib
+                    import sklearn as _sklearn
+                    import warnings as _warnings
+                    import logging as _plog
 
-                project_root = Path(__file__).resolve().parent.parent.parent
+                    _version_seen = set()
 
-                # Check for registry model via ACTIVE_MODEL setting
-                from config import settings as _settings
-                active_name = getattr(_settings, "ACTIVE_MODEL", None)
-                if active_name:
-                    registry_path = project_root / "models_store" / "registry" / active_name / "model.joblib"
-                    if registry_path.exists():
-                        import sklearn as _sklearn
-                        import warnings as _warnings
-                        import logging as _plog
+                    def _sklearn_version_handler(message, category, filename, lineno, file=None, line=None):
+                        key = str(message)
+                        if key not in _version_seen:
+                            _version_seen.add(key)
+                            _plog.getLogger(__name__).warning(
+                                "sklearn version mismatch loading model from %s "
+                                "(installed: %s). Rebuild with: "
+                                "python scripts/build_model_registry.py — %s",
+                                model_path, _sklearn.__version__, message,
+                            )
 
-                        _version_seen = set()
-
-                        def _sklearn_version_handler(message, category, filename, lineno, file=None, line=None):
-                            key = str(message)
-                            if key not in _version_seen:
-                                _version_seen.add(key)
-                                _plog.getLogger(__name__).warning(
-                                    "sklearn version mismatch loading model from %s "
-                                    "(installed: %s). Rebuild with: "
-                                    "python scripts/build_model_registry.py — %s",
-                                    registry_path, _sklearn.__version__, message,
-                                )
-
-                        with _warnings.catch_warnings():
-                            _warnings.simplefilter("always")
-                            _warnings.showwarning = _sklearn_version_handler
-                            base_model = joblib.load(registry_path)
-
-
-
-            except Exception as exc:
-                _warn_once(
-                    "move_predictor_model_load_failed",
-                    "probability: failed to load ACTIVE_MODEL registry artifact; using heuristic ML leg (%s)",
-                    exc,
-                )
+                    with _warnings.catch_warnings():
+                        _warnings.simplefilter("always")
+                        _warnings.showwarning = _sklearn_version_handler
+                        base_model = joblib.load(model_path)
+                except Exception as exc:
+                    _warn_once(
+                        "move_predictor_model_load_failed",
+                        "probability: failed to load ACTIVE_MODEL registry artifact; using heuristic ML leg (%s)",
+                        exc,
+                    )
             _MOVE_PREDICTOR = predictor_class(base_model=base_model)
+            _MOVE_PREDICTOR_SIGNATURE = model_signature
         except Exception as exc:
             _warn_once(
                 "move_predictor_init_failed",
@@ -405,6 +416,7 @@ def _get_move_predictor():
                 exc,
             )
             _MOVE_PREDICTOR = False
+            _MOVE_PREDICTOR_SIGNATURE = model_signature
 
     if _MOVE_PREDICTOR is False:
         return None
@@ -587,21 +599,7 @@ def _compute_probability_state_impl(
     """
     cfg = get_probability_feature_policy_config()
 
-    # Build the 7-feature vector first (backward compat for heuristic path).
-    model_features = _call_first(
-        feature_builder_mod,
-        ["build_features"],
-        df,
-        spot=spot,
-        gamma_regime=market_state["gamma_regime"],
-        final_flow_signal=market_state["final_flow_signal"],
-        vol_regime=market_state["vol_regime"],
-        hedging_bias=market_state["hedging_bias"],
-        spot_vs_flip=market_state["spot_vs_flip"],
-        vacuum_state=market_state["vacuum_state"],
-        atm_iv=market_state["atm_iv"],
-        default=None,
-    )
+    model_features = None
 
     nearest_vacuum_gap_pct = _extract_nearest_vacuum_gap_pct(
         spot=spot,
@@ -640,11 +638,10 @@ def _compute_probability_state_impl(
         lookback_avg_range_pct=lookback_avg_range_pct,
     )
 
-    # Rebuild features with full context for v2 model (33 features).
-    # This passes probability sub-components + market state context so the
-    # expanded_feature_builder can construct the complete feature vector.
+    # Build features once with full context. Fall back to legacy arg-set only
+    # when the active builder does not accept richer kwargs.
     gc = global_context or {}
-    model_features_v2 = _call_first(
+    model_features = _call_first(
         feature_builder_mod,
         ["build_features"],
         df,
@@ -684,9 +681,21 @@ def _compute_probability_state_impl(
         days_to_expiry=gc.get("days_to_expiry"),
         default=None,
     )
-    # Use v2 features if available, fall back to v1
-    if model_features_v2 is not None:
-        model_features = model_features_v2
+    if model_features is None:
+        model_features = _call_first(
+            feature_builder_mod,
+            ["build_features"],
+            df,
+            spot=spot,
+            gamma_regime=market_state["gamma_regime"],
+            final_flow_signal=market_state["final_flow_signal"],
+            vol_regime=market_state["vol_regime"],
+            hedging_bias=market_state["hedging_bias"],
+            spot_vs_flip=market_state["spot_vs_flip"],
+            vacuum_state=market_state["vacuum_state"],
+            atm_iv=market_state["atm_iv"],
+            default=None,
+        )
 
     rule_move_probability = _call_first(
         large_move_probability_mod,

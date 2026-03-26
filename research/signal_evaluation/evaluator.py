@@ -813,6 +813,14 @@ def evaluate_signal_outcomes(row: dict, realized_spot_path: pd.DataFrame, *, as_
 
     signal_ts = _coerce_ts(updated["signal_timestamp"])
     as_of_ts = _coerce_ts(as_of) if as_of is not None else path["timestamp"].max()
+    path = path[path["timestamp"] <= as_of_ts].copy()
+    if path.empty:
+        updated["outcome_status"] = "PENDING"
+        updated["observed_minutes"] = 0.0
+        updated["outcome_last_updated_at"] = as_of_ts.isoformat()
+        updated["updated_at"] = as_of_ts.isoformat()
+        return updated
+
     observed_minutes = max((as_of_ts - signal_ts).total_seconds() / 60.0, 0.0)
     updated["observed_minutes"] = round(observed_minutes, 2)
     updated["outcome_last_updated_at"] = as_of_ts.isoformat()

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from analytics.dealer_gamma_path import simulate_gamma_path
-from analytics.gamma_exposure import approximate_gamma, gamma_signal
+from analytics.gamma_exposure import approximate_gamma, calculate_gamma_exposure, gamma_signal
 from analytics.greeks_engine import _bs_price_for_iv, estimate_iv_from_price
 from strategy.enhanced_strike_scoring import (
     compute_dealer_pressure,
@@ -75,6 +75,28 @@ def test_gamma_signal_returns_neutral_when_call_put_exposure_balances():
     )
 
     assert gamma_signal(chain, spot=100.0) == "NEUTRAL_GAMMA"
+
+
+def test_calculate_gamma_exposure_fallback_is_scale_invariant():
+    chain_small = pd.DataFrame(
+        {
+            "strikePrice": [99.0, 100.0, 101.0],
+            "openInterest": [100.0, 200.0, 120.0],
+            "OPTION_TYP": ["CE", "PE", "CE"],
+        }
+    )
+    chain_large = pd.DataFrame(
+        {
+            "strikePrice": [s * 100.0 for s in [99.0, 100.0, 101.0]],
+            "openInterest": [100.0, 200.0, 120.0],
+            "OPTION_TYP": ["CE", "PE", "CE"],
+        }
+    )
+
+    e_small = calculate_gamma_exposure(chain_small, spot=100.0)
+    e_large = calculate_gamma_exposure(chain_large, spot=10000.0)
+
+    assert e_small == pytest.approx(e_large, rel=1e-12)
 
 
 def test_premium_efficiency_penalizes_zero_premium_rows():

@@ -77,7 +77,7 @@ def calculate_gamma_exposure(option_chain: pd.DataFrame, spot=None):
     if "GAMMA" in df.columns:
         gamma = pd.to_numeric(df["GAMMA"], errors="coerce").fillna(0.0)
     else:
-        distance = (strikes - float(spot)).abs().fillna(np.inf)
+        distance = (strikes - float(spot)).abs() / max(float(spot), 1e-6)
         gamma = 1.0 / (1.0 + distance)
 
     signed = option_type.map({"CE": 1.0, "PE": -1.0}).fillna(0.0)

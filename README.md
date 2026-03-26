@@ -455,8 +455,35 @@ Recent optimizations achieve **31-45x speedup** over baseline engine (warm runs)
 2. **TTE parse cache** (11.5x): Pre-caches time-to-expiry calculations per unique expiry
 3. **yfinance TTL cache** (~350ms/tick): 5-minute cache for market snapshots
 4. **Redundant call removal**: Eliminated duplicate `attach_trade_views` and `split_trade_payload` iterations
+5. **Probability hot-path simplification**: model feature construction now uses a single rich `build_features` call with legacy fallback instead of duplicate builds
 
 For profiling details, see the local developer guide section on performance caching systems.
+
+## March 2026 Runtime Stability Updates
+
+Recent production-hardening updates focused on evaluation correctness, regime semantics, and hot-path efficiency:
+
+1. **Strict `as_of` gating in signal evaluation**
+  - Outcome enrichment now hard-limits realized paths to the requested `as_of` timestamp.
+  - Prevents accidental forward leakage when running partial backfills.
+
+2. **Regime-conditional threshold defaults aligned to intent**
+  - `POSITIVE_GAMMA`: looser thresholds, longer holds, larger sizing multiplier.
+  - `NEGATIVE_GAMMA`: tighter thresholds, shorter holds, smaller sizing multiplier.
+
+3. **Volume PCR edge-case handling**
+  - Zero-call / positive-put volume is now treated as an extreme put-dominant reading rather than `UNAVAILABLE`.
+
+4. **ML predictor hot-reload behavior**
+  - Probability predictor now reloads when `ACTIVE_MODEL` or registry artifact signature changes.
+  - Avoids stale-model behavior in long-running sessions.
+
+5. **Gamma normalization consistency**
+  - Fallback gamma-exposure distance now uses spot-normalized moneyness scaling for consistency across gamma analytics paths.
+
+Validation snapshot:
+
+- Full regression suite: `456 passed, 12 subtests passed`.
 
 ## Parameter Tuning and Governance
 

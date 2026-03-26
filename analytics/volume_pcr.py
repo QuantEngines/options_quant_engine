@@ -50,6 +50,7 @@ _EMPTY = {
 #   PCR < 0.75 → CALL_DOMINANT (bullish sentiment / potential complacency)
 _PCR_BULLISH_THRESHOLD = 0.75
 _PCR_BEARISH_THRESHOLD = 1.30
+_PCR_EXTREME_CAP = 9.99
 
 
 def _vol_col(df: pd.DataFrame) -> str | None:
@@ -108,6 +109,8 @@ def compute_volume_pcr(option_chain: pd.DataFrame, spot: float | None = None) ->
     full_pcr: float | None = None
     if call_vol_total > 0:
         full_pcr = round(put_vol_total / call_vol_total, 4)
+    elif put_vol_total > 0:
+        full_pcr = _PCR_EXTREME_CAP
 
     # ── Near-ATM PCR ─────────────────────────────────────────────────────
     atm_df = front_expiry_atm_slice(option_chain, spot=spot, strike_window_steps=4)
@@ -124,6 +127,8 @@ def compute_volume_pcr(option_chain: pd.DataFrame, spot: float | None = None) ->
     atm_pcr: float | None = None
     if call_vol_atm > 0:
         atm_pcr = round(put_vol_atm / call_vol_atm, 4)
+    elif put_vol_atm > 0:
+        atm_pcr = _PCR_EXTREME_CAP
 
     # ── Regime classification (prefer ATM PCR if available) ──────────────
     reference_pcr = atm_pcr if atm_pcr is not None else full_pcr

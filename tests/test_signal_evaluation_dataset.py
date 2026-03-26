@@ -280,6 +280,29 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertGreater(enriched["composite_signal_score"], 0)
         self.assertEqual(enriched["correct_session_close"], 1)
 
+    def test_evaluate_signal_outcomes_respects_as_of_without_future_leakage(self):
+        row = build_signal_evaluation_row(self._sample_result())
+        realized_path = pd.DataFrame(
+            {
+                "timestamp": [
+                    "2026-03-14T10:05:00+05:30",
+                    "2026-03-14T10:10:00+05:30",
+                    "2026-03-14T11:05:00+05:30",
+                ],
+                "spot": [22010, 22020, 22100],
+            }
+        )
+
+        enriched = evaluate_signal_outcomes(
+            row,
+            realized_path,
+            as_of="2026-03-14T10:10:00+05:30",
+        )
+
+        self.assertTrue(pd.isna(enriched.get("spot_60m")))
+        self.assertTrue(pd.isna(enriched.get("signed_return_60m_bps")))
+        self.assertIn(enriched["outcome_status"], {"PENDING", "PARTIAL"})
+
     def test_save_signal_evaluation_upserts_by_signal_id(self):
         result = self._sample_result()
         realized_path = pd.DataFrame(

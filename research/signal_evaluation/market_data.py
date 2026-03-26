@@ -155,13 +155,12 @@ def slice_realized_spot_history(history: pd.DataFrame, *, signal_timestamp, as_o
     """
     signal_ts = coerce_market_timestamp(signal_timestamp)
     end_ts = resolve_research_as_of(as_of, default=signal_ts)
-    fetch_end_ts = max(end_ts, signal_ts + pd.Timedelta(days=2))
 
     if history is None or history.empty:
         return pd.DataFrame(columns=["timestamp", "spot"])
 
     return history.loc[
-        (history["timestamp"] >= signal_ts) & (history["timestamp"] <= fetch_end_ts)
+        (history["timestamp"] >= signal_ts) & (history["timestamp"] <= end_ts)
     ].reset_index(drop=True)
 
 
@@ -197,7 +196,7 @@ def fetch_realized_spot_path(symbol: str, signal_timestamp, *, as_of=None, inter
     return slice_realized_spot_history(
         history,
         signal_timestamp=signal_ts,
-        as_of=fetch_end_ts,
+        as_of=end_ts,
     )
 
 
