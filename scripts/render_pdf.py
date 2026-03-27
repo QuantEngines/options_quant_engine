@@ -82,7 +82,9 @@ _REPORT_CSS = r"""
     --ink: #1f3653;
     --muted: #4a6078;
     --accent: #1f8a8a;
-    --accent-soft: #e8f5f5;
+        --accent-soft: #e8f5f5;
+        --cover-top: #1f3653;
+        --cover-bottom: #e7f6f2;
     --rule: #cfdbe7;
   --paper: #ffffff;
   --code-bg: #f6f8fa;
@@ -180,7 +182,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1em 0; }
     align-items: flex-start;
     padding: 9vh 1.4rem 8vh;
     page-break-after: always;
-        background: linear-gradient(165deg, #eef7fb 0%, #f7fffe 55%, #ffffff 100%);
+    background: linear-gradient(180deg, var(--cover-top) 0%, var(--cover-top) 52%, var(--cover-bottom) 52%, var(--cover-bottom) 100%);
     border: 1px solid var(--rule);
     border-radius: 14px;
     box-sizing: border-box;
@@ -189,7 +191,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1em 0; }
     font-size: 0.78rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--accent);
+    color: #9ed7d7;
     margin-bottom: 1rem;
     font-weight: 700;
 }
@@ -197,12 +199,12 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1em 0; }
     font-size: 2.35rem;
     line-height: 1.2;
     margin: 0 0 0.5rem;
-    color: var(--ink);
+    color: #f7fcff;
 }
 .oqe-cover-subtitle {
     font-size: 1.03rem;
     letter-spacing: 0.02em;
-    color: var(--muted);
+    color: #d6ecf4;
     margin: 0 0 1.35rem;
 }
 .oqe-cover-meta {
@@ -212,7 +214,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1em 0; }
 }
 .oqe-cover-rule {
     width: 82%;
-    border-top: 2px solid #b8d9d9;
+    border-top: 2px solid #86c6c6;
     margin: 1.25rem 0;
 }
 
@@ -271,6 +273,78 @@ def _cover_date_string() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def _normalize_heading_numbering(md_text: str) -> str:
+    """Strip manually prefixed numeric heading labels and rely on auto section numbering."""
+    lines = md_text.splitlines()
+    out: list[str] = []
+    pattern = re.compile(r"^(\s{0,3}#{1,6}\s+)(\d+(?:\.\d+){1,4}|\d+\.|\d+\))\s+(.+?)\s*$")
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            out.append(f"{match.group(1)}{match.group(3)}")
+        else:
+            out.append(line)
+    return "\n".join(out) + ("\n" if md_text.endswith("\n") else "")
+
+
+def _normalize_heading_math_labels(md_text: str) -> str:
+    """Replace heading-only math wrappers with readable plain labels."""
+    lines = md_text.splitlines()
+    out: list[str] = []
+    for line in lines:
+        match = re.match(r"^(\s{0,3}#{1,6}\s+)(.+?)\s*$", line)
+        if not match:
+            out.append(line)
+            continue
+
+        prefix, heading_text = match.group(1), match.group(2)
+        # Remove common inline/display math wrappers from heading labels.
+        cleaned = re.sub(r"\$\$(.*?)\$\$", r"\1", heading_text)
+        cleaned = re.sub(r"\$(.*?)\$", r"\1", cleaned)
+        cleaned = re.sub(r"\\text\{([^}]*)\}", r"\1", cleaned)
+        cleaned = re.sub(r"\\[a-zA-Z]+\b", "", cleaned)
+        cleaned = re.sub(r"[{}]", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        out.append(f"{prefix}{cleaned}" if cleaned else line)
+    return "\n".join(out) + ("\n" if md_text.endswith("\n") else "")
+
+
+def _normalize_bracket_math_blocks(md_text: str) -> str:
+    """Convert bracket-wrapped LaTeX-like display lines into $$...$$ blocks."""
+    lines = md_text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        one_line = re.match(r"^\s*\[(.+)\]\s*$", line)
+        if one_line and "\\" in one_line.group(1):
+            expr = one_line.group(1).strip()
+            out.append(f"$$ {expr} $$")
+            i += 1
+            continue
+
+        if re.match(r"^\s*\[\s*$", line):
+            j = i + 1
+            block: list[str] = []
+            while j < len(lines) and not re.match(r"^\s*\]\s*$", lines[j]):
+                block.append(lines[j])
+                j += 1
+            if j < len(lines):
+                block_text = "\n".join(block)
+                if "\\" in block_text:
+                    out.append("$$")
+                    out.extend(block)
+                    out.append("$$")
+                    i = j + 1
+                    continue
+
+        out.append(line)
+        i += 1
+
+    return "\n".join(out) + ("\n" if md_text.endswith("\n") else "")
+
+
 def _build_cover_html(title: str) -> str:
     """Generate a deterministic branded cover page for HTML-based backends."""
     date_str = _cover_date_string()
@@ -326,6 +400,15 @@ def _inject_cover_into_html(html: str, title: str) -> str:
             insert_at = body_match.end()
             return html[:insert_at] + "\n" + cover_html + "\n" + html[insert_at:]
     return f"<html><body>{cover_html}{html}</body></html>"
+
+
+def _strip_deep_section_numbers_html(html: str) -> str:
+    """Drop auto-generated number spans on h3+ headings in Pandoc HTML."""
+    pattern = re.compile(
+        r"(<h([3-6])\b[^>]*>)\s*<span class=\"header-section-number\">[^<]*</span>\s*",
+        flags=re.IGNORECASE,
+    )
+    return pattern.sub(r"\1", html)
 
 
 def _oqe_lib_env() -> dict[str, str]:
@@ -448,6 +531,7 @@ def _render_pandoc_chrome(
 ) -> Path:
     """Render Markdown → HTML (Pandoc) → PDF (Chrome headless)."""
     html_str = _pandoc_md_to_html(md_path, css_path, pandoc)
+    html_str = _strip_deep_section_numbers_html(html_str)
     html_str = _inject_css_into_html(html_str, _REPORT_CSS)
     html_str = _inject_cover_into_html(html_str, title)
 
@@ -530,14 +614,27 @@ def render_markdown_to_pdf(
     errors: list[str] = []
 
     md_text = md_path.read_text(encoding="utf-8", errors="ignore")
+    normalized_md_text = _normalize_heading_numbering(md_text)
+    normalized_md_text = _normalize_heading_math_labels(normalized_md_text)
+    normalized_md_text = _normalize_bracket_math_blocks(normalized_md_text)
     math_patterns = (
         r"\$\$",            # display math
         r"\\\(",          # inline math \(...\)
         r"\\\[",          # display math \[...\]
         r"(?<!\\)\$(?:[^\n$]|\\\$){1,200}(?<!\\)\$",  # inline $...$
     )
-    has_math = any(re.search(pattern, md_text, flags=re.MULTILINE) for pattern in math_patterns)
-    report_title = _derive_report_title(md_path, md_text)
+    has_math = any(re.search(pattern, normalized_md_text, flags=re.MULTILINE) for pattern in math_patterns)
+    report_title = _derive_report_title(md_path, normalized_md_text)
+
+    temp_md_path: Path | None = None
+    if normalized_md_text != md_text:
+        temp_md = tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w", encoding="utf-8")
+        temp_md.write(normalized_md_text)
+        temp_md.flush()
+        temp_md.close()
+        temp_md_path = Path(temp_md.name)
+
+    source_md_path = temp_md_path or md_path
 
     # Determine backend order
     if backend:
@@ -558,8 +655,9 @@ def render_markdown_to_pdf(
                     backends_tried.append(name)
                     continue
 
-                html_str = _pandoc_md_to_html(md_path, css_path, pandoc)
+                html_str = _pandoc_md_to_html(source_md_path, css_path, pandoc)
                 # Always inject the built-in report CSS for consistent styling
+                html_str = _strip_deep_section_numbers_html(html_str)
                 html_str = _inject_css_into_html(html_str, _REPORT_CSS)
                 html_str = _inject_cover_into_html(html_str, report_title)
                 _render_weasyprint(html_str, output_pdf)
@@ -574,7 +672,7 @@ def render_markdown_to_pdf(
                     errors.append("tectonic: tectonic not found")
                     backends_tried.append(name)
                     continue
-                _render_pandoc_tectonic(md_path, output_pdf, pandoc, tectonic, report_title)
+                _render_pandoc_tectonic(source_md_path, output_pdf, pandoc, tectonic, report_title)
 
             elif name == "chrome":
                 chrome = _find_chrome()
@@ -586,7 +684,7 @@ def render_markdown_to_pdf(
                     errors.append("chrome: Chrome/Chromium not found")
                     backends_tried.append(name)
                     continue
-                _render_pandoc_chrome(md_path, output_pdf, pandoc, chrome, css_path, report_title)
+                _render_pandoc_chrome(source_md_path, output_pdf, pandoc, chrome, css_path, report_title)
 
             else:
                 errors.append(f"unknown backend: {name}")
@@ -596,6 +694,8 @@ def render_markdown_to_pdf(
             backend_category = BACKEND_CATEGORY.get(name, "unknown")
             logger.info("PDF rendered via %s: %s", name, output_pdf)
             if return_details:
+                if temp_md_path and temp_md_path.exists():
+                    temp_md_path.unlink(missing_ok=True)
                 return {
                     "pdf_path": output_pdf,
                     "backend": name,
@@ -606,6 +706,8 @@ def render_markdown_to_pdf(
                     "cover_author": PDF_COVER_AUTHOR,
                     "cover_organization": PDF_COVER_ORGANIZATION,
                 }
+            if temp_md_path and temp_md_path.exists():
+                temp_md_path.unlink(missing_ok=True)
             return output_pdf
 
         except Exception as exc:
@@ -613,6 +715,9 @@ def render_markdown_to_pdf(
             backends_tried.append(name)
             logger.warning("Backend %s failed: %s", name, exc)
             continue
+
+    if temp_md_path and temp_md_path.exists():
+        temp_md_path.unlink(missing_ok=True)
 
     msg = "All PDF backends failed:\n" + "\n".join(f"  - {e}" for e in errors)
     raise RuntimeError(msg)
