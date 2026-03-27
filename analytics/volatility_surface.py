@@ -13,10 +13,13 @@ Key Outputs:
 Downstream Usage:
     Consumed by market-state assembly, probability estimation, risk overlays, and research diagnostics.
 """
+import math
+
 import pandas as pd
 import numpy as np
 
 from utils.regime_normalization import normalize_iv_decimal
+from utils.math_helpers import norm_cdf as _norm_cdf
 
 
 def build_vol_surface(option_chain):
@@ -140,16 +143,62 @@ def compute_risk_reversal(option_chain, spot: float, delta_target: float = 0.25)
     # 25-delta call → strike roughly at spot * (1 + 1.5 * atm_vol_fraction)
     # Instead we just pick the strike closest to the 25-delta moneyness fraction.
 
-    def _nearest_iv(side_df, target_moneyness_sign: float) -> float | None:
-        """Return IV at the strike closest to the moneyness implied by delta_target."""
+    def _infer_tte_years(data: pd.DataFrame) -> float:
+        for col in ("TTE", "expiry_days", "days_to_expiry"):
+            if col in data.columns:
+                vals = pd.to_numeric(data[col], errors="coerce").dropna()
+                if len(vals) > 0:
+                    value = float(vals.median())
+                    if col == "TTE":
+                        return max(value, 1.0 / 365.0)
+                    return max(value / 365.0, 1.0 / 365.0)
+        return 30.0 / 365.0
+
+    def _bs_delta(option_type: str, strike: float, sigma: float, t_years: float) -> float | None:
+        if spot <= 0 or strike <= 0 or sigma <= 0 or t_years <= 0:
+            return None
+        sqrt_t = math.sqrt(t_years)
+        d1 = (math.log(spot / strike) + 0.5 * sigma * sigma * t_years) / max(sigma * sqrt_t, 1e-9)
+        call_delta = _norm_cdf(d1)
+        if option_type == "CE":
+            return float(call_delta)
+        return float(call_delta - 1.0)
+
+    def _nearest_iv(side_df, option_type: str, target_moneyness_sign: float) -> float | None:
+        """Return IV at the strike closest to target delta, with moneyness fallback."""
         if side_df.empty:
             return None
-        # Approximate 25-delta strike via moneyness proxy.
-        # At delta_target=0.25 this is 1.5% OTM; smaller deltas move farther OTM.
+
+        side_df = side_df.copy()
+        side_df["STRIKE_PR"] = pd.to_numeric(side_df["STRIKE_PR"], errors="coerce")
+        side_df = side_df.dropna(subset=["STRIKE_PR", "IV"])
+        if side_df.empty:
+            return None
+
+        t_years = _infer_tte_years(side_df)
+        atm_iv_decimal = normalize_iv_decimal(atm_vol(df, spot), default=None)
+        if atm_iv_decimal is not None and atm_iv_decimal > 0:
+            target_abs_delta = max(min(float(delta_target), 0.49), 0.01)
+            deltas = []
+            for _, row in side_df.iterrows():
+                d = _bs_delta(option_type, float(row["STRIKE_PR"]), float(atm_iv_decimal), t_years)
+                if d is None:
+                    deltas.append(np.nan)
+                else:
+                    deltas.append(abs(float(d)))
+            side_df["_abs_delta"] = deltas
+            valid = side_df.dropna(subset=["_abs_delta"])
+            if not valid.empty:
+                valid["_delta_dist"] = (valid["_abs_delta"] - target_abs_delta).abs()
+                nearest = valid.sort_values(["_delta_dist", "STRIKE_PR"]).iloc[0]
+                iv_val = float(nearest["IV"])
+                if iv_val > 0:
+                    return iv_val
+
+        # Fallback moneyness proxy when delta path is unavailable.
         target_delta = max(float(delta_target), 1e-6)
         moneyness_offset = spot * 0.015 * (0.25 / target_delta)
         target_strike = spot + target_moneyness_sign * moneyness_offset
-        side_df = side_df.copy()
         side_df["_dist"] = (side_df["STRIKE_PR"] - target_strike).abs()
         nearest = side_df.sort_values("_dist").iloc[0]
         iv_val = float(nearest["IV"])
@@ -158,8 +207,8 @@ def compute_risk_reversal(option_chain, spot: float, delta_target: float = 0.25)
     calls = df[df["OPTION_TYP"] == "CE"]
     puts = df[df["OPTION_TYP"] == "PE"]
 
-    call_iv = _nearest_iv(calls, target_moneyness_sign=+1.0)
-    put_iv = _nearest_iv(puts, target_moneyness_sign=-1.0)
+    call_iv = _nearest_iv(calls, option_type="CE", target_moneyness_sign=+1.0)
+    put_iv = _nearest_iv(puts, option_type="PE", target_moneyness_sign=-1.0)
 
     if call_iv is None or put_iv is None:
         return result

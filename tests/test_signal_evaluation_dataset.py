@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 import warnings
@@ -209,6 +210,38 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
             frame = load_signals_dataset(dataset_path)
             self.assertEqual(len(frame), 1)
             self.assertEqual(frame.iloc[0]["signal_id"], build_signal_evaluation_row(self._sample_result())["signal_id"])
+
+    def test_append_sqlite_rows_auto_migrates_missing_columns(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dataset_path = Path(tmp_dir) / "signals_dataset.csv"
+            sqlite_path = dataset_path.with_suffix(".sqlite")
+
+            # Simulate an older schema that predates recently added columns.
+            with sqlite3.connect(sqlite_path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE signals (
+                        signal_id TEXT,
+                        signal_timestamp TEXT,
+                        source TEXT,
+                        mode TEXT,
+                        symbol TEXT
+                    )
+                    """
+                )
+
+            save_signal_evaluation(self._sample_result(), dataset_path=dataset_path)
+
+            with sqlite3.connect(sqlite_path) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute('PRAGMA table_info("signals")').fetchall()
+                }
+
+            self.assertIn("event_intelligence_enabled", columns)
+
+            frame = load_signals_dataset(dataset_path)
+            self.assertEqual(len(frame), 1)
 
     def test_save_signal_evaluation_uses_signal_timestamp_as_default_capture_time(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

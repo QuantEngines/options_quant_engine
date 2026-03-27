@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from engine.trading_support import probability as prob
 
@@ -39,10 +40,13 @@ def _market_state_template():
 
 def test_move_predictor_reloads_when_active_model_changes(monkeypatch):
     import config.settings as settings
+    import models.feature_builder as feature_builder
 
     _DummyPredictor.init_count = 0
     monkeypatch.setattr(prob.ml_move_predictor_mod, "MLMovePredictor", _DummyPredictor)
     monkeypatch.setattr(settings, "ACTIVE_MODEL", None, raising=False)
+    feature_builder._REGISTRY_MODEL_AVAILABLE = None
+    feature_builder._REGISTRY_MODEL_ACTIVE = None
 
     prob._MOVE_PREDICTOR = None
     prob._MOVE_PREDICTOR_SIGNATURE = None
@@ -55,6 +59,26 @@ def test_move_predictor_reloads_when_active_model_changes(monkeypatch):
     second = prob._get_move_predictor()
     assert second is not None
     assert _DummyPredictor.init_count == 2
+
+
+def test_feature_builder_invalidates_registry_cache_when_active_model_changes(monkeypatch):
+    import config.settings as settings
+    import models.feature_builder as feature_builder
+
+    feature_builder._REGISTRY_MODEL_AVAILABLE = None
+    feature_builder._REGISTRY_MODEL_ACTIVE = None
+
+    def _fake_exists(self):
+        return self.as_posix().endswith("/registry/GBT_shallow_v1/model.joblib")
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
+    monkeypatch.setattr(settings, "ACTIVE_MODEL", None, raising=False)
+
+    assert feature_builder._check_registry_model() is False
+
+    monkeypatch.setattr(settings, "ACTIVE_MODEL", "GBT_shallow_v1", raising=False)
+
+    assert feature_builder._check_registry_model() is True
 
 
 def test_probability_feature_builder_single_call_per_snapshot(monkeypatch):

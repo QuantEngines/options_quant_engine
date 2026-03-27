@@ -445,8 +445,24 @@ def _format_open_interest_value(value):
     return f"{oi:.0f}"
 
 
+def _format_oi_change_value(value):
+    """Format change-in-OI values with sign and compact units."""
+    try:
+        oi_change = float(value)
+    except (TypeError, ValueError):
+        return "-"
+
+    sign = "+" if oi_change > 0 else ("-" if oi_change < 0 else "")
+    magnitude = abs(oi_change)
+    if magnitude >= 1_000_000:
+        return f"{sign}{magnitude / 1_000_000:.2f}M"
+    if magnitude >= 1_000:
+        return f"{sign}{magnitude / 1_000:.1f}K"
+    return f"{sign}{magnitude:.0f}"
+
+
 def _resolve_top_oi_levels(trade, option_chain_frame, *, top_n=5):
-    """Resolve top-N CE/PE strikes with raw OI values."""
+    """Resolve top-N CE/PE strikes with raw OI and OI-change values."""
     if option_chain_frame is None or not hasattr(option_chain_frame, "copy"):
         return [], []
 
@@ -565,6 +581,7 @@ def _resolve_top_oi_levels(trade, option_chain_frame, *, top_n=5):
             (
                 float(r[strike_col]),
                 float(r[oi_col]),
+                float(r.get(oi_change_col, 0.0)) if oi_change_col else 0.0,
                 _infer_side(r[type_col], r.get(oi_change_col, 0.0) if oi_change_col else 0.0),
             )
             for _idx, r in side.iterrows()
@@ -589,7 +606,7 @@ def _resolve_top_oi_strikes(trade, option_chain_frame, *, top_n=5, formatted=Tru
 
     def _format(rows):
         out = []
-        for lvl, oi, inf in rows:
+        for lvl, oi, _chg_oi, inf in rows:
             oi_str = _format_open_interest_value(oi)
             prox = _format_proximity(lvl, spot_f if spot_f is not None else spot)
             out.append(f"{prox}  (OI {oi_str}; {inf})")
@@ -621,13 +638,37 @@ def _render_market_summary_levels_table(*, spot, resistances, supports, call_oi,
         d_pts, d_pct = _dist(lvl)
         structural_rows.append(("support", idx, f"{lvl:.0f}", d_pts, d_pct, "-", 0.0))
 
-    for idx, (lvl, oi, inference) in enumerate(call_oi, start=1):
+    for idx, (lvl, oi, chg_oi, inference) in enumerate(call_oi, start=1):
         d_pts, d_pct = _dist(lvl)
-        oi_rows.append(("CALL", idx, f"{lvl:.0f}", d_pts, d_pct, _format_open_interest_value(oi), str(inference), float(oi)))
+        oi_rows.append(
+            (
+                "CALL",
+                idx,
+                f"{lvl:.0f}",
+                d_pts,
+                d_pct,
+                _format_open_interest_value(oi),
+                _format_oi_change_value(chg_oi),
+                str(inference),
+                float(oi),
+            )
+        )
 
-    for idx, (lvl, oi, inference) in enumerate(put_oi, start=1):
+    for idx, (lvl, oi, chg_oi, inference) in enumerate(put_oi, start=1):
         d_pts, d_pct = _dist(lvl)
-        oi_rows.append(("PUT", idx, f"{lvl:.0f}", d_pts, d_pct, _format_open_interest_value(oi), str(inference), float(oi)))
+        oi_rows.append(
+            (
+                "PUT",
+                idx,
+                f"{lvl:.0f}",
+                d_pts,
+                d_pct,
+                _format_open_interest_value(oi),
+                _format_oi_change_value(chg_oi),
+                str(inference),
+                float(oi),
+            )
+        )
 
     if not structural_rows and not oi_rows:
         return
@@ -659,9 +700,13 @@ def _render_market_summary_levels_table(*, spot, resistances, supports, call_oi,
 
     if oi_rows:
         print("\n  HIGHEST OI STRIKES")
-        print("  kind       rank strike   dist_pts dist_%    oi inference")
-        for kind, rank, strike, dist_pts, dist_pct, oi_str, inference, _oi_num in oi_rows:
-            print(f"  {kind:<10} {rank:>4} {strike:>7} {dist_pts:>9} {dist_pct:>8} {oi_str:>7} {inference}")
+        chg_oi_width = max(len("chg_oi"), *(len(str(row[6])) for row in oi_rows))
+        print(f"  kind       rank strike   dist_pts dist_%    oi {'chg_oi':>{chg_oi_width}} inference")
+        for kind, rank, strike, dist_pts, dist_pct, oi_str, chg_oi_str, inference, _oi_num in oi_rows:
+            print(
+                f"  {kind:<10} {rank:>4} {strike:>7} {dist_pts:>9} {dist_pct:>8} "
+                f"{oi_str:>7} {chg_oi_str:>{chg_oi_width}} {inference}"
+            )
         print("  note: inference is a proxy based on OI change plus underlying move vs prev_close")
 
 

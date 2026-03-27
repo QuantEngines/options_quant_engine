@@ -995,6 +995,8 @@ def generate_trade(
 
     selected_expiry = option_chain_validation.get("selected_expiry") if isinstance(option_chain_validation, dict) else None
 
+    days_to_expiry = _estimate_days_to_expiry(option_chain_validation, valuation_time)
+
     # Normalize provider-specific column names and enrich missing Greeks once so
     # every downstream model works off a consistent option-chain schema.
     df = normalize_option_chain(option_chain, spot=spot, valuation_time=valuation_time)
@@ -1002,7 +1004,13 @@ def generate_trade(
         normalize_option_chain(previous_chain, spot=spot, valuation_time=valuation_time)
         if previous_chain is not None else None
     )
-    market_state = _collect_market_state(df, spot, symbol=symbol, prev_df=prev_df)
+    market_state = _collect_market_state(
+        df,
+        spot,
+        symbol=symbol,
+        prev_df=prev_df,
+        days_to_expiry=days_to_expiry,
+    )
 
     # Build global context for v2 ML model features (available before probability).
     _grs = global_risk_state if isinstance(global_risk_state, dict) else {}
@@ -1017,7 +1025,7 @@ def generate_trade(
         "volatility_shock_score": _grf.get("volatility_shock_score"),
         "macro_event_risk_score": _mes.get("macro_event_risk_score", 0.0),
         "macro_regime": _mns.get("macro_regime", _mes.get("macro_regime", "MACRO_NEUTRAL")),
-        "days_to_expiry": _estimate_days_to_expiry(option_chain_validation, valuation_time),
+        "days_to_expiry": days_to_expiry,
         "weekday": _safe_weekday(valuation_time),
     }
     
@@ -1844,7 +1852,7 @@ def generate_trade(
             dealer_hedging_bias=market_state["hedging_bias"],
             gamma_flip_distance_pct=probability_state["components"].get("gamma_flip_distance_pct"),
             atm_iv=market_state["atm_iv"],
-            days_to_expiry=_estimate_days_to_expiry(option_chain_validation, valuation_time),
+            days_to_expiry=days_to_expiry,
             vol_surface_regime=market_state["surface_regime"],
             volatility_shock_score=market_state.get("volatility_shock_score", 0.0),
         )

@@ -322,6 +322,7 @@ def _append_sqlite_rows(frame: pd.DataFrame, path: Path) -> None:
             normalized.to_sql("signals", connection, if_exists="replace", index=False)
             connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_signal_id ON signals(signal_id)")
             return
+        _sqlite_ensure_columns(connection, "signals", SIGNAL_DATASET_COLUMNS)
         _normalize_dataset_frame(frame).to_sql("signals", connection, if_exists="append", index=False)
 
 
@@ -345,6 +346,27 @@ def _sqlite_has_table(connection: sqlite3.Connection, table_name: str) -> bool:
     """
     query = "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
     return connection.execute(query, (table_name,)).fetchone() is not None
+
+
+def _sqlite_table_columns(connection: sqlite3.Connection, table_name: str) -> list[str]:
+    """Return the ordered column names for an existing SQLite table."""
+    rows = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+    return [str(row[1]) for row in rows]
+
+
+def _sqlite_ensure_columns(connection: sqlite3.Connection, table_name: str, expected_columns: list[str]) -> None:
+    """Add missing columns to an existing SQLite table for forward-compat appends.
+
+    SQLite uses dynamic typing, so TEXT affinity is acceptable for schema
+    evolution; pandas inserts for numeric fields continue to work.
+    """
+    existing = set(_sqlite_table_columns(connection, table_name))
+    for column in expected_columns:
+        if column in existing:
+            continue
+        safe_col = column.replace('"', '""')
+        connection.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "{safe_col}" TEXT')
+    connection.commit()
 
 
 def _empty_dataset_frame() -> pd.DataFrame:

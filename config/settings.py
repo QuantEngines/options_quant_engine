@@ -126,7 +126,7 @@ OUTPUT_MODE = os.getenv("OQE_OUTPUT_MODE", "COMPACT").upper().strip()
 
 # Runtime environment label used for production safety checks.
 # Accepted production aliases: PROD, PRODUCTION.
-RUNTIME_ENV = os.getenv("OQE_RUNTIME_ENV", "DEV").upper().strip()
+RUNTIME_ENV = os.getenv("OQE_RUNTIME_ENV", "PROD").upper().strip()
 IS_PRODUCTION = RUNTIME_ENV in {"PROD", "PRODUCTION"}
 
 REFRESH_INTERVAL = 10
@@ -173,7 +173,7 @@ VOL_EXPANSION_THRESHOLD = 1.3
 # Leave empty/None to skip registry-model loading; the blended path will still
 # use the built-in ML heuristic leg (and only falls back to pure rule if the
 # ML leg is unavailable at runtime).
-ACTIVE_MODEL = os.getenv("OQE_ACTIVE_MODEL", "").strip() or None
+ACTIVE_MODEL = os.getenv("OQE_ACTIVE_MODEL", "LogReg_ElasticNet_v1").strip()
 
 # Prediction method — controls the pluggable predictor architecture.
 # Options: "blended" (default), "pure_ml", "pure_rule", "research_dual_model",

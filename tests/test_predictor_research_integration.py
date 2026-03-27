@@ -161,3 +161,58 @@ def test_ev_sizing_predictor_passes_row_dict_to_infer_single(monkeypatch):
     assert out.components.get("research_rank_score") == 0.58
     assert out.components.get("research_confidence_score") == 0.63
     assert out.hybrid_move_probability == 0.63
+
+
+def test_ev_sizing_predictor_uses_market_state_gamma_regime_for_ev_lookup(monkeypatch):
+    from engine.predictors.ev_sizing_predictor import EVSizingPredictor
+    import engine.predictors.ev_sizing_predictor as ev_pred
+
+    captured = {"regime": None}
+
+    class _Result:
+        ml_rank_score = 0.58
+        ml_confidence_score = 0.63
+        ml_rank_bucket = "Q4_high"
+        ml_confidence_bucket = "Q5_highest"
+
+    class _Cell:
+        backed_off = False
+        hit_rate = 0.61
+
+    def _fake_infer_single(_arg):
+        return _Result()
+
+    def _fake_impl(**kwargs):
+        return _stub_raw_probability_state(hybrid_move_probability=0.51)
+
+    def _fake_lookup(_table, rank_bucket, confidence_bucket, regime):
+        assert rank_bucket == "Q4_high"
+        assert confidence_bucket == "Q5_highest"
+        captured["regime"] = regime
+        return _Cell()
+
+    import research.ml_models.ml_inference as ml_inf
+    import engine.trading_support.probability as prob
+    from research.ml_evaluation.ev_and_regime_policy import conditional_return_tables as crt
+    from research.ml_evaluation.ev_and_regime_policy import ev_sizing_model as ev_model
+
+    monkeypatch.setattr(ml_inf, "infer_single", _fake_infer_single)
+    monkeypatch.setattr(prob, "_compute_probability_state_impl", _fake_impl)
+    monkeypatch.setattr(crt, "lookup", _fake_lookup)
+    monkeypatch.setattr(ev_model, "compute_ev", lambda p_win, cell: (0.2, 12.0, -6.0))
+    monkeypatch.setattr(ev_model, "normalize_ev", lambda ev_raw, lo, hi: 0.7)
+    monkeypatch.setattr(ev_model, "classify_ev_bucket", lambda value: "POSITIVE")
+    monkeypatch.setattr(ev_model, "ev_to_size_multiplier", lambda value: 1.0)
+    monkeypatch.setattr(ev_model, "compute_ev_reliability", lambda cell: 0.85)
+    monkeypatch.setattr(EVSizingPredictor, "_ensure_crt_loaded", staticmethod(lambda: None))
+
+    ev_pred._CRT_CACHE = object()
+    ev_pred._EV_BOUNDS = (0.0, 1.0)
+    ev_pred._CRT_LOAD_ATTEMPTED = True
+
+    predictor = EVSizingPredictor()
+    out = predictor.predict(_base_market_ctx())
+
+    assert captured["regime"] == "POSITIVE_GAMMA"
+    assert out.components.get("gamma_regime") == "POSITIVE_GAMMA"
+    assert out.components.get("ev_bucket") == "POSITIVE"

@@ -110,7 +110,7 @@ def _summarize_market_gamma(market_gex):
     return market_gex
 
 
-def _collect_market_state(df, spot, symbol=None, prev_df=None):
+def _collect_market_state(df, spot, symbol=None, prev_df=None, days_to_expiry=None):
     """
     Purpose:
         Collect the cross-analytic market state for the current option-chain
@@ -126,6 +126,7 @@ def _collect_market_state(df, spot, symbol=None, prev_df=None):
         spot (Any): Current underlying spot price.
         symbol (Any): Trading symbol or index identifier.
         prev_df (Any): Previous normalized dataframe used for comparison.
+        days_to_expiry (Any): Calendar days remaining to the selected expiry.
 
     Returns:
         dict: Consolidated market-state payload used by probability models,
@@ -493,4 +494,5 @@ def _collect_market_state(df, spot, symbol=None, prev_df=None):
         "oi_velocity_score": oi_velocity_data.get("velocity_score"),
         "oi_velocity_regime": oi_velocity_regime,
         "gamma_flip_drift": gamma_flip_drift,
+        "days_to_expiry": _safe_float(days_to_expiry, None),
     }

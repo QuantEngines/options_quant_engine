@@ -25,21 +25,30 @@ from models.expanded_feature_builder import (
 
 # Check if a registry ML model is configured (replaces the old v2 joblib gate).
 _REGISTRY_MODEL_AVAILABLE = None
+_REGISTRY_MODEL_ACTIVE = None
 
 def _check_registry_model():
-    global _REGISTRY_MODEL_AVAILABLE
-    if _REGISTRY_MODEL_AVAILABLE is not None:
-        return _REGISTRY_MODEL_AVAILABLE
+    global _REGISTRY_MODEL_AVAILABLE, _REGISTRY_MODEL_ACTIVE
     try:
         from config import settings as _settings
         active = getattr(_settings, "ACTIVE_MODEL", None)
+    except Exception:
+        active = None
+
+    if _REGISTRY_MODEL_ACTIVE == active and _REGISTRY_MODEL_AVAILABLE is not None:
+        return _REGISTRY_MODEL_AVAILABLE
+
+    try:
         if not active:
+            _REGISTRY_MODEL_ACTIVE = active
             _REGISTRY_MODEL_AVAILABLE = False
             return False
         from pathlib import Path
         model_path = Path(__file__).parent.parent / "models_store" / "registry" / active / "model.joblib"
+        _REGISTRY_MODEL_ACTIVE = active
         _REGISTRY_MODEL_AVAILABLE = model_path.exists()
     except Exception:
+        _REGISTRY_MODEL_ACTIVE = active
         _REGISTRY_MODEL_AVAILABLE = False
     return _REGISTRY_MODEL_AVAILABLE
 

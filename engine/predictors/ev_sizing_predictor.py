@@ -185,7 +185,9 @@ class EVSizingPredictor:
                     )
 
                     p_win = confidence_score if confidence_score is not None else 0.5
-                    regime = str(components.get("gamma_regime", "UNKNOWN"))
+                    market_state = market_ctx.get("market_state") if isinstance(market_ctx, dict) else {}
+                    market_state = market_state if isinstance(market_state, dict) else {}
+                    regime = str(market_state.get("gamma_regime") or "UNKNOWN")
 
                     cell = lookup(_CRT_CACHE, rank_bucket, confidence_bucket, regime)
                     ev_raw, ev_expected_gain, ev_expected_loss = compute_ev(p_win, cell)
@@ -224,6 +226,9 @@ class EVSizingPredictor:
         components["research_rank_score"] = rank_score
         components["research_confidence_score"] = confidence_score
         components["engine_hybrid_probability"] = hybrid_prob
+        components["gamma_regime"] = regime if rank_bucket is not None and confidence_bucket is not None else str(
+            ((market_ctx.get("market_state") or {}) if isinstance(market_ctx, dict) else {}).get("gamma_regime") or "UNKNOWN"
+        )
         components["ev_raw"] = ev_raw
         components["ev_normalized"] = ev_normalized
         components["ev_bucket"] = ev_bucket
