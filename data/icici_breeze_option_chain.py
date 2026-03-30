@@ -666,46 +666,94 @@ class ICICIBreezeOptionChain:
         Notes:
             The helper keeps the surrounding module readable without changing runtime behavior.
         """
+        # NSE per-index nominal weekly expiry weekday (Python weekday: Mon=0 … Sun=6).
+        # Source: security master cross-check (March 2026).
+        # NIFTY / FINNIFTY / NIFTYNXT50 → Tuesday (1)
+        # BANKNIFTY → Wednesday (2)
+        # MIDCPNIFTY → Monday (0)
+        _INDEX_EXPIRY_WEEKDAY: dict[str, int] = {
+            "NIFTY": 1,
+            "BANKNIFTY": 2,
+            "FINNIFTY": 1,
+            "MIDCPNIFTY": 0,
+            "NIFTYNXT50": 1,
+        }
+
+        # When the nominal expiry day is a market holiday NSE prepones (or occasionally
+        # postpones) it to the nearest trading day.  Rather than maintaining a holiday
+        # calendar we generate a ±2 business-day window around each nominal expiry so the
+        # fetch loop always has the shifted date as a candidate.  The nominal date is tried
+        # first; offsets are ordered by proximity and by the direction NSE most commonly
+        # shifts (backward first, i.e. the preceding trading day).
+        #   Offset order: 0 (nominal), -1 (Mon if Tue), -2, +1, +2
+        _WINDOW_OFFSETS = (0, -1, -2, 1, 2)
+
         now_utc = datetime.utcnow()
-        expiries = []
+        seen: set[str] = set()
+        candidates: list[str] = []
 
         if self._is_index_symbol(symbol):
-            target_weekday = 1  # Tuesday
-            current_date = now_utc.date()
+            normalized = self._normalize_symbol(symbol)
+            target_weekday = _INDEX_EXPIRY_WEEKDAY.get(normalized, 1)
+            current_anchor = now_utc.date()
+            weeks_covered = 0
 
-            while len(expiries) < count:
-                days_ahead = (target_weekday - current_date.weekday()) % 7
-                if days_ahead == 0 and now_utc.hour >= 6:
+            while weeks_covered < count:
+                # Locate the next occurrence of the nominal expiry weekday.
+                days_ahead = (target_weekday - current_anchor.weekday()) % 7
+                # If we land exactly on today and the market session has already
+                # started (UTC 03:45 ≈ IST 09:15), advance to next week so we don't
+                # retry a date that is mid-session or settling.
+                if days_ahead == 0 and now_utc.hour >= 4:
                     days_ahead = 7
+                nominal_date = current_anchor + timedelta(days=days_ahead)
 
-                expiry_date = current_date + timedelta(days=days_ahead)
-                expiries.append(
-                    self._format_expiry(datetime.combine(expiry_date, datetime.min.time()))
-                )
-                current_date = expiry_date + timedelta(days=1)
+                # Emit the window: nominal + offsets, Mon–Fri only, deduplicated.
+                for offset in _WINDOW_OFFSETS:
+                    candidate_date = nominal_date + timedelta(days=offset)
+                    if candidate_date.weekday() > 4:  # skip Sat/Sun
+                        continue
+                    formatted = self._format_expiry(
+                        datetime.combine(candidate_date, datetime.min.time())
+                    )
+                    if formatted not in seen:
+                        seen.add(formatted)
+                        candidates.append(formatted)
 
-            return expiries
+                current_anchor = nominal_date + timedelta(days=1)
+                weeks_covered += 1
 
-        # Individual stock options are monthly contracts; use the last Tuesday
-        # of the month as the fallback expiry schedule.
+            return candidates
+
+        # Individual stock options are monthly contracts; use the last Tuesday of the
+        # month with the same ±2-day window for holiday robustness.
         month_cursor = datetime(now_utc.year, now_utc.month, 1)
 
-        while len(expiries) < count:
-            expiry_date = self._last_weekday_of_month(
+        while len(candidates) < count:
+            nominal = self._last_weekday_of_month(
                 year=month_cursor.year,
                 month=month_cursor.month,
                 weekday=1,  # Tuesday
             )
 
-            if expiry_date > now_utc:
-                expiries.append(self._format_expiry(expiry_date))
+            if nominal > now_utc:
+                for offset in _WINDOW_OFFSETS:
+                    candidate_date = (nominal + timedelta(days=offset)).date() if hasattr(nominal, "date") else nominal.date() + timedelta(days=offset)
+                    # _last_weekday_of_month returns a datetime
+                    candidate_dt = nominal + timedelta(days=offset)
+                    if candidate_dt.weekday() > 4:
+                        continue
+                    formatted = self._format_expiry(candidate_dt)
+                    if formatted not in seen:
+                        seen.add(formatted)
+                        candidates.append(formatted)
 
             if month_cursor.month == 12:
                 month_cursor = datetime(month_cursor.year + 1, 1, 1)
             else:
                 month_cursor = datetime(month_cursor.year, month_cursor.month + 1, 1)
 
-        return expiries
+        return candidates
 
     def _extract_request_symbols_from_master(self, df: pd.DataFrame, input_symbol: str) -> list[str]:
         """
@@ -954,8 +1002,16 @@ class ICICIBreezeOptionChain:
                 return response.get("success")
 
             for key in ["Error", "error", "Status", "status", "message", "Message"]:
-                if key in response:
-                    self._log(f"{label}_{key}", response.get(key))
+                val = response.get(key)
+                if val is not None:
+                    self._log(f"{label}_{key}", val)
+                    # Detect session/auth errors early so the user gets an actionable hint.
+                    val_str = str(val).lower()
+                    if any(kw in val_str for kw in ("session", "token", "auth", "unauthori", "invalid session", "login")):
+                        print(
+                            f"Option chain auth error [{label}]: ICICI session may have expired — "
+                            "please refresh your ICICI_BREEZE_SESSION_TOKEN and restart."
+                        )
 
         return []
 
