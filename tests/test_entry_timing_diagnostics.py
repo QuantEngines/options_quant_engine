@@ -77,3 +77,107 @@ def test_build_entry_timing_report_uses_runtime_score_and_reports_diagnostic_rea
     assert any(row["timing_class"] == "LATE_CHASE" for row in report["timing_class_summary"])
     assert "late_chase_thesis_supported" in report["diagnostic_read"]
 
+
+def test_build_entry_timing_report_compares_entry_strategies_and_candle_states():
+    frame = pd.DataFrame(
+        [
+            {
+                "signal_timestamp": "2026-05-25T09:30:00+05:30",
+                "symbol": "NIFTY",
+                "direction": "CALL",
+                "runtime_composite_score": 45,
+                "spot_at_signal": 10000,
+                "confirmation_status": "NO_DIRECTION",
+                "signed_return_60m_bps": 1,
+                "correct_60m": 1,
+            },
+            {
+                "signal_timestamp": "2026-05-25T09:35:00+05:30",
+                "symbol": "NIFTY",
+                "direction": "CALL",
+                "runtime_composite_score": 52,
+                "spot_at_signal": 10020,
+                "confirmation_status": "MIXED",
+                "signed_return_60m_bps": -10,
+                "correct_60m": 0,
+                "mfe_60m_bps": 4,
+                "mae_60m_bps": -18,
+                "option_premium_return_60m_bps": -200,
+                "option_premium_pnl_per_lot_60m": -1000,
+                "ta_entry_timing_state": "CANDLE_FORMING",
+                "ta_candle_state": "CANDLE_FORMING",
+            },
+            {
+                "signal_timestamp": "2026-05-25T09:40:00+05:30",
+                "symbol": "NIFTY",
+                "direction": "CALL",
+                "runtime_composite_score": 58,
+                "spot_at_signal": 10010,
+                "confirmation_status": "STRONG_CONFIRMATION",
+                "signed_return_60m_bps": 12,
+                "correct_60m": 1,
+                "mfe_60m_bps": 20,
+                "mae_60m_bps": -6,
+                "option_premium_return_60m_bps": 350,
+                "option_premium_pnl_per_lot_60m": 1750,
+                "ta_entry_timing_state": "CANDLE_CONFIRMED_CALL",
+                "ta_candle_state": "CANDLE_CONFIRMED_CALL",
+                "ta_candle_direction": "CALL",
+            },
+            {
+                "signal_timestamp": "2026-05-25T09:30:00+05:30",
+                "symbol": "NIFTY",
+                "direction": "PUT",
+                "runtime_composite_score": 45,
+                "spot_at_signal": 10030,
+                "confirmation_status": "NO_DIRECTION",
+                "signed_return_60m_bps": 1,
+                "correct_60m": 1,
+            },
+            {
+                "signal_timestamp": "2026-05-25T09:35:00+05:30",
+                "symbol": "NIFTY",
+                "direction": "PUT",
+                "runtime_composite_score": 53,
+                "spot_at_signal": 10020,
+                "confirmation_status": "MIXED",
+                "signed_return_60m_bps": -8,
+                "correct_60m": 0,
+                "mfe_60m_bps": 3,
+                "mae_60m_bps": -12,
+                "option_premium_return_60m_bps": -120,
+                "option_premium_pnl_per_lot_60m": -600,
+                "ta_entry_timing_state": "CANDLE_REJECTION",
+                "ta_candle_state": "CANDLE_REJECTION",
+                "ta_candle_rejection": True,
+            },
+        ]
+    )
+
+    report = build_entry_timing_report(
+        frame,
+        score_thresholds=(50,),
+        pullback_bps=5,
+        confirmation_window_minutes=10,
+        pullback_window_minutes=10,
+        candle_confirmation_window_minutes=10,
+    )
+    strategy_rows = {
+        row["strategy"]: row
+        for row in report["entry_strategy_summary"]
+        if row["threshold"] == 50
+    }
+
+    assert strategy_rows["immediate"]["entry_count"] == 2
+    assert strategy_rows["second_confirmation"]["entry_count"] == 1
+    assert strategy_rows["pullback_retest"]["entry_count"] == 1
+    assert strategy_rows["candle_confirmed"]["entry_count"] == 1
+    assert strategy_rows["second_confirmation"]["avg_return_60m_bps"] == 12.0
+    assert strategy_rows["second_confirmation"]["selected_minus_immediate_return_60m_bps"] == 22.0
+    assert strategy_rows["second_confirmation"]["false_positive_removal_60m"] == 50.0
+    assert strategy_rows["second_confirmation"]["true_positive_loss_60m"] is None
+    assert strategy_rows["candle_confirmed"]["avg_option_premium_return_60m_bps"] == 350.0
+    assert any(
+        row["ta_entry_timing_state"] == "CANDLE_CONFIRMED_CALL"
+        for row in report["candle_entry_timing_state_summary"]
+    )

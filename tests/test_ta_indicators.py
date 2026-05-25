@@ -4,7 +4,11 @@ import pandas as pd
 
 from config.policy_resolver import temporary_parameter_pack
 from config.analytics_feature_policy import get_technical_analysis_policy_config
-from features.ta_indicators import build_ta_features, get_ta_features_for_trade
+from features.ta_indicators import (
+    build_intraday_candle_features,
+    build_ta_features,
+    get_ta_features_for_trade,
+)
 
 
 def test_get_ta_features_for_trade_does_not_fetch_live_history_when_disallowed(monkeypatch):
@@ -109,3 +113,52 @@ def test_ta_feature_windows_are_runtime_policy_driven():
     assert "sma_10" in features["indicators"]
     assert "ret_10d_bps" in features["indicators"]
     assert "ret_20d_bps" in features["indicators"]
+
+
+def test_intraday_candle_features_confirm_call_direction():
+    timestamps = pd.date_range("2026-05-25 09:15", periods=20, freq="min", tz="Asia/Kolkata")
+    prices = [
+        100.0, 100.1, 100.0, 100.1, 100.0,
+        100.2, 100.1, 100.0, 100.2, 100.1,
+        100.4, 100.3, 100.5, 100.4, 100.6,
+        100.8, 101.2, 101.8, 102.4, 103.0,
+    ]
+    history = pd.DataFrame({"timestamp": timestamps, "spot": prices})
+
+    features = build_intraday_candle_features(
+        "NIFTY",
+        103.0,
+        intraday_history_df=history,
+        as_of=timestamps[-1],
+        allow_live_history=False,
+    )
+
+    assert features["ta_candle_status"] == "OK"
+    assert features["ta_candle_direction"] == "CALL"
+    assert features["ta_candle_state"] in {"CANDLE_CONFIRMED_CALL", "CANDLE_LATE_CHASE_CALL"}
+    assert features["ta_entry_timing_score"] > 0
+    assert features["ta_candle_close_location"] >= 0.66
+
+
+def test_build_ta_features_carries_intraday_candle_fields_with_slow_ta():
+    daily_history = pd.DataFrame({"close": [100.0 + idx for idx in range(60)]})
+    timestamps = pd.date_range("2026-05-25 09:15", periods=20, freq="min", tz="Asia/Kolkata")
+    intraday = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "spot": [100.0] * 15 + [100.5, 101.0, 101.5, 102.0, 102.5],
+        }
+    )
+
+    features = build_ta_features(
+        "NIFTY",
+        102.5,
+        history_df=daily_history,
+        intraday_history_df=intraday,
+        as_of=timestamps[-1],
+        allow_live_history=False,
+    )
+
+    assert features["ta_direction"] in {"CALL", "PUT", "NO_SIGNAL"}
+    assert features["ta_candle_status"] == "OK"
+    assert features["ta_candle_direction"] == "CALL"

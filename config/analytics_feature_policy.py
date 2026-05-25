@@ -151,6 +151,18 @@ class TechnicalAnalysisPolicyConfig:
     trend_signal_confidence: float = 0.60
     macd_signal_confidence: float = 0.50
     rsi_signal_confidence: float = 0.70
+    intraday_candle_enabled: bool = True
+    intraday_candle_interval_minutes: int = 5
+    intraday_candle_lookback_minutes: int = 90
+    intraday_candle_min_observations: int = 4
+    intraday_candle_min_candles: int = 2
+    intraday_candle_min_body_bps: float = 1.5
+    intraday_candle_close_confirm_high: float = 0.66
+    intraday_candle_close_confirm_low: float = 0.34
+    intraday_candle_max_counter_wick_share: float = 0.45
+    intraday_candle_rejection_wick_share: float = 0.55
+    intraday_candle_range_expansion_threshold: float = 1.25
+    intraday_candle_prior_stretch_bps: float = 10.0
 
 
 @dataclass(frozen=True)

@@ -523,6 +523,7 @@ def build_signal_evaluation_row(
 
     # Extract probability sub-components for ML feature extraction
     prob_components = trade.get("move_probability_components") or {}
+    ta_features = trade.get("ta_features") if isinstance(trade.get("ta_features"), dict) else {}
 
     # Compute weekday from signal timestamp (0=Mon .. 4=Fri)
     sig_dt = _coerce_ts(signal_timestamp)
@@ -558,6 +559,30 @@ def build_signal_evaluation_row(
             if value not in (None, ""):
                 return value
         return None
+
+    def _json_compact(value):
+        return json.dumps(value if value is not None else None, sort_keys=True, default=str)
+
+    def _signed_level_distance(level, reference):
+        level_value = _safe_float(level, None)
+        reference_value = _safe_float(reference, None)
+        if level_value is None or reference_value in (None, 0.0):
+            return None, None
+        distance_pts = level_value - reference_value
+        distance_pct = distance_pts / reference_value * 100.0
+        return round(distance_pts, 4), round(distance_pct, 6)
+
+    level_spot = _safe_float(spot_summary.get("spot"), None)
+    if level_spot is None:
+        level_spot = _safe_float(trade.get("spot"), None)
+    support_wall = _first_present(trade.get("support_wall"), trade.get("nearest_support_wall"))
+    resistance_wall = _first_present(trade.get("resistance_wall"), trade.get("nearest_resistance_wall"))
+    support_wall_distance_pts, support_wall_distance_pct = _signed_level_distance(support_wall, level_spot)
+    resistance_wall_distance_pts, resistance_wall_distance_pct = _signed_level_distance(resistance_wall, level_spot)
+    gamma_flip = trade.get("gamma_flip")
+    gamma_flip_drift = trade.get("gamma_flip_drift") if isinstance(trade.get("gamma_flip_drift"), dict) else {}
+    max_pain = trade.get("max_pain")
+    _max_pain_distance_pts, max_pain_distance_pct = _signed_level_distance(max_pain, level_spot)
 
     historical_context = trade.get("historical_context") if isinstance(trade.get("historical_context"), dict) else {}
     historical_vol_context = (
@@ -835,6 +860,22 @@ def build_signal_evaluation_row(
         "final_flow_signal": trade.get("final_flow_signal"),
         "gamma_regime": trade.get("gamma_regime"),
         "spot_vs_flip": trade.get("spot_vs_flip"),
+        "gamma_flip": gamma_flip,
+        "gamma_flip_drift_points": gamma_flip_drift.get("drift"),
+        "gamma_flip_drift_direction": gamma_flip_drift.get("direction") or gamma_flip_drift.get("trend"),
+        "support_wall": support_wall,
+        "support_wall_distance_pts": support_wall_distance_pts,
+        "support_wall_distance_pct": support_wall_distance_pct,
+        "resistance_wall": resistance_wall,
+        "resistance_wall_distance_pts": resistance_wall_distance_pts,
+        "resistance_wall_distance_pct": resistance_wall_distance_pct,
+        "max_pain": max_pain,
+        "max_pain_dist": trade.get("max_pain_dist"),
+        "max_pain_zone": trade.get("max_pain_zone"),
+        "max_pain_distance_pct": max_pain_distance_pct,
+        "liquidity_levels_json": _json_compact(trade.get("liquidity_levels") or []),
+        "gamma_clusters_json": _json_compact(trade.get("gamma_clusters") or []),
+        "dealer_liquidity_map_json": _json_compact(trade.get("dealer_liquidity_map") or {}),
         "macro_regime": trade.get("macro_regime"),
         "event_intelligence_enabled": trade.get("event_intelligence_enabled"),
         "event_bullish_score": trade.get("event_bullish_score"),
@@ -1206,6 +1247,86 @@ def build_signal_evaluation_row(
         # ML expanded features — derived
         "atm_iv_scaled": atm_iv_scaled,
         "weekday": weekday,
+        "ta_direction": _first_present(trade.get("ta_direction"), ta_features.get("ta_direction")),
+        "ta_confidence": _first_present(trade.get("ta_confidence"), ta_features.get("ta_confidence")),
+        "ta_regime": _first_present(trade.get("ta_regime"), ta_features.get("ta_regime")),
+        "ta_candle_status": _first_present(trade.get("ta_candle_status"), ta_features.get("ta_candle_status")),
+        "ta_candle_interval_minutes": _first_present(
+            trade.get("ta_candle_interval_minutes"),
+            ta_features.get("ta_candle_interval_minutes"),
+        ),
+        "ta_candle_observation_count": _first_present(
+            trade.get("ta_candle_observation_count"),
+            ta_features.get("ta_candle_observation_count"),
+        ),
+        "ta_candle_count": _first_present(trade.get("ta_candle_count"), ta_features.get("ta_candle_count")),
+        "ta_candle_timestamp": _first_present(trade.get("ta_candle_timestamp"), ta_features.get("ta_candle_timestamp")),
+        "ta_candle_open": _first_present(trade.get("ta_candle_open"), ta_features.get("ta_candle_open")),
+        "ta_candle_high": _first_present(trade.get("ta_candle_high"), ta_features.get("ta_candle_high")),
+        "ta_candle_low": _first_present(trade.get("ta_candle_low"), ta_features.get("ta_candle_low")),
+        "ta_candle_close": _first_present(trade.get("ta_candle_close"), ta_features.get("ta_candle_close")),
+        "ta_candle_body_bps": _first_present(trade.get("ta_candle_body_bps"), ta_features.get("ta_candle_body_bps")),
+        "ta_candle_range_bps": _first_present(trade.get("ta_candle_range_bps"), ta_features.get("ta_candle_range_bps")),
+        "ta_candle_close_location": _first_present(
+            trade.get("ta_candle_close_location"),
+            ta_features.get("ta_candle_close_location"),
+        ),
+        "ta_candle_upper_wick_share": _first_present(
+            trade.get("ta_candle_upper_wick_share"),
+            ta_features.get("ta_candle_upper_wick_share"),
+        ),
+        "ta_candle_lower_wick_share": _first_present(
+            trade.get("ta_candle_lower_wick_share"),
+            ta_features.get("ta_candle_lower_wick_share"),
+        ),
+        "ta_candle_range_expansion_ratio": _first_present(
+            trade.get("ta_candle_range_expansion_ratio"),
+            ta_features.get("ta_candle_range_expansion_ratio"),
+        ),
+        "ta_candle_momentum_3_bps": _first_present(
+            trade.get("ta_candle_momentum_3_bps"),
+            ta_features.get("ta_candle_momentum_3_bps"),
+        ),
+        "ta_candle_momentum_5_bps": _first_present(
+            trade.get("ta_candle_momentum_5_bps"),
+            ta_features.get("ta_candle_momentum_5_bps"),
+        ),
+        "ta_candle_prior_move_15m_bps": _first_present(
+            trade.get("ta_candle_prior_move_15m_bps"),
+            ta_features.get("ta_candle_prior_move_15m_bps"),
+        ),
+        "ta_candle_prior_move_30m_bps": _first_present(
+            trade.get("ta_candle_prior_move_30m_bps"),
+            ta_features.get("ta_candle_prior_move_30m_bps"),
+        ),
+        "ta_candle_direction": _first_present(trade.get("ta_candle_direction"), ta_features.get("ta_candle_direction")),
+        "ta_candle_state": _first_present(trade.get("ta_candle_state"), ta_features.get("ta_candle_state")),
+        "ta_candle_confidence": _first_present(
+            trade.get("ta_candle_confidence"),
+            ta_features.get("ta_candle_confidence"),
+        ),
+        "ta_candle_late_chase": _first_present(
+            trade.get("ta_candle_late_chase"),
+            ta_features.get("ta_candle_late_chase"),
+        ),
+        "ta_candle_rejection": _first_present(trade.get("ta_candle_rejection"), ta_features.get("ta_candle_rejection")),
+        "ta_candle_range_expanded": _first_present(
+            trade.get("ta_candle_range_expanded"),
+            ta_features.get("ta_candle_range_expanded"),
+        ),
+        "ta_candle_warning": _first_present(trade.get("ta_candle_warning"), ta_features.get("ta_candle_warning")),
+        "ta_entry_timing_state": _first_present(
+            trade.get("ta_entry_timing_state"),
+            ta_features.get("ta_entry_timing_state"),
+        ),
+        "ta_entry_timing_score": _first_present(
+            trade.get("ta_entry_timing_score"),
+            ta_features.get("ta_entry_timing_score"),
+        ),
+        "ta_entry_timing_reasons": _first_present(
+            trade.get("ta_entry_timing_reasons"),
+            ta_features.get("ta_entry_timing_reasons"),
+        ),
 
         "created_at": captured_ts,
         "updated_at": captured_ts,

@@ -28,6 +28,7 @@ from config.analytics_feature_policy import (
     get_technical_analysis_policy_config,
 )
 from data.historical_spot_fetcher import get_recent_spot_history
+from data.spot_history import load_spot_history
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,21 @@ def _no_ta_signal(regime: str, *, warning: str | None = None) -> dict:
     }
     if warning:
         payload["ta_warning"] = warning
+    return payload
+
+
+def _empty_candle_features(status: str, *, warning: str | None = None) -> dict:
+    payload = {
+        "ta_candle_status": status,
+        "ta_candle_direction": "NO_SIGNAL",
+        "ta_candle_state": "CANDLE_UNAVAILABLE",
+        "ta_candle_confidence": 0.0,
+        "ta_entry_timing_state": "CANDLE_UNAVAILABLE",
+        "ta_entry_timing_score": 0.0,
+        "ta_entry_timing_reasons": "",
+    }
+    if warning:
+        payload["ta_candle_warning"] = warning
     return payload
 
 
@@ -73,6 +89,7 @@ def build_ta_features(
     days_history: int | None = None,
     *,
     history_df: pd.DataFrame | None = None,
+    intraday_history_df: pd.DataFrame | None = None,
     as_of=None,
     allow_live_history: bool = True,
 ) -> dict:
@@ -90,18 +107,30 @@ def build_ta_features(
     try:
         cfg = get_technical_analysis_policy_config()
         lookback_days = int(days_history or cfg.default_history_days)
+        candle_features = build_intraday_candle_features(
+            symbol,
+            current_spot,
+            intraday_history_df=intraday_history_df,
+            as_of=as_of,
+            allow_live_history=allow_live_history,
+            cfg=cfg,
+        )
         if history_df is None:
             if not allow_live_history:
-                return _no_ta_signal(
+                payload = _no_ta_signal(
                     "point_in_time_unavailable",
                     warning="ta_history_not_supplied_for_historical_mode",
                 )
+                payload.update(candle_features)
+                return payload
             history_df = get_recent_spot_history(symbol, lookback_days)
 
         hist_df = _prepare_history_frame(history_df, as_of=as_of)
 
         if hist_df.empty or len(hist_df) < cfg.minimum_history_rows:
-            return _no_ta_signal("insufficient_data")
+            payload = _no_ta_signal("insufficient_data")
+            payload.update(candle_features)
+            return payload
 
         # Compute indicators
         indicators = _compute_ta_indicators(hist_df, current_spot, cfg)
@@ -109,12 +138,14 @@ def build_ta_features(
         # Generate signals
         direction, confidence, regime = _generate_ta_signals(indicators, cfg)
 
-        return {
+        payload = {
             "ta_direction": direction,
             "ta_confidence": confidence,
             "ta_regime": regime,
             "indicators": indicators,
         }
+        payload.update(candle_features)
+        return payload
 
     except Exception as e:
         logger.error(f"Failed to build TA features for {symbol}: {e}")
@@ -145,6 +176,341 @@ def _return_bps(current_spot: float, base_price: float) -> float | None:
     if not np.isfinite(spot) or not np.isfinite(base) or base == 0.0:
         return None
     return ((spot / base) - 1.0) * 10000.0
+
+
+def _safe_float(value, default: float | None = None) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not np.isfinite(parsed):
+        return default
+    return parsed
+
+
+def _clip(value: float, lower: float, upper: float) -> float:
+    return float(min(max(value, lower), upper))
+
+
+def _as_ist_timestamp(value):
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except Exception:
+        return None
+    if ts.tzinfo is None:
+        return ts.tz_localize("Asia/Kolkata")
+    return ts.tz_convert("Asia/Kolkata")
+
+
+def _prepare_intraday_spot_frame(
+    intraday_df: pd.DataFrame | None,
+    *,
+    current_spot: float,
+    as_of=None,
+    cfg: TechnicalAnalysisPolicyConfig | None = None,
+) -> pd.DataFrame:
+    cfg = cfg or get_technical_analysis_policy_config()
+    if intraday_df is None or intraday_df.empty:
+        return pd.DataFrame(columns=["timestamp", "spot"])
+
+    df = intraday_df.copy()
+    price_col = "spot" if "spot" in df.columns else "close" if "close" in df.columns else None
+    if "timestamp" not in df.columns or price_col is None:
+        return pd.DataFrame(columns=["timestamp", "spot"])
+
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        errors="coerce",
+        utc=True,
+        format="mixed",
+    ).dt.tz_convert("Asia/Kolkata")
+    df["spot"] = pd.to_numeric(df[price_col], errors="coerce")
+    df = df.dropna(subset=["timestamp", "spot"])
+
+    as_of_ts = _as_ist_timestamp(as_of)
+    if as_of_ts is not None:
+        lower = as_of_ts - pd.Timedelta(minutes=max(_valid_window(cfg.intraday_candle_lookback_minutes), 1))
+        df = df[(df["timestamp"] >= lower) & (df["timestamp"] <= as_of_ts)]
+        spot = _safe_float(current_spot, None)
+        if spot is not None and spot > 0:
+            current_row = pd.DataFrame([{"timestamp": as_of_ts, "spot": spot}])
+            df = pd.concat([df, current_row], ignore_index=True)
+
+    if df.empty:
+        return pd.DataFrame(columns=["timestamp", "spot"])
+
+    return df.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
+
+
+def _load_live_intraday_spot_history(
+    symbol: str,
+    *,
+    as_of,
+    cfg: TechnicalAnalysisPolicyConfig,
+) -> pd.DataFrame:
+    as_of_ts = _as_ist_timestamp(as_of)
+    if as_of_ts is None:
+        return pd.DataFrame(columns=["timestamp", "spot"])
+    start_ts = as_of_ts - pd.Timedelta(minutes=max(_valid_window(cfg.intraday_candle_lookback_minutes), 1))
+    try:
+        return load_spot_history(symbol, start_ts=start_ts, end_ts=as_of_ts, dedupe=False)
+    except Exception as exc:
+        logger.warning("Unable to load local intraday spot history for TA candles: %s", exc)
+        return pd.DataFrame(columns=["timestamp", "spot"])
+
+
+def _resample_spot_candles(
+    spot_frame: pd.DataFrame,
+    *,
+    interval_minutes: int,
+) -> pd.DataFrame:
+    if spot_frame.empty:
+        return pd.DataFrame()
+    interval = f"{max(_valid_window(interval_minutes), 1)}min"
+    working = spot_frame.copy()
+    working = working.set_index("timestamp")
+    price = pd.to_numeric(working["spot"], errors="coerce").dropna()
+    if price.empty:
+        return pd.DataFrame()
+    ohlc = price.resample(interval).ohlc()
+    counts = price.resample(interval).count().rename("observation_count")
+    candles = ohlc.join(counts).dropna(subset=["open", "high", "low", "close"])
+    return candles.reset_index()
+
+
+def _last_price_at_or_before(spot_frame: pd.DataFrame, timestamp) -> float | None:
+    if spot_frame.empty or timestamp is None:
+        return None
+    ts = _as_ist_timestamp(timestamp)
+    if ts is None:
+        return None
+    subset = spot_frame[spot_frame["timestamp"] <= ts]
+    if subset.empty:
+        return None
+    return _safe_float(subset.iloc[-1]["spot"], None)
+
+
+def _confidence_from_candle(
+    *,
+    body_bps: float,
+    close_location: float,
+    range_expansion_ratio: float | None,
+    momentum_bps: float | None,
+    direction: str,
+) -> float:
+    body_score = _clip(abs(body_bps) / 8.0, 0.0, 1.0)
+    if direction == "CALL":
+        close_score = _clip((close_location - 0.50) / 0.40, 0.0, 1.0)
+        momentum_score = _clip((_safe_float(momentum_bps, 0.0) or 0.0) / 12.0, 0.0, 1.0)
+    else:
+        close_score = _clip((0.50 - close_location) / 0.40, 0.0, 1.0)
+        momentum_score = _clip(-(_safe_float(momentum_bps, 0.0) or 0.0) / 12.0, 0.0, 1.0)
+    expansion_score = _clip((_safe_float(range_expansion_ratio, 1.0) or 1.0) - 1.0, 0.0, 1.0)
+    confidence = 0.42 + 0.18 * body_score + 0.18 * close_score + 0.14 * momentum_score + 0.08 * expansion_score
+    return round(_clip(confidence, 0.0, 0.90), 4)
+
+
+def build_intraday_candle_features(
+    symbol: str,
+    current_spot: float,
+    *,
+    intraday_history_df: pd.DataFrame | None = None,
+    as_of=None,
+    allow_live_history: bool = True,
+    cfg: TechnicalAnalysisPolicyConfig | None = None,
+) -> dict:
+    """Build advisory intraday candle features for entry-timing research.
+
+    This layer does not change the existing slow TA vote. It converts local
+    spot observations into compact candle-state fields that can later be replayed
+    against MAE/MFE and realized forward returns.
+    """
+    cfg = cfg or get_technical_analysis_policy_config()
+    if not bool(cfg.intraday_candle_enabled):
+        return _empty_candle_features("DISABLED")
+
+    raw_intraday = intraday_history_df
+    if raw_intraday is None and allow_live_history:
+        raw_intraday = _load_live_intraday_spot_history(symbol, as_of=as_of, cfg=cfg)
+
+    spot_frame = _prepare_intraday_spot_frame(
+        raw_intraday,
+        current_spot=current_spot,
+        as_of=as_of,
+        cfg=cfg,
+    )
+    min_obs = max(_valid_window(cfg.intraday_candle_min_observations), 1)
+    if spot_frame.empty or len(spot_frame) < min_obs:
+        payload = _empty_candle_features("INSUFFICIENT_INTRADAY_DATA")
+        payload["ta_candle_observation_count"] = int(len(spot_frame))
+        return payload
+
+    interval_minutes = max(_valid_window(cfg.intraday_candle_interval_minutes), 1)
+    candles = _resample_spot_candles(spot_frame, interval_minutes=interval_minutes)
+    min_candles = max(_valid_window(cfg.intraday_candle_min_candles), 1)
+    if candles.empty or len(candles) < min_candles:
+        payload = _empty_candle_features("INSUFFICIENT_CANDLES")
+        payload["ta_candle_observation_count"] = int(len(spot_frame))
+        payload["ta_candle_count"] = int(len(candles))
+        payload["ta_candle_interval_minutes"] = int(interval_minutes)
+        return payload
+
+    latest = candles.iloc[-1]
+    open_price = _safe_float(latest.get("open"), None)
+    high_price = _safe_float(latest.get("high"), None)
+    low_price = _safe_float(latest.get("low"), None)
+    close_price = _safe_float(latest.get("close"), None)
+    if None in (open_price, high_price, low_price, close_price) or open_price == 0:
+        return _empty_candle_features("INVALID_CANDLE")
+
+    candle_range = max(high_price - low_price, 0.0)
+    body = close_price - open_price
+    body_bps = _return_bps(close_price, open_price) or 0.0
+    range_bps = (candle_range / open_price) * 10000.0 if open_price else 0.0
+    if candle_range > 0:
+        close_location = (close_price - low_price) / candle_range
+        upper_wick_share = (high_price - max(open_price, close_price)) / candle_range
+        lower_wick_share = (min(open_price, close_price) - low_price) / candle_range
+    else:
+        close_location = 0.5
+        upper_wick_share = 0.0
+        lower_wick_share = 0.0
+
+    previous_ranges = []
+    if len(candles) > 1:
+        for _, row in candles.iloc[:-1].tail(6).iterrows():
+            row_open = _safe_float(row.get("open"), None)
+            row_high = _safe_float(row.get("high"), None)
+            row_low = _safe_float(row.get("low"), None)
+            if row_open not in (None, 0.0) and row_high is not None and row_low is not None:
+                previous_ranges.append(max(row_high - row_low, 0.0) / row_open * 10000.0)
+    median_prev_range = float(pd.Series(previous_ranges).median()) if previous_ranges else None
+    range_expansion_ratio = (range_bps / median_prev_range) if median_prev_range and median_prev_range > 0 else None
+
+    closes = pd.to_numeric(candles["close"], errors="coerce").dropna()
+    momentum_3_bps = _return_bps(closes.iloc[-1], closes.iloc[-4]) if len(closes) >= 4 else None
+    momentum_5_bps = _return_bps(closes.iloc[-1], closes.iloc[-6]) if len(closes) >= 6 else None
+
+    as_of_ts = _as_ist_timestamp(as_of) or _as_ist_timestamp(latest.get("timestamp"))
+    prior_15 = _last_price_at_or_before(spot_frame, as_of_ts - pd.Timedelta(minutes=15) if as_of_ts is not None else None)
+    prior_30 = _last_price_at_or_before(spot_frame, as_of_ts - pd.Timedelta(minutes=30) if as_of_ts is not None else None)
+    prior_15_bps = _return_bps(close_price, prior_15) if prior_15 is not None else None
+    prior_30_bps = _return_bps(close_price, prior_30) if prior_30 is not None else None
+
+    min_body_bps = float(cfg.intraday_candle_min_body_bps)
+    call_confirm = (
+        body_bps >= min_body_bps
+        and close_location >= float(cfg.intraday_candle_close_confirm_high)
+        and upper_wick_share <= float(cfg.intraday_candle_max_counter_wick_share)
+        and (_safe_float(momentum_3_bps, 0.0) or 0.0) >= -min_body_bps
+    )
+    put_confirm = (
+        body_bps <= -min_body_bps
+        and close_location <= float(cfg.intraday_candle_close_confirm_low)
+        and lower_wick_share <= float(cfg.intraday_candle_max_counter_wick_share)
+        and (_safe_float(momentum_3_bps, 0.0) or 0.0) <= min_body_bps
+    )
+    bearish_rejection = (
+        upper_wick_share >= float(cfg.intraday_candle_rejection_wick_share)
+        and close_location <= 0.45
+    )
+    bullish_rejection = (
+        lower_wick_share >= float(cfg.intraday_candle_rejection_wick_share)
+        and close_location >= 0.55
+    )
+
+    direction = "NO_SIGNAL"
+    state = "CANDLE_FORMING"
+    reasons: list[str] = []
+    if bearish_rejection and not call_confirm:
+        direction = "PUT"
+        state = "CANDLE_REJECTION_BEARISH"
+        reasons.append("dominant_upper_wick_rejection")
+    elif bullish_rejection and not put_confirm:
+        direction = "CALL"
+        state = "CANDLE_REJECTION_BULLISH"
+        reasons.append("dominant_lower_wick_rejection")
+    elif call_confirm and not put_confirm:
+        direction = "CALL"
+        state = "CANDLE_CONFIRMED_CALL"
+        reasons.append("bullish_body_close_location_confirmed")
+    elif put_confirm and not call_confirm:
+        direction = "PUT"
+        state = "CANDLE_CONFIRMED_PUT"
+        reasons.append("bearish_body_close_location_confirmed")
+    elif abs(body_bps) < min_body_bps:
+        reasons.append("small_body_forming")
+    else:
+        reasons.append("mixed_candle_structure")
+
+    stretch_bps = float(cfg.intraday_candle_prior_stretch_bps)
+    range_expanded = (_safe_float(range_expansion_ratio, 0.0) or 0.0) >= float(cfg.intraday_candle_range_expansion_threshold)
+    late_chase = False
+    if direction == "CALL":
+        late_chase = (_safe_float(prior_15_bps, 0.0) or 0.0) >= stretch_bps and range_expanded
+    elif direction == "PUT":
+        late_chase = (_safe_float(prior_15_bps, 0.0) or 0.0) <= -stretch_bps and range_expanded
+    if late_chase:
+        state = f"CANDLE_LATE_CHASE_{direction}"
+        reasons.append("prior_move_stretched_with_range_expansion")
+
+    confidence = (
+        _confidence_from_candle(
+            body_bps=body_bps,
+            close_location=close_location,
+            range_expansion_ratio=range_expansion_ratio,
+            momentum_bps=momentum_3_bps,
+            direction=direction,
+        )
+        if direction in {"CALL", "PUT"}
+        else 0.0
+    )
+    timing_score = round(confidence * 100.0, 2)
+
+    return {
+        "ta_candle_status": "OK",
+        "ta_candle_interval_minutes": int(interval_minutes),
+        "ta_candle_observation_count": int(len(spot_frame)),
+        "ta_candle_count": int(len(candles)),
+        "ta_candle_timestamp": _as_ist_timestamp(latest.get("timestamp")).isoformat()
+        if _as_ist_timestamp(latest.get("timestamp")) is not None
+        else None,
+        "ta_candle_open": round(open_price, 4),
+        "ta_candle_high": round(high_price, 4),
+        "ta_candle_low": round(low_price, 4),
+        "ta_candle_close": round(close_price, 4),
+        "ta_candle_body_bps": round(float(body_bps), 4),
+        "ta_candle_range_bps": round(float(range_bps), 4),
+        "ta_candle_close_location": round(float(_clip(close_location, 0.0, 1.0)), 4),
+        "ta_candle_upper_wick_share": round(float(_clip(upper_wick_share, 0.0, 1.0)), 4),
+        "ta_candle_lower_wick_share": round(float(_clip(lower_wick_share, 0.0, 1.0)), 4),
+        "ta_candle_range_expansion_ratio": round(float(range_expansion_ratio), 4)
+        if range_expansion_ratio is not None and np.isfinite(range_expansion_ratio)
+        else None,
+        "ta_candle_momentum_3_bps": round(float(momentum_3_bps), 4)
+        if momentum_3_bps is not None
+        else None,
+        "ta_candle_momentum_5_bps": round(float(momentum_5_bps), 4)
+        if momentum_5_bps is not None
+        else None,
+        "ta_candle_prior_move_15m_bps": round(float(prior_15_bps), 4)
+        if prior_15_bps is not None
+        else None,
+        "ta_candle_prior_move_30m_bps": round(float(prior_30_bps), 4)
+        if prior_30_bps is not None
+        else None,
+        "ta_candle_direction": direction,
+        "ta_candle_state": state,
+        "ta_candle_confidence": confidence,
+        "ta_candle_late_chase": bool(late_chase),
+        "ta_candle_rejection": bool(bearish_rejection or bullish_rejection),
+        "ta_candle_range_expanded": bool(range_expanded),
+        "ta_entry_timing_state": state,
+        "ta_entry_timing_score": timing_score,
+        "ta_entry_timing_reasons": "|".join(reasons),
+    }
 
 
 def _compute_ta_indicator_series(
@@ -311,6 +677,7 @@ def get_ta_features_for_trade(
     spot_price: float,
     *,
     history_df: pd.DataFrame | None = None,
+    intraday_history_df: pd.DataFrame | None = None,
     as_of=None,
     allow_live_history: bool = True,
 ) -> dict:
@@ -328,6 +695,7 @@ def get_ta_features_for_trade(
         symbol,
         spot_price,
         history_df=history_df,
+        intraday_history_df=intraday_history_df,
         as_of=as_of,
         allow_live_history=allow_live_history,
     )

@@ -182,6 +182,16 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                 "final_flow_signal": "BULLISH_FLOW",
                 "gamma_regime": "SHORT_GAMMA_ZONE",
                 "spot_vs_flip": "ABOVE_FLIP",
+                "gamma_flip": 21980.0,
+                "gamma_flip_drift": {"drift": 18.0, "direction": "RISING"},
+                "support_wall": 21950.0,
+                "resistance_wall": 22100.0,
+                "max_pain": 22050.0,
+                "max_pain_dist": 50.0,
+                "max_pain_zone": "NEAR_MAX_PAIN",
+                "liquidity_levels": [21950.0, 22050.0, 22100.0],
+                "gamma_clusters": [21980.0, 22120.0],
+                "dealer_liquidity_map": {"next_support": 21950.0, "next_resistance": 22100.0},
                 "macro_regime": "MACRO_NEUTRAL",
                 "global_risk_state": "GLOBAL_NEUTRAL",
                 "global_risk_score": 24,
@@ -328,6 +338,15 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(row_a["selected_option_last_price"], 110.5)
         self.assertEqual(row_a["selected_option_bid_price"], 110.0)
         self.assertEqual(row_a["selected_option_ask_price"], 111.0)
+        self.assertEqual(row_a["gamma_flip"], 21980.0)
+        self.assertEqual(row_a["support_wall"], 21950.0)
+        self.assertEqual(row_a["support_wall_distance_pts"], -50.0)
+        self.assertEqual(row_a["resistance_wall"], 22100.0)
+        self.assertEqual(row_a["resistance_wall_distance_pts"], 100.0)
+        self.assertEqual(row_a["max_pain"], 22050.0)
+        self.assertEqual(row_a["max_pain_distance_pct"], 0.227273)
+        self.assertIn("22100.0", row_a["liquidity_levels_json"])
+        self.assertIn("next_resistance", row_a["dealer_liquidity_map_json"])
         self.assertEqual(row_a["selected_option_mid_price"], 110.5)
         self.assertEqual(row_a["option_entry_premium"], 110.5)
         self.assertEqual(row_a["option_target_premium"], 143.65)

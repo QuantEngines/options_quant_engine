@@ -26,6 +26,17 @@ DEFAULT_SCORE_THRESHOLDS = (50, 55, 60, 65, 70)
 DEFAULT_DELAY_LAGS_MINUTES = (5, 10, 15)
 DEFAULT_PRIOR_STRETCH_BPS = 10.0
 DEFAULT_FUTURE_EDGE_BPS = 5.0
+DEFAULT_CONFIRMATION_WINDOW_MINUTES = 15
+DEFAULT_PULLBACK_WINDOW_MINUTES = 20
+DEFAULT_CANDLE_CONFIRMATION_WINDOW_MINUTES = 15
+DEFAULT_PULLBACK_BPS = 5.0
+
+ENTRY_STRATEGY_ORDER = (
+    "immediate",
+    "second_confirmation",
+    "pullback_retest",
+    "candle_confirmed",
+)
 
 _RUNTIME_COLUMNS = {
     "signal_timestamp",
@@ -60,6 +71,25 @@ _RUNTIME_COLUMNS = {
     "mae_60m_bps",
     "mfe_120m_bps",
     "mae_120m_bps",
+    "option_premium_path_status",
+    "option_premium_return_15m_bps",
+    "option_premium_return_30m_bps",
+    "option_premium_return_60m_bps",
+    "option_premium_return_120m_bps",
+    "option_premium_pnl_per_lot_15m",
+    "option_premium_pnl_per_lot_30m",
+    "option_premium_pnl_per_lot_60m",
+    "option_premium_pnl_per_lot_120m",
+    "ta_candle_direction",
+    "ta_candle_state",
+    "ta_candle_confidence",
+    "ta_candle_late_chase",
+    "ta_candle_rejection",
+    "ta_candle_prior_move_15m_bps",
+    "ta_candle_prior_move_30m_bps",
+    "ta_entry_timing_state",
+    "ta_entry_timing_score",
+    "ta_entry_timing_reasons",
 }
 
 
@@ -123,11 +153,17 @@ def _numeric_columns(frame: pd.DataFrame) -> pd.DataFrame:
             or column.startswith("correct_")
             or column.startswith("mfe_")
             or column.startswith("mae_")
+            or column.startswith("option_premium_return_")
+            or column.startswith("option_premium_pnl_per_lot_")
             or column
             in {
                 "runtime_composite_score",
                 "trade_strength",
                 "spot_at_signal",
+                "ta_candle_confidence",
+                "ta_candle_prior_move_15m_bps",
+                "ta_candle_prior_move_30m_bps",
+                "ta_entry_timing_score",
             }
         ):
             working[column] = pd.to_numeric(working[column], errors="coerce")
@@ -285,6 +321,13 @@ def _share(series: pd.Series, value: str) -> float | None:
     return float((series.astype(str) == value).mean())
 
 
+def _positive_share(series: pd.Series) -> float | None:
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    return float((numeric > 0.0).mean())
+
+
 def _pct_mean(series: pd.Series) -> float | None:
     value = _mean(series)
     return value * 100.0 if value is not None else None
@@ -317,6 +360,23 @@ def _summarize_groups(frame: pd.DataFrame, group_cols: list[str], *, min_rows: i
                 "hit_rate_60m": _round(_pct_mean(group.get("correct_60m", pd.Series(dtype=float)))),
                 "avg_mfe_60m_bps": _round(_mean(group.get("mfe_60m_bps", pd.Series(dtype=float)))),
                 "avg_mae_60m_bps": _round(_mean(group.get("mae_60m_bps", pd.Series(dtype=float)))),
+                "avg_option_premium_return_15m_bps": _round(
+                    _mean(group.get("option_premium_return_15m_bps", pd.Series(dtype=float)))
+                ),
+                "avg_option_premium_return_30m_bps": _round(
+                    _mean(group.get("option_premium_return_30m_bps", pd.Series(dtype=float)))
+                ),
+                "avg_option_premium_return_60m_bps": _round(
+                    _mean(group.get("option_premium_return_60m_bps", pd.Series(dtype=float)))
+                ),
+                "option_premium_hit_rate_60m": _round(
+                    (_positive_share(group.get("option_premium_return_60m_bps", pd.Series(dtype=float))) or 0.0) * 100.0
+                )
+                if group.get("option_premium_return_60m_bps", pd.Series(dtype=float)).notna().any()
+                else None,
+                "avg_option_pnl_per_lot_60m": _round(
+                    _mean(group.get("option_premium_pnl_per_lot_60m", pd.Series(dtype=float)))
+                ),
                 "late_chase_share": _round(_share(group["timing_class"], "LATE_CHASE") * 100.0),
                 "confirming_share": _round(_share(group["timing_class"], "CONFIRMING") * 100.0),
                 "early_share": _round(_share(group["timing_class"], "EARLY") * 100.0),
@@ -438,6 +498,310 @@ def _delayed_entry_summary(
     return rows
 
 
+def _event_group_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in ("signal_date", "symbol", "direction") if column in frame.columns]
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().upper()
+    return text in {"1", "TRUE", "YES", "Y", "ON"}
+
+
+def _confirmation_ready(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"CONFIRMED", "STRONG_CONFIRMATION"}
+
+
+def _candle_confirms_direction(row: pd.Series) -> bool:
+    direction = str(row.get("direction") or "").strip().upper()
+    if direction not in {"CALL", "PUT"}:
+        return False
+    expected_state = f"CANDLE_CONFIRMED_{direction}"
+    state = str(row.get("ta_entry_timing_state") or row.get("ta_candle_state") or "").strip().upper()
+    candle_state = str(row.get("ta_candle_state") or "").strip().upper()
+    candle_direction = str(row.get("ta_candle_direction") or "").strip().upper()
+    if state == expected_state or candle_state == expected_state:
+        return True
+    if candle_direction == direction and "CONFIRMED" in state:
+        return True
+    return False
+
+
+def _candle_adverse_or_late(row: pd.Series) -> bool:
+    state = " ".join(
+        str(row.get(column) or "").strip().upper()
+        for column in ("ta_entry_timing_state", "ta_candle_state", "ta_entry_timing_reasons")
+    )
+    return (
+        _truthy(row.get("ta_candle_late_chase"))
+        or _truthy(row.get("ta_candle_rejection"))
+        or "LATE_CHASE" in state
+        or "REJECTION" in state
+        or "INVALIDATED" in state
+    )
+
+
+def _directional_spot_move_bps(entry: pd.Series, initial: pd.Series) -> float | None:
+    sign = _safe_float(initial.get("direction_sign"), None)
+    initial_spot = _safe_float(initial.get("spot_at_signal"), None)
+    entry_spot = _safe_float(entry.get("spot_at_signal"), None)
+    if sign is None or initial_spot is None or entry_spot is None or initial_spot <= 0:
+        return None
+    return sign * (entry_spot - initial_spot) / initial_spot * 10000.0
+
+
+def _minutes_between(entry: pd.Series, initial: pd.Series) -> float | None:
+    entry_ts = entry.get("signal_ts")
+    initial_ts = initial.get("signal_ts")
+    if pd.isna(entry_ts) or pd.isna(initial_ts):
+        return None
+    return float((entry_ts - initial_ts).total_seconds() / 60.0)
+
+
+def _entry_event_payload(
+    *,
+    strategy: str,
+    threshold: int,
+    event_id: str,
+    initial: pd.Series,
+    entry: pd.Series,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "threshold": int(threshold),
+        "strategy": strategy,
+        "event_id": event_id,
+        "signal_date": str(initial.get("signal_date")),
+        "symbol": str(initial.get("symbol") or ""),
+        "direction": str(initial.get("direction") or ""),
+        "initial_timestamp": initial.get("signal_ts").isoformat() if not pd.isna(initial.get("signal_ts")) else None,
+        "entry_timestamp": entry.get("signal_ts").isoformat() if not pd.isna(entry.get("signal_ts")) else None,
+        "entry_delay_minutes": _round(_minutes_between(entry, initial)),
+        "initial_runtime_composite_score": _round(initial.get("runtime_composite_score")),
+        "entry_runtime_composite_score": _round(entry.get("runtime_composite_score")),
+        "entry_spot_directional_move_from_initial_bps": _round(_directional_spot_move_bps(entry, initial)),
+        "initial_confirmation_status": str(initial.get("confirmation_status") or "UNKNOWN"),
+        "entry_confirmation_status": str(entry.get("confirmation_status") or "UNKNOWN"),
+        "initial_ta_entry_timing_state": str(initial.get("ta_entry_timing_state") or "UNAVAILABLE"),
+        "entry_ta_entry_timing_state": str(entry.get("ta_entry_timing_state") or "UNAVAILABLE"),
+        "initial_ta_candle_state": str(initial.get("ta_candle_state") or "UNAVAILABLE"),
+        "entry_ta_candle_state": str(entry.get("ta_candle_state") or "UNAVAILABLE"),
+        "entry_candle_adverse_or_late": bool(_candle_adverse_or_late(entry)),
+    }
+    for horizon in (15, 30, 60, 120):
+        payload[f"initial_return_{horizon}m_bps"] = _safe_float(initial.get(f"signed_return_{horizon}m_bps"), None)
+        payload[f"entry_return_{horizon}m_bps"] = _safe_float(entry.get(f"signed_return_{horizon}m_bps"), None)
+        payload[f"entry_correct_{horizon}m"] = _safe_float(entry.get(f"correct_{horizon}m"), None)
+        payload[f"initial_option_premium_return_{horizon}m_bps"] = _safe_float(
+            initial.get(f"option_premium_return_{horizon}m_bps"), None
+        )
+        payload[f"entry_option_premium_return_{horizon}m_bps"] = _safe_float(
+            entry.get(f"option_premium_return_{horizon}m_bps"), None
+        )
+        payload[f"entry_option_pnl_per_lot_{horizon}m"] = _safe_float(
+            entry.get(f"option_premium_pnl_per_lot_{horizon}m"), None
+        )
+    for horizon in (60, 120):
+        payload[f"entry_mfe_{horizon}m_bps"] = _safe_float(entry.get(f"mfe_{horizon}m_bps"), None)
+        payload[f"entry_mae_{horizon}m_bps"] = _safe_float(entry.get(f"mae_{horizon}m_bps"), None)
+    return payload
+
+
+def _first_threshold_events(frame: pd.DataFrame, threshold: int) -> list[tuple[str, pd.DataFrame, pd.Series]]:
+    events: list[tuple[str, pd.DataFrame, pd.Series]] = []
+    if frame.empty:
+        return events
+    group_cols = _event_group_columns(frame)
+    if not group_cols:
+        return events
+    ordered = frame.sort_values([*group_cols, "signal_ts"], kind="mergesort")
+    for group_counter, (_keys, group) in enumerate(ordered.groupby(group_cols, dropna=False, observed=True)):
+        previous_score = group["runtime_composite_score"].shift(1).fillna(-np.inf)
+        crossed = group[(group["runtime_composite_score"] >= threshold) & (previous_score < threshold)]
+        if crossed.empty:
+            continue
+        initial = crossed.iloc[0]
+        event_id = f"{threshold}:{group_counter}:{initial.name}"
+        events.append((event_id, group.sort_values("signal_ts", kind="mergesort"), initial))
+    return events
+
+
+def _window_after(group: pd.DataFrame, initial: pd.Series, minutes: int, *, include_initial: bool = False) -> pd.DataFrame:
+    initial_ts = initial.get("signal_ts")
+    if pd.isna(initial_ts):
+        return group.iloc[0:0]
+    lower_mask = group["signal_ts"].ge(initial_ts) if include_initial else group["signal_ts"].gt(initial_ts)
+    upper = initial_ts + pd.Timedelta(minutes=int(minutes))
+    return group.loc[lower_mask & group["signal_ts"].le(upper)].copy()
+
+
+def _build_entry_strategy_events(
+    frame: pd.DataFrame,
+    *,
+    thresholds: tuple[int, ...] = DEFAULT_SCORE_THRESHOLDS,
+    confirmation_window_minutes: int = DEFAULT_CONFIRMATION_WINDOW_MINUTES,
+    pullback_window_minutes: int = DEFAULT_PULLBACK_WINDOW_MINUTES,
+    candle_confirmation_window_minutes: int = DEFAULT_CANDLE_CONFIRMATION_WINDOW_MINUTES,
+    pullback_bps: float = DEFAULT_PULLBACK_BPS,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    if frame.empty:
+        return pd.DataFrame()
+
+    for threshold in thresholds:
+        for event_id, group, initial in _first_threshold_events(frame, int(threshold)):
+            rows.append(
+                _entry_event_payload(
+                    strategy="immediate",
+                    threshold=int(threshold),
+                    event_id=event_id,
+                    initial=initial,
+                    entry=initial,
+                )
+            )
+
+            confirmation_window = _window_after(group, initial, confirmation_window_minutes)
+            confirmation_candidates = confirmation_window[
+                (confirmation_window["runtime_composite_score"] >= threshold)
+                & confirmation_window.get("confirmation_status", pd.Series(index=confirmation_window.index)).map(
+                    _confirmation_ready
+                )
+            ]
+            if not confirmation_candidates.empty:
+                rows.append(
+                    _entry_event_payload(
+                        strategy="second_confirmation",
+                        threshold=int(threshold),
+                        event_id=event_id,
+                        initial=initial,
+                        entry=confirmation_candidates.iloc[0],
+                    )
+                )
+
+            pullback_window = _window_after(group, initial, pullback_window_minutes)
+            if not pullback_window.empty:
+                directional_moves = pullback_window.apply(_directional_spot_move_bps, axis=1, initial=initial)
+                pullback_candidates = pullback_window[
+                    (pullback_window["runtime_composite_score"] >= threshold)
+                    & directional_moves.le(-abs(float(pullback_bps)))
+                ]
+                if not pullback_candidates.empty:
+                    rows.append(
+                        _entry_event_payload(
+                            strategy="pullback_retest",
+                            threshold=int(threshold),
+                            event_id=event_id,
+                            initial=initial,
+                            entry=pullback_candidates.iloc[0],
+                        )
+                    )
+
+            candle_window = _window_after(group, initial, candle_confirmation_window_minutes, include_initial=True)
+            candle_candidates = candle_window[
+                (candle_window["runtime_composite_score"] >= threshold)
+                & candle_window.apply(_candle_confirms_direction, axis=1)
+            ]
+            if not candle_candidates.empty:
+                rows.append(
+                    _entry_event_payload(
+                        strategy="candle_confirmed",
+                        threshold=int(threshold),
+                        event_id=event_id,
+                        initial=initial,
+                        entry=candle_candidates.iloc[0],
+                    )
+                )
+
+    return pd.DataFrame(rows)
+
+
+def _entry_strategy_summary(events: pd.DataFrame) -> list[dict[str, Any]]:
+    if events.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    thresholds = sorted(pd.to_numeric(events["threshold"], errors="coerce").dropna().astype(int).unique().tolist())
+    for threshold in thresholds:
+        threshold_events = events.loc[events["threshold"] == threshold].copy()
+        baseline = threshold_events.loc[threshold_events["strategy"] == "immediate"].copy()
+        eligible = int(len(baseline))
+        baseline_correct = pd.to_numeric(baseline.get("entry_correct_60m", pd.Series(dtype=float)), errors="coerce")
+        baseline_ids = set(baseline["event_id"].astype(str))
+        baseline_hit_ids = set(baseline.loc[baseline_correct.eq(1.0), "event_id"].astype(str))
+        baseline_non_hit_ids = set(baseline.loc[baseline_correct.eq(0.0), "event_id"].astype(str))
+
+        for strategy in ENTRY_STRATEGY_ORDER:
+            selected = threshold_events.loc[threshold_events["strategy"] == strategy].copy()
+            selected_ids = set(selected["event_id"].astype(str))
+            suppressed_ids = baseline_ids - selected_ids
+            selected_return_60 = pd.to_numeric(selected.get("entry_return_60m_bps", pd.Series(dtype=float)), errors="coerce")
+            selected_initial_return_60 = pd.to_numeric(
+                selected.get("initial_return_60m_bps", pd.Series(dtype=float)),
+                errors="coerce",
+            )
+            selected_premium_60 = pd.to_numeric(
+                selected.get("entry_option_premium_return_60m_bps", pd.Series(dtype=float)),
+                errors="coerce",
+            )
+            selected_initial_premium_60 = pd.to_numeric(
+                selected.get("initial_option_premium_return_60m_bps", pd.Series(dtype=float)),
+                errors="coerce",
+            )
+            return_delta_60 = selected_return_60 - selected_initial_return_60
+            premium_delta_60 = selected_premium_60 - selected_initial_premium_60
+            mfe_60 = _mean(selected.get("entry_mfe_60m_bps", pd.Series(dtype=float)))
+            mae_60 = _mean(selected.get("entry_mae_60m_bps", pd.Series(dtype=float)))
+            row = {
+                "threshold": int(threshold),
+                "strategy": strategy,
+                "eligible_event_count": eligible,
+                "entry_count": int(len(selected)),
+                "retention_rate": _round((len(selected) / eligible * 100.0) if eligible else None),
+                "avg_delay_minutes": _round(_mean(selected.get("entry_delay_minutes", pd.Series(dtype=float)))),
+                "avg_initial_score": _round(_mean(selected.get("initial_runtime_composite_score", pd.Series(dtype=float)))),
+                "avg_entry_score": _round(_mean(selected.get("entry_runtime_composite_score", pd.Series(dtype=float)))),
+                "avg_entry_spot_directional_move_bps": _round(
+                    _mean(selected.get("entry_spot_directional_move_from_initial_bps", pd.Series(dtype=float)))
+                ),
+                "avg_return_15m_bps": _round(_mean(selected.get("entry_return_15m_bps", pd.Series(dtype=float)))),
+                "avg_return_30m_bps": _round(_mean(selected.get("entry_return_30m_bps", pd.Series(dtype=float)))),
+                "avg_return_60m_bps": _round(_mean(selected_return_60)),
+                "avg_return_120m_bps": _round(_mean(selected.get("entry_return_120m_bps", pd.Series(dtype=float)))),
+                "hit_rate_60m": _round(_pct_mean(selected.get("entry_correct_60m", pd.Series(dtype=float)))),
+                "avg_mfe_60m_bps": _round(mfe_60),
+                "avg_mae_60m_bps": _round(mae_60),
+                "mfe_mae_ratio_60m": _round((mfe_60 / abs(mae_60)) if mfe_60 is not None and mae_60 not in (None, 0) else None),
+                "avg_option_premium_return_60m_bps": _round(_mean(selected_premium_60)),
+                "option_premium_hit_rate_60m": _round(
+                    (_positive_share(selected_premium_60) or 0.0) * 100.0
+                )
+                if selected_premium_60.notna().any()
+                else None,
+                "avg_option_pnl_per_lot_60m": _round(
+                    _mean(selected.get("entry_option_pnl_per_lot_60m", pd.Series(dtype=float)))
+                ),
+                "selected_minus_immediate_return_60m_bps": _round(_mean(return_delta_60)),
+                "strategy_helped_60m_share": _round((_positive_share(return_delta_60) or 0.0) * 100.0)
+                if return_delta_60.notna().any()
+                else None,
+                "selected_minus_immediate_premium_60m_bps": _round(_mean(premium_delta_60)),
+                "premium_strategy_helped_60m_share": _round((_positive_share(premium_delta_60) or 0.0) * 100.0)
+                if premium_delta_60.notna().any()
+                else None,
+                "false_positive_removal_60m": _round(
+                    len(suppressed_ids & baseline_non_hit_ids) / len(baseline_non_hit_ids) * 100.0
+                    if baseline_non_hit_ids
+                    else None
+                ),
+                "true_positive_loss_60m": _round(
+                    len(suppressed_ids & baseline_hit_ids) / len(baseline_hit_ids) * 100.0
+                    if baseline_hit_ids
+                    else None
+                ),
+            }
+            rows.append(row)
+    return rows
+
+
 def _top_late_chase_regimes(frame: pd.DataFrame, *, min_rows: int = 5) -> list[dict[str, Any]]:
     group_cols = ["gamma_regime", "volatility_regime", "global_risk_state"]
     for column in group_cols:
@@ -458,6 +822,10 @@ def build_entry_timing_report(
     classification_horizon_minutes: int = 60,
     prior_stretch_bps: float = DEFAULT_PRIOR_STRETCH_BPS,
     future_edge_bps: float = DEFAULT_FUTURE_EDGE_BPS,
+    confirmation_window_minutes: int = DEFAULT_CONFIRMATION_WINDOW_MINUTES,
+    pullback_window_minutes: int = DEFAULT_PULLBACK_WINDOW_MINUTES,
+    candle_confirmation_window_minutes: int = DEFAULT_CANDLE_CONFIRMATION_WINDOW_MINUTES,
+    pullback_bps: float = DEFAULT_PULLBACK_BPS,
 ) -> dict[str, Any]:
     prepared = prepare_entry_timing_frame(
         frame,
@@ -476,12 +844,33 @@ def build_entry_timing_report(
     runtime["trade_status"] = _normalize_text(runtime.get("trade_status", pd.Series(index=runtime.index)))
     runtime["outcome_status"] = _normalize_text(runtime.get("outcome_status", pd.Series(index=runtime.index)))
     runtime["label_quality_status"] = _normalize_text(runtime.get("label_quality_status", pd.Series(index=runtime.index)))
+    runtime["confirmation_status"] = _normalize_text(runtime.get("confirmation_status", pd.Series(index=runtime.index)))
+    runtime["ta_entry_timing_state"] = _normalize_text(
+        runtime.get("ta_entry_timing_state", pd.Series(index=runtime.index)),
+        default="UNAVAILABLE",
+    )
+    runtime["ta_candle_state"] = _normalize_text(
+        runtime.get("ta_candle_state", pd.Series(index=runtime.index)),
+        default="UNAVAILABLE",
+    )
+    runtime["ta_candle_direction"] = _normalize_text(
+        runtime.get("ta_candle_direction", pd.Series(index=runtime.index)),
+        default="UNKNOWN",
+    )
 
     mature_60m = runtime[runtime.get("signed_return_60m_bps", pd.Series(index=runtime.index)).notna()].copy()
     score_summary = _summarize_groups(runtime, ["score_bucket"])
     score_summary_mature_60m = _summarize_groups(mature_60m, ["score_bucket"])
     timing_summary = _summarize_groups(runtime, ["timing_class"])
     timing_by_score = _summarize_groups(runtime, ["score_bucket", "timing_class"])
+    strategy_events = _build_entry_strategy_events(
+        runtime,
+        thresholds=score_thresholds,
+        confirmation_window_minutes=confirmation_window_minutes,
+        pullback_window_minutes=pullback_window_minutes,
+        candle_confirmation_window_minutes=candle_confirmation_window_minutes,
+        pullback_bps=pullback_bps,
+    )
 
     generated_at = datetime.now(UTC).isoformat()
     ts = runtime["signal_ts"].dropna()
@@ -498,6 +887,10 @@ def build_entry_timing_report(
             "delay_lags_minutes": list(delay_lags_minutes),
             "prior_stretch_bps": float(prior_stretch_bps),
             "future_edge_bps": float(future_edge_bps),
+            "confirmation_window_minutes": int(confirmation_window_minutes),
+            "pullback_window_minutes": int(pullback_window_minutes),
+            "candle_confirmation_window_minutes": int(candle_confirmation_window_minutes),
+            "pullback_bps": float(pullback_bps),
             "timing_class_definitions": {
                 "EARLY": "prior move not stretched; future signed return >= edge floor",
                 "CONFIRMING": "prior favorable move stretched; future signed return still >= edge floor",
@@ -506,6 +899,12 @@ def build_entry_timing_report(
                 "NO_EDGE": "neither favorable nor adverse enough at the classification horizon",
                 "PENDING_OUTCOME": "future classification horizon is not mature yet",
                 "UNKNOWN_PRIOR": "future is present but prior spot history was unavailable",
+            },
+            "entry_strategy_definitions": {
+                "immediate": "first runtime composite threshold crossing in the direction/session",
+                "second_confirmation": "first later row inside the confirmation window with score still above threshold and confirmation CONFIRMED/STRONG_CONFIRMATION",
+                "pullback_retest": "first later row inside the pullback window with score still above threshold and a directionally better spot entry by at least pullback_bps",
+                "candle_confirmed": "first row from the crossing through the candle window where the intraday candle state confirms the engine direction",
             },
         },
         "coverage": {
@@ -532,6 +931,9 @@ def build_entry_timing_report(
             thresholds=score_thresholds,
             delay_lags_minutes=delay_lags_minutes,
         ),
+        "entry_strategy_summary": _entry_strategy_summary(strategy_events),
+        "candle_entry_timing_state_summary": _summarize_groups(runtime, ["ta_entry_timing_state"]),
+        "candle_state_summary": _summarize_groups(runtime, ["ta_candle_state"]),
         "top_late_chase_regime_slices": _top_late_chase_regimes(runtime.copy()),
     }
     report["diagnostic_read"] = _diagnostic_read(report)
@@ -613,6 +1015,9 @@ def render_entry_timing_markdown(report: dict[str, Any]) -> str:
         f"A prior move is considered stretched above `{report['methodology']['prior_stretch_bps']}` bps; "
         f"a future edge is considered meaningful above `{report['methodology']['future_edge_bps']}` bps.",
         "",
+        "Entry strategy comparisons start from the first runtime threshold crossing, then compare immediate entry against "
+        "second confirmation, pullback/retest, and candle-confirmed candidate rows. These are replay diagnostics only.",
+        "",
         "## Coverage",
         "",
         f"- Input rows: `{coverage.get('input_rows')}`",
@@ -649,6 +1054,8 @@ def render_entry_timing_markdown(report: dict[str, Any]) -> str:
                 "hit_rate_60m",
                 "avg_mfe_60m_bps",
                 "avg_mae_60m_bps",
+                "avg_option_premium_return_60m_bps",
+                "option_premium_hit_rate_60m",
                 "late_chase_share",
                 "confirming_share",
                 "early_share",
@@ -675,6 +1082,8 @@ def render_entry_timing_markdown(report: dict[str, Any]) -> str:
                 "hit_rate_60m",
                 "avg_mfe_60m_bps",
                 "avg_mae_60m_bps",
+                "avg_option_premium_return_60m_bps",
+                "option_premium_hit_rate_60m",
             ],
         )
     )
@@ -734,6 +1143,90 @@ def render_entry_timing_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Entry Strategy Comparison",
+            "",
+            "Retention shows how many first-crossing events would still receive an entry. "
+            "`false_positive_removal_60m` is the share of baseline 60m misses suppressed; "
+            "`true_positive_loss_60m` is the share of baseline 60m winners suppressed.",
+            "",
+        ]
+    )
+    lines.extend(
+        _markdown_table(
+            report.get("entry_strategy_summary") or [],
+            [
+                "threshold",
+                "strategy",
+                "eligible_event_count",
+                "entry_count",
+                "retention_rate",
+                "avg_delay_minutes",
+                "avg_entry_spot_directional_move_bps",
+                "avg_return_60m_bps",
+                "hit_rate_60m",
+                "avg_mfe_60m_bps",
+                "avg_mae_60m_bps",
+                "mfe_mae_ratio_60m",
+                "selected_minus_immediate_return_60m_bps",
+                "strategy_helped_60m_share",
+                "avg_option_premium_return_60m_bps",
+                "selected_minus_immediate_premium_60m_bps",
+                "false_positive_removal_60m",
+                "true_positive_loss_60m",
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Candle Timing States",
+            "",
+        ]
+    )
+    lines.extend(
+        _markdown_table(
+            report.get("candle_entry_timing_state_summary") or [],
+            [
+                "ta_entry_timing_state",
+                "row_count",
+                "avg_runtime_composite_score",
+                "avg_return_60m_bps",
+                "hit_rate_60m",
+                "avg_mfe_60m_bps",
+                "avg_mae_60m_bps",
+                "avg_option_premium_return_60m_bps",
+                "option_premium_hit_rate_60m",
+                "late_chase_share",
+                "false_start_share",
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Raw Candle States",
+            "",
+        ]
+    )
+    lines.extend(
+        _markdown_table(
+            report.get("candle_state_summary") or [],
+            [
+                "ta_candle_state",
+                "row_count",
+                "avg_runtime_composite_score",
+                "avg_return_60m_bps",
+                "hit_rate_60m",
+                "avg_mfe_60m_bps",
+                "avg_mae_60m_bps",
+                "avg_option_premium_return_60m_bps",
+                "option_premium_hit_rate_60m",
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
             "## Late-Chase Regime Slices",
             "",
         ]
@@ -776,6 +1269,10 @@ def write_entry_timing_report(
     prior_stretch_bps: float = DEFAULT_PRIOR_STRETCH_BPS,
     future_edge_bps: float = DEFAULT_FUTURE_EDGE_BPS,
     classification_horizon_minutes: int = 60,
+    confirmation_window_minutes: int = DEFAULT_CONFIRMATION_WINDOW_MINUTES,
+    pullback_window_minutes: int = DEFAULT_PULLBACK_WINDOW_MINUTES,
+    candle_confirmation_window_minutes: int = DEFAULT_CANDLE_CONFIRMATION_WINDOW_MINUTES,
+    pullback_bps: float = DEFAULT_PULLBACK_BPS,
 ) -> dict[str, Any]:
     dataset = Path(dataset_path)
     output = Path(output_dir)
@@ -787,6 +1284,10 @@ def write_entry_timing_report(
         prior_stretch_bps=prior_stretch_bps,
         future_edge_bps=future_edge_bps,
         classification_horizon_minutes=classification_horizon_minutes,
+        confirmation_window_minutes=confirmation_window_minutes,
+        pullback_window_minutes=pullback_window_minutes,
+        candle_confirmation_window_minutes=candle_confirmation_window_minutes,
+        pullback_bps=pullback_bps,
     )
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     json_path = output / f"entry_timing_diagnostics_{timestamp}.json"

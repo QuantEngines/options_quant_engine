@@ -15,8 +15,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from research.signal_evaluation.dataset import CUMULATIVE_DATASET_PATH  # noqa: E402
 from research.signal_evaluation.entry_timing_diagnostics import (  # noqa: E402
+    DEFAULT_CANDLE_CONFIRMATION_WINDOW_MINUTES,
+    DEFAULT_CONFIRMATION_WINDOW_MINUTES,
     DEFAULT_ENTRY_TIMING_REPORT_DIR,
     DEFAULT_FUTURE_EDGE_BPS,
+    DEFAULT_PULLBACK_BPS,
+    DEFAULT_PULLBACK_WINDOW_MINUTES,
     DEFAULT_PRIOR_STRETCH_BPS,
     write_entry_timing_report,
 )
@@ -29,6 +33,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prior-stretch-bps", type=float, default=DEFAULT_PRIOR_STRETCH_BPS)
     parser.add_argument("--future-edge-bps", type=float, default=DEFAULT_FUTURE_EDGE_BPS)
     parser.add_argument("--classification-horizon-minutes", type=int, default=60)
+    parser.add_argument("--confirmation-window-minutes", type=int, default=DEFAULT_CONFIRMATION_WINDOW_MINUTES)
+    parser.add_argument("--pullback-window-minutes", type=int, default=DEFAULT_PULLBACK_WINDOW_MINUTES)
+    parser.add_argument("--candle-confirmation-window-minutes", type=int, default=DEFAULT_CANDLE_CONFIRMATION_WINDOW_MINUTES)
+    parser.add_argument("--pullback-bps", type=float, default=DEFAULT_PULLBACK_BPS)
     return parser.parse_args()
 
 
@@ -40,6 +48,10 @@ def main() -> int:
         prior_stretch_bps=args.prior_stretch_bps,
         future_edge_bps=args.future_edge_bps,
         classification_horizon_minutes=args.classification_horizon_minutes,
+        confirmation_window_minutes=args.confirmation_window_minutes,
+        pullback_window_minutes=args.pullback_window_minutes,
+        candle_confirmation_window_minutes=args.candle_confirmation_window_minutes,
+        pullback_bps=args.pullback_bps,
     )
     report = result["report"]
     payload = {
@@ -58,4 +70,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

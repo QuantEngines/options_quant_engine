@@ -79,6 +79,14 @@ class TestLoadSpotHistory:
         assert len(df) == 1
         assert df["spot"].iloc[0] == 23150.0
 
+    def test_can_preserve_duplicate_timestamps_for_candle_research(self, tmp_path):
+        append_spot_observation("NIFTY", 23100.0, "2026-03-16T12:30:00+05:30", base_dir=tmp_path)
+        append_spot_observation("NIFTY", 23150.0, "2026-03-16T12:30:00+05:30", base_dir=tmp_path)
+
+        df = load_spot_history("NIFTY", base_dir=tmp_path, dedupe=False)
+        assert len(df) == 2
+        assert df["spot"].tolist() == [23100.0, 23150.0]
+
     def test_spans_multiple_dates(self, tmp_path):
         append_spot_observation("NIFTY", 23100.0, "2026-03-15T15:00:00+05:30", base_dir=tmp_path)
         append_spot_observation("NIFTY", 23200.0, "2026-03-16T09:15:00+05:30", base_dir=tmp_path)

@@ -122,11 +122,15 @@ def load_spot_history(
     start_ts=None,
     end_ts=None,
     base_dir: Path = SPOT_HISTORY_DIR,
+    dedupe: bool = True,
 ) -> pd.DataFrame:
     """Load local spot history for a symbol between start_ts and end_ts.
 
     Scans daily CSV files in the symbol's directory to build a contiguous
     (timestamp, spot) DataFrame.  Returns an empty frame if no local data exists.
+    By default, duplicate timestamps are collapsed for outcome enrichment.
+    Candle-formation research can pass ``dedupe=False`` to preserve repeated
+    observations within a provider timestamp.
     """
     symbol_dir = base_dir / symbol.upper()
     if not symbol_dir.exists():
@@ -197,6 +201,8 @@ def load_spot_history(
         return pd.DataFrame(columns=["timestamp", "spot"])
 
     combined = pd.concat(frames, ignore_index=True)
-    # Keep the latest appended row per timestamp so corrections/late writes win.
-    combined = combined.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp").reset_index(drop=True)
+    if dedupe:
+        # Keep the latest appended row per timestamp so corrections/late writes win.
+        combined = combined.drop_duplicates(subset=["timestamp"], keep="last")
+    combined = combined.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
     return combined[["timestamp", "spot"]]
