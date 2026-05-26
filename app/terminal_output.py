@@ -251,6 +251,24 @@ def _market_data_provenance_fields(*, result=None, trade=None):
     }
 
 
+def _format_multi_source_ingestion(result=None):
+    """Return a compact provider-collection summary for operator output."""
+    context = (result or {}).get("multi_source_ingestion") if isinstance(result, dict) else None
+    if not isinstance(context, dict) or not context.get("enabled"):
+        return None
+    primary = context.get("primary_source")
+    requested = context.get("requested_sources") or []
+    successful = context.get("successful_sources") or []
+    failed = context.get("failed_sources") or []
+    requested_text = ",".join(str(item) for item in requested if item)
+    successful_text = ",".join(str(item) for item in successful if item) or "none"
+    failed_text = ",".join(str(item) for item in failed if item)
+    summary = f"primary={primary}; requested={requested_text}; ok={successful_text}"
+    if failed_text:
+        summary += f"; failed={failed_text}"
+    return summary
+
+
 def _print_market_data_provenance(*, result=None, trade=None):
     fields = _market_data_provenance_fields(result=result, trade=trade)
     if any(value not in (None, "", [], {}) for value in fields.values()):
@@ -3110,6 +3128,7 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         "event_lockdown": macro_event_state.get("event_lockdown_flag"),
         "requested_option_source": _provenance_fields.get("requested_option_source"),
         "option_source": _provenance_fields.get("option_source"),
+        "multi_source": _format_multi_source_ingestion(result),
         "spot_source": _provenance_fields.get("spot_source"),
         "source_consistency": _provenance_fields.get("source_consistency"),
         "data_provenance": _provenance_fields.get("provenance_status"),
@@ -3396,12 +3415,15 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         _provider_mode = str((trade or {}).get("provider_quality_mode") or "").upper()
         if _provider_mode == "DATA_UNUSABLE_DIRECTION_BLOCKED":
             print("  No trade yet. Provider data is not reliable enough for direction or execution.")
+        elif _confirmation in {"NO_DIRECTION", "CONFLICT"} or not _direction:
+            if _provider_mode == "ANALYTICS_ONLY_EXECUTION_BLOCKED":
+                print("  No trade yet. Waiting for directional confirmation; execution data is not tradable.")
+            else:
+                print("  No trade yet. Waiting for directional confirmation.")
         elif _reason_code == "EXECUTION_DATA_UNUSABLE" or _provider_mode == "ANALYTICS_ONLY_EXECUTION_BLOCKED":
             print("  No trade yet. Signal analytics are usable, but execution data is not tradable.")
         elif "provider_health" in _blocked_by or _reason_code.startswith("PROVIDER_HEALTH_"):
             print("  No trade yet. Provider health is blocking execution.")
-        elif _confirmation in {"NO_DIRECTION", "CONFLICT"} or not _direction:
-            print("  No trade yet. Waiting for directional confirmation.")
         elif _reason_text:
             _headline = _reason_text if _reason_text.endswith(".") else f"{_reason_text}."
             print(f"  No trade yet. {_headline}")

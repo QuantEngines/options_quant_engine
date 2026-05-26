@@ -197,6 +197,7 @@ def get_icici_runtime_config() -> dict:
 
 DEFAULT_SYMBOL = os.getenv("OQE_DEFAULT_SYMBOL", "NIFTY").strip().upper() or "NIFTY"
 DEFAULT_DATA_SOURCE = os.getenv("OQE_DEFAULT_DATA_SOURCE", "ICICI").strip().upper() or "ICICI"
+_CONFIGURED_DATA_SOURCES_RAW = _csv_env_list("OQE_DATA_SOURCES")
 
 # Terminal output verbosity: COMPACT, STANDARD, or FULL_DEBUG
 OUTPUT_MODE = os.getenv("OQE_OUTPUT_MODE", "COMPACT").upper().strip()
@@ -338,6 +339,39 @@ DATA_SOURCE_OPTIONS = [
 ]
 
 
+def _normalize_data_source_list(values: list[str], *, fallback: str) -> list[str]:
+    """Normalize and deduplicate configured market-data provider names."""
+    allowed = set(DATA_SOURCE_OPTIONS)
+    normalized: list[str] = []
+    for value in values:
+        source = str(value or "").upper().strip()
+        if not source:
+            continue
+        if source not in allowed:
+            raise ValueError(
+                "Invalid data source %r in OQE_DATA_SOURCES. Allowed values: %s"
+                % (source, DATA_SOURCE_OPTIONS)
+            )
+        if source not in normalized:
+            normalized.append(source)
+
+    if normalized:
+        return normalized
+    fallback_source = str(fallback or "").upper().strip()
+    return [fallback_source or "ICICI"]
+
+
+DEFAULT_DATA_SOURCES = _normalize_data_source_list(
+    _CONFIGURED_DATA_SOURCES_RAW,
+    fallback=DEFAULT_DATA_SOURCE,
+)
+MULTI_SOURCE_INGESTION_ENABLED = (
+    _env_flag("OQE_MULTI_SOURCE_ENABLED", default=False)
+    or len(_CONFIGURED_DATA_SOURCES_RAW) > 1
+    or len(DEFAULT_DATA_SOURCES) > 1
+)
+
+
 # ================================
 # Zerodha API Credentials
 # ================================
@@ -450,6 +484,12 @@ def _validate_runtime_settings() -> None:
             "Invalid DEFAULT_DATA_SOURCE=%r. Allowed values: %s"
             % (DEFAULT_DATA_SOURCE, DATA_SOURCE_OPTIONS)
         )
+    for source in DEFAULT_DATA_SOURCES:
+        if source not in DATA_SOURCE_OPTIONS:
+            raise ValueError(
+                "Invalid DEFAULT_DATA_SOURCES entry=%r. Allowed values: %s"
+                % (source, DATA_SOURCE_OPTIONS)
+            )
 
     allowed_backtest_sources = {"historical", "live", "combined"}
     if BACKTEST_DATA_SOURCE not in allowed_backtest_sources:

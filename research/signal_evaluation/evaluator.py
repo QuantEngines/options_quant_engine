@@ -519,6 +519,8 @@ def build_signal_evaluation_row(
     calibration_guardrail = calibration_guardrail_obj if isinstance(calibration_guardrail_obj, dict) else {}
     regime_fingerprint, regime_fingerprint_id = build_regime_fingerprint(trade, provider_health)
     saved_paths = result.get("saved_paths") or {}
+    multi_source_ingestion_obj = result.get("multi_source_ingestion")
+    multi_source_ingestion = multi_source_ingestion_obj if isinstance(multi_source_ingestion_obj, dict) else {}
     captured_ts = resolve_research_as_of(captured_at, default=signal_timestamp).isoformat()
 
     # Extract probability sub-components for ML feature extraction
@@ -727,6 +729,13 @@ def build_signal_evaluation_row(
             trade.get("market_data_provenance_issues")
             or market_data_provenance.get("issues")
         ),
+        "multi_source_ingestion_enabled": bool(multi_source_ingestion.get("enabled")),
+        "multi_source_primary_source": multi_source_ingestion.get("primary_source"),
+        "multi_source_requested_sources": _join_list(multi_source_ingestion.get("requested_sources")),
+        "multi_source_successful_sources": _join_list(multi_source_ingestion.get("successful_sources")),
+        "multi_source_failed_sources": _join_list(multi_source_ingestion.get("failed_sources")),
+        "multi_source_provider_records_json": _json_compact(multi_source_ingestion.get("provider_records")),
+        "multi_source_saved_chain_paths_json": _json_compact(saved_paths.get("all_chains")),
         "mode": str(result.get("mode") or "").upper().strip(),
         "parameter_pack_name": parameter_pack_name,
         "signal_capture_guarded": result.get("signal_capture_guarded"),

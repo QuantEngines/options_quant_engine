@@ -104,6 +104,8 @@ from config.settings import (
     NUMBER_OF_LOTS,
     MAX_CAPITAL_PER_TRADE,
     DATA_SOURCE_OPTIONS,
+    DEFAULT_DATA_SOURCES,
+    MULTI_SOURCE_INGESTION_ENABLED,
 )
 
 from app.engine_runner import run_engine_snapshot
@@ -117,6 +119,7 @@ from config.policy_resolver import (
 from notifications.telegram_alert import maybe_alert as _telegram_maybe_alert
 from app.terminal_output import render_snapshot, _resolve_top_liquidity_walls
 from data.data_source_router import DataSourceRouter
+from data.multi_source_router import MultiSourceDataRouter, normalize_source_list
 from data.replay_loader import save_option_chain_snapshot
 from data.spot_downloader import save_spot_snapshot
 from news.service import build_default_headline_service
@@ -602,6 +605,45 @@ def choose_data_source():
     return DEFAULT_DATA_SOURCE
 
 
+def _resolve_live_data_sources(args) -> tuple[str, list[str]]:
+    """Resolve primary and optional secondary live data sources."""
+    primary = (args.primary_source or args.source or "").upper().strip()
+    configured_sources = None
+    if args.data_sources:
+        configured_sources = normalize_source_list(args.data_sources, primary_source=primary or None)
+    elif MULTI_SOURCE_INGESTION_ENABLED and not args.no_multi_source:
+        configured_sources = normalize_source_list(DEFAULT_DATA_SOURCES, primary_source=primary or DEFAULT_DATA_SOURCE)
+
+    if configured_sources:
+        if not primary:
+            primary = configured_sources[0]
+        sources = normalize_source_list(configured_sources, primary_source=primary)
+        if args.no_multi_source:
+            return primary, [primary]
+        return primary, sources
+
+    if not primary:
+        primary = choose_data_source()
+    return primary, [primary]
+
+
+def _prompt_provider_credentials_for_sources(sources: list[str]) -> None:
+    """Prompt once for each provider involved in the live run."""
+    seen = set()
+    for source in sources:
+        source = str(source or "").upper().strip()
+        if not source or source in seen:
+            continue
+        seen.add(source)
+        prompt_provider_credentials(source)
+
+
+def _refresh_interval_for_sources(sources: list[str]) -> int:
+    """Use the slowest configured provider interval during multi-source polling."""
+    intervals = [_refresh_interval_for_source(source) for source in sources if source]
+    return max(intervals) if intervals else REFRESH_INTERVAL
+
+
 def parse_runtime_args():
     """
     Purpose:
@@ -625,6 +667,28 @@ def parse_runtime_args():
     parser.add_argument("--replay-chain", help="Path to a saved option-chain snapshot CSV/JSON file")
     parser.add_argument("--replay-dir", default="debug_samples", help="Directory used to auto-discover latest replay snapshots")
     parser.add_argument("--replay-source", default="REPLAY", help="Label to display as the data source during replay mode")
+    parser.add_argument(
+        "--source",
+        default=None,
+        choices=DATA_SOURCE_OPTIONS,
+        help="Live primary option-chain source. Skips the interactive source prompt when supplied.",
+    )
+    parser.add_argument(
+        "--primary-source",
+        default=None,
+        choices=DATA_SOURCE_OPTIONS,
+        help="Primary source when --data-sources or OQE_DATA_SOURCES enables multi-source ingestion.",
+    )
+    parser.add_argument(
+        "--data-sources",
+        default=None,
+        help="Comma-separated live option-chain sources to fetch in parallel, e.g. ICICI,ZERODHA.",
+    )
+    parser.add_argument(
+        "--no-multi-source",
+        action="store_true",
+        help="Force single-source ingestion even when OQE_DATA_SOURCES or OQE_MULTI_SOURCE_ENABLED is configured.",
+    )
     parser.add_argument(
         "--signal-capture-policy",
         default=CAPTURE_POLICY_ALL,
@@ -1392,16 +1456,21 @@ def main():
     symbol = choose_underlying_symbol()
     headline_service = build_default_headline_service()
 
-    source = args.replay_source.upper().strip() if args.replay else choose_data_source()
-    if not args.replay:
-        prompt_provider_credentials(source)
+    if args.replay:
+        source = args.replay_source.upper().strip()
+        live_sources = [source]
+    else:
+        source, live_sources = _resolve_live_data_sources(args)
+        _prompt_provider_credentials_for_sources(live_sources)
     apply_budget_constraint = choose_budget_mode()
     lot_size, requested_lots, max_capital = get_budget_inputs(apply_budget_constraint)
     output_mode = choose_output_mode(default=output_mode)
-    refresh_interval = 0 if args.replay else _refresh_interval_for_source(source)
+    refresh_interval = 0 if args.replay else _refresh_interval_for_sources(live_sources)
 
     print("\nRunning Quant Engine for:", symbol)
     print("Data Source:", source)
+    if len(live_sources) > 1:
+        print("Parallel Data Sources:", ", ".join(live_sources))
     print("Budget Constraint Applied:", apply_budget_constraint)
     print("Output Mode:", output_mode)
     print("Save Live Snapshots:", bool(args.save_live_snapshots and not args.replay))
@@ -1410,7 +1479,10 @@ def main():
         data_router = None
     else:
         try:
-            data_router = DataSourceRouter(source)
+            if len(live_sources) > 1:
+                data_router = MultiSourceDataRouter(live_sources, primary_source=source)
+            else:
+                data_router = DataSourceRouter(source)
         except Exception as e:
             print(f"\nFailed to initialize data source '{source}': {e}")
             print("Check credentials, session tokens, installed packages, and expiry configuration.")

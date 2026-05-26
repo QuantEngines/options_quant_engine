@@ -19,7 +19,7 @@ import logging
 import os
 import traceback
 from contextlib import nullcontext
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -895,6 +895,7 @@ def _persist_snapshot_artifacts(
     option_chain: pd.DataFrame,
     symbol: str,
     source: str,
+    data_router: Optional[Any] = None,
 ) -> dict | None:
     """
     Purpose:
@@ -945,6 +946,35 @@ def _persist_snapshot_artifacts(
             exc,
         )
         saved_paths["chain"] = None
+
+    provider_frames = getattr(data_router, "last_provider_frames", None)
+    collection = getattr(data_router, "last_collection", None)
+    if isinstance(provider_frames, dict) and isinstance(collection, dict) and collection.get("enabled"):
+        all_chains = {str(source).upper().strip(): saved_paths.get("chain")}
+        secondary_chains = {}
+        primary_source = str(collection.get("primary_source") or source or "").upper().strip()
+        for provider_source, provider_frame in provider_frames.items():
+            provider_source = str(provider_source or "").upper().strip()
+            if not provider_source or provider_source == primary_source:
+                continue
+            try:
+                secondary_path = save_option_chain_snapshot(
+                    provider_frame,
+                    symbol=symbol,
+                    source=provider_source,
+                )
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Failed to persist secondary option-chain snapshot for %s/%s: %s",
+                    symbol,
+                    provider_source,
+                    exc,
+                )
+                secondary_path = None
+            secondary_chains[provider_source] = secondary_path
+            all_chains[provider_source] = secondary_path
+        saved_paths["all_chains"] = all_chains
+        saved_paths["secondary_chains"] = secondary_chains
     return saved_paths
 
 
@@ -955,6 +985,7 @@ def _build_result_payload(
     symbol: str,
     replay_paths: dict | None,
     saved_paths: dict | None,
+    multi_source_ingestion: dict | None,
     spot_snapshot: dict,
     spot_validation: dict,
     spot: float,
@@ -1035,6 +1066,7 @@ def _build_result_payload(
         "symbol": symbol,
         "replay_paths": replay_paths,
         "saved_paths": saved_paths,
+        "multi_source_ingestion": multi_source_ingestion,
         "spot_snapshot": spot_snapshot,
         "spot_validation": spot_validation,
         "spot_summary": {
@@ -1440,6 +1472,7 @@ def run_preloaded_engine_snapshot(
     shadow_evaluation_sink: Optional[ShadowEvaluationSink] = None,
     replay_paths: dict | None = None,
     saved_paths: dict | None = None,
+    multi_source_ingestion: dict | None = None,
     macro_event_state: Optional[dict] = None,
     headline_state=None,
     global_market_snapshot: Optional[dict] = None,
@@ -1608,6 +1641,7 @@ def run_preloaded_engine_snapshot(
             symbol=symbol,
             replay_paths=replay_paths,
             saved_paths=saved_paths,
+            multi_source_ingestion=multi_source_ingestion,
             spot_snapshot=snapshot_context["spot_snapshot"],
             spot_validation=snapshot_context["spot_validation"],
             spot=snapshot_context["spot"],
@@ -1845,6 +1879,7 @@ def run_engine_snapshot(
             option_chain=option_chain,
             symbol=symbol,
             source=source,
+            data_router=data_router or managed_data_router,
         )
 
         # Accumulate local spot history for outcome enrichment fallback
@@ -1912,6 +1947,7 @@ def run_engine_snapshot(
             shadow_evaluation_sink=shadow_evaluation_sink,
             replay_paths=replay_paths,
             saved_paths=saved_paths,
+            multi_source_ingestion=getattr(data_router or managed_data_router, "last_collection", None),
             global_market_snapshot=global_market_snapshot,
             live_calibration_gate=live_calibration_gate,
             live_directional_gate=live_directional_gate,

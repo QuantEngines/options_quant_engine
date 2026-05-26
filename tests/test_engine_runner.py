@@ -447,6 +447,96 @@ def test_run_engine_snapshot_closes_managed_router(monkeypatch):
     assert router.closed is True
 
 
+def test_run_engine_snapshot_persists_multi_source_secondary_snapshots(monkeypatch):
+    saved_chains = []
+
+    class _Router:
+        source = "ICICI"
+        loader = object()
+
+        def __init__(self):
+            self.last_provider_frames = {
+                "ICICI": _option_chain_with_timestamp("2026-03-15T09:20:00+05:30", source="ICICI"),
+                "ZERODHA": _option_chain_with_timestamp("2026-03-15T09:20:00+05:30", source="ZERODHA"),
+            }
+            self.last_collection = {
+                "enabled": True,
+                "mode": "MULTI_SOURCE_PARALLEL",
+                "primary_source": "ICICI",
+                "requested_sources": ["ICICI", "ZERODHA"],
+                "successful_sources": ["ICICI", "ZERODHA"],
+                "failed_sources": [],
+                "provider_records": [],
+                "primary_ok": True,
+            }
+
+        def get_option_chain(self, symbol):
+            return self.last_provider_frames["ICICI"]
+
+        def get_expiry_candidates(self):
+            return []
+
+    router = _Router()
+
+    monkeypatch.setattr(engine_runner, "get_spot_snapshot", lambda symbol, **kwargs: _spot_snapshot())
+    monkeypatch.setattr(engine_runner, "save_spot_snapshot", lambda snapshot: "spot.json")
+
+    def fake_save_chain(option_chain, *, symbol, source, output_dir="debug_samples"):
+        saved_chains.append(source)
+        return f"{source}_chain.csv"
+
+    monkeypatch.setattr(engine_runner, "save_option_chain_snapshot", fake_save_chain)
+    monkeypatch.setattr(engine_runner, "evaluate_scheduled_event_risk", lambda symbol, as_of: {"macro_event_risk_score": 0})
+    monkeypatch.setattr(engine_runner, "build_global_market_snapshot", lambda symbol, as_of: {"vix": 13.0})
+    monkeypatch.setattr(engine_runner, "resolve_selected_expiry", lambda option_chain: "2026-03-26")
+    monkeypatch.setattr(engine_runner, "filter_option_chain_by_expiry", lambda option_chain, expiry: option_chain)
+    monkeypatch.setattr(
+        engine_runner,
+        "validate_option_chain",
+        lambda option_chain, **kwargs: {
+            "is_valid": True,
+            "is_stale": False,
+            "selected_expiry": "2026-03-26",
+            "provider_health": {"summary_status": "GOOD", "source": option_chain.iloc[0]["source"]},
+        },
+    )
+    monkeypatch.setattr(
+        engine_runner,
+        "_evaluate_snapshot_for_pack",
+        lambda *, parameter_pack_name, **kwargs: {
+            "parameter_pack_name": parameter_pack_name or "default_pack",
+            "macro_news_state": {"macro_bias": "NEUTRAL"},
+            "global_risk_state": {"global_risk_state": "GLOBAL_NEUTRAL"},
+            "trade": {"signal_id": "multi-source-signal", "ranked_strike_candidates": []},
+        },
+    )
+
+    result = engine_runner.run_engine_snapshot(
+        symbol="NIFTY",
+        mode="LIVE",
+        source="ICICI",
+        apply_budget_constraint=False,
+        requested_lots=1,
+        lot_size=50,
+        max_capital=100000,
+        capture_signal_evaluation=False,
+        save_live_snapshots=True,
+        headline_service=_HeadlineService(),
+        data_router=router,
+    )
+
+    assert result["ok"] is True
+    assert result["source"] == "ICICI"
+    assert result["multi_source_ingestion"]["requested_sources"] == ["ICICI", "ZERODHA"]
+    assert result["saved_paths"]["chain"] == "ICICI_chain.csv"
+    assert result["saved_paths"]["secondary_chains"] == {"ZERODHA": "ZERODHA_chain.csv"}
+    assert result["saved_paths"]["all_chains"] == {
+        "ICICI": "ICICI_chain.csv",
+        "ZERODHA": "ZERODHA_chain.csv",
+    }
+    assert saved_chains == ["ICICI", "ZERODHA"]
+
+
 def test_run_engine_snapshot_replay_uses_source_aware_selection_and_emits_diagnostics(monkeypatch):
     captured = {}
 

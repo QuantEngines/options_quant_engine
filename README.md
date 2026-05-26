@@ -1351,8 +1351,27 @@ Default provider:
 
 ```bash
 OQE_DEFAULT_DATA_SOURCE=ICICI   # ICICI | ZERODHA
+OQE_DATA_SOURCES=               # blank = single-source path
+OQE_MULTI_SOURCE_ENABLED=false  # optional explicit enable flag
 OQE_ICICI_REFRESH_INTERVAL=8
 ```
+
+Multi-source ingestion:
+
+```bash
+OQE_DEFAULT_DATA_SOURCE=ICICI
+OQE_DATA_SOURCES=ICICI,ZERODHA
+OQE_MULTI_SOURCE_ENABLED=true
+python main.py --output-mode COMPACT --signal-capture-policy ALL_SIGNALS --save-live-snapshots
+```
+
+Equivalent one-off CLI run:
+
+```bash
+python main.py --source ICICI --data-sources ICICI,ZERODHA --output-mode COMPACT --signal-capture-policy ALL_SIGNALS --save-live-snapshots
+```
+
+The first/primary source still feeds live trade decisions. Secondary sources are fetched in parallel, normalized, health summarized, and saved as provider-tagged option-chain snapshots for provider-quality comparison and future reconciliation. If only one source is configured, the engine uses the same single-provider path as before.
 
 Zerodha:
 
