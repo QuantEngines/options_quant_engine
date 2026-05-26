@@ -129,6 +129,67 @@ class TestCompactTradeDecisionBlockRendering:
             # Should display as <1% or similar small value
             assert "<1%" in output or "0.4%" in output
 
+    def test_compact_suggestion_distinguishes_analytics_only_provider_block(self):
+        trade = self._create_mock_trade(trade_status="WATCHLIST")
+        trade.update(
+            {
+                "no_trade_reason_code": "EXECUTION_DATA_UNUSABLE",
+                "provider_quality_mode": "ANALYTICS_ONLY_EXECUTION_BLOCKED",
+            }
+        )
+
+        with patch("app.terminal_output.compute_signal_confidence") as mock_conf:
+            mock_conf.return_value = {
+                "confidence_score": 45,
+                "confidence_level": "LOW",
+                "confidence_recalibration_guards": [],
+            }
+
+            output_buffer = io.StringIO()
+            with redirect_stdout(output_buffer):
+                render_compact(
+                    result={},
+                    trade=trade,
+                    spot_summary={},
+                    macro_event_state={},
+                    global_risk_state={},
+                    execution_trade=None,
+                )
+
+        output = output_buffer.getvalue()
+        assert "Signal analytics are usable, but execution data is not tradable" in output
+
+    def test_compact_suggestion_distinguishes_direction_blocked_provider_data(self):
+        trade = self._create_mock_trade(trade_status="WATCHLIST")
+        trade.update(
+            {
+                "no_trade_reason_code": "PROVIDER_HEALTH_BLOCK",
+                "blocked_by": ["provider_health"],
+                "provider_quality_mode": "DATA_UNUSABLE_DIRECTION_BLOCKED",
+            }
+        )
+
+        with patch("app.terminal_output.compute_signal_confidence") as mock_conf:
+            mock_conf.return_value = {
+                "confidence_score": 30,
+                "confidence_level": "LOW",
+                "confidence_recalibration_guards": [],
+            }
+
+            output_buffer = io.StringIO()
+            with redirect_stdout(output_buffer):
+                render_compact(
+                    result={},
+                    trade=trade,
+                    spot_summary={},
+                    macro_event_state={},
+                    global_risk_state={},
+                    execution_trade=None,
+                )
+
+        output = output_buffer.getvalue()
+        assert "Provider data is not reliable enough for direction or execution" in output
+
     def test_compact_trade_decision_with_provider_health_weak_and_policy_block(self):
         """GIVEN a trade with provider_health=WEAK and policy decision=BLOCK,
         WHEN render_compact is called,

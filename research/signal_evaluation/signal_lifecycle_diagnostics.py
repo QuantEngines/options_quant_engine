@@ -163,6 +163,27 @@ def _positive_share(series: pd.Series) -> float | None:
     return float((numeric > 0.0).mean())
 
 
+def _abs_numeric(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce").abs()
+
+
+def _mfe_mae_ratio(mfe: pd.Series, mae: pd.Series) -> float | None:
+    avg_mfe = _mean(mfe)
+    avg_abs_mae = _mean(_abs_numeric(mae))
+    if avg_mfe is None or avg_abs_mae is None or avg_abs_mae <= 0:
+        return None
+    return avg_mfe / avg_abs_mae
+
+
+def _adverse_path_share(mfe: pd.Series, mae: pd.Series) -> float | None:
+    mfe_num = pd.to_numeric(mfe, errors="coerce")
+    mae_abs = _abs_numeric(mae)
+    valid = pd.DataFrame({"mfe": mfe_num, "mae_abs": mae_abs}).dropna()
+    if valid.empty:
+        return None
+    return float((valid["mae_abs"] > valid["mfe"]).mean())
+
+
 def _numeric_columns(frame: pd.DataFrame) -> pd.DataFrame:
     working = frame.copy()
     for column in working.columns:
@@ -577,6 +598,22 @@ def _milestone_comparison(episodes: pd.DataFrame) -> list[dict[str, Any]]:
             "hit_rate_60m": _round(_pct_mean(selected.get(f"{milestone}_correct_60m", pd.Series(dtype=float)))),
             "avg_mfe_60m_bps": _round(_mean(selected.get(f"{milestone}_mfe_60m_bps", pd.Series(dtype=float)))),
             "avg_mae_60m_bps": _round(_mean(selected.get(f"{milestone}_mae_60m_bps", pd.Series(dtype=float)))),
+            "mfe_mae_ratio_60m": _round(
+                _mfe_mae_ratio(
+                    selected.get(f"{milestone}_mfe_60m_bps", pd.Series(dtype=float)),
+                    selected.get(f"{milestone}_mae_60m_bps", pd.Series(dtype=float)),
+                ),
+                3,
+            ),
+            "adverse_path_share_60m": _round(
+                (_adverse_path_share(
+                    selected.get(f"{milestone}_mfe_60m_bps", pd.Series(dtype=float)),
+                    selected.get(f"{milestone}_mae_60m_bps", pd.Series(dtype=float)),
+                ) or 0.0)
+                * 100.0,
+            )
+            if selected.get(f"{milestone}_mfe_60m_bps", pd.Series(dtype=float)).notna().any()
+            else None,
             "avg_option_premium_return_60m_bps": _round(
                 _mean(selected.get(f"{milestone}_option_premium_return_60m_bps", pd.Series(dtype=float)))
             ),
@@ -594,6 +631,10 @@ def _milestone_comparison(episodes: pd.DataFrame) -> list[dict[str, Any]]:
             "premium_milestone_helped_60m_share": _round((_positive_share(premium_delta) or 0.0) * 100.0)
             if premium_delta.notna().any()
             else None,
+            "selected_minus_first_mfe_60m_bps": None,
+            "mae_improvement_vs_first_60m_bps": None,
+            "path_quality_delta_vs_first_60m": None,
+            "path_quality_helped_60m_share": None,
             "false_positive_removal_60m": _round(
                 len(suppressed_ids & baseline_non_hit_ids) / len(baseline_non_hit_ids) * 100.0
                 if baseline_non_hit_ids
@@ -603,6 +644,23 @@ def _milestone_comparison(episodes: pd.DataFrame) -> list[dict[str, Any]]:
                 len(suppressed_ids & baseline_hit_ids) / len(baseline_hit_ids) * 100.0 if baseline_hit_ids else None
             ),
         }
+        selected_mfe = pd.to_numeric(selected.get(f"{milestone}_mfe_60m_bps", pd.Series(dtype=float)), errors="coerce")
+        first_mfe = pd.to_numeric(selected.get("first_seen_mfe_60m_bps", pd.Series(dtype=float)), errors="coerce")
+        selected_mae_abs = _abs_numeric(selected.get(f"{milestone}_mae_60m_bps", pd.Series(dtype=float)))
+        first_mae_abs = _abs_numeric(selected.get("first_seen_mae_60m_bps", pd.Series(dtype=float)))
+        if milestone == "first_seen":
+            mfe_delta = pd.Series(0.0, index=selected.index, dtype="float64")
+            mae_improvement = pd.Series(0.0, index=selected.index, dtype="float64")
+        else:
+            mfe_delta = selected_mfe - first_mfe
+            mae_improvement = first_mae_abs - selected_mae_abs
+        path_delta = mfe_delta + mae_improvement
+        row["selected_minus_first_mfe_60m_bps"] = _round(_mean(mfe_delta))
+        row["mae_improvement_vs_first_60m_bps"] = _round(_mean(mae_improvement))
+        row["path_quality_delta_vs_first_60m"] = _round(_mean(path_delta))
+        row["path_quality_helped_60m_share"] = (
+            _round((_positive_share(path_delta) or 0.0) * 100.0) if path_delta.notna().any() else None
+        )
         rows.append(row)
     return rows
 
@@ -612,6 +670,13 @@ def _diagnostic_read(report: dict[str, Any]) -> dict[str, Any]:
     first = milestones.get("first_seen") or {}
     confirmation = milestones.get("first_confirmation") or {}
     mature = milestones.get("mature") or {}
+    comparable = [
+        row
+        for row in (report.get("milestone_comparison") or [])
+        if _safe_float(row.get("mfe_mae_ratio_60m"), None) is not None
+        and int(row.get("selected_episode_count") or 0) > 0
+    ]
+    best_path = max(comparable, key=lambda row: _safe_float(row.get("mfe_mae_ratio_60m"), -np.inf), default={})
     return {
         "episode_sample_is_small": bool((report.get("coverage") or {}).get("episode_count", 0) < 100),
         "confirmation_improves_60m_return": bool(
@@ -625,6 +690,20 @@ def _diagnostic_read(report: dict[str, Any]) -> dict[str, Any]:
         "first_seen_hit_rate_60m": first.get("hit_rate_60m"),
         "first_confirmation_hit_rate_60m": confirmation.get("hit_rate_60m"),
         "mature_hit_rate_60m": mature.get("hit_rate_60m"),
+        "first_seen_mfe_mae_ratio_60m": first.get("mfe_mae_ratio_60m"),
+        "first_seen_adverse_path_share_60m": first.get("adverse_path_share_60m"),
+        "confirmation_improves_path_quality_60m": bool(
+            _safe_float(confirmation.get("path_quality_delta_vs_first_60m"), 0.0) > 0.0
+        )
+        if confirmation
+        else None,
+        "maturity_improves_path_quality_60m": bool(
+            _safe_float(mature.get("path_quality_delta_vs_first_60m"), 0.0) > 0.0
+        )
+        if mature
+        else None,
+        "best_path_quality_milestone": best_path.get("milestone"),
+        "best_path_quality_mfe_mae_ratio_60m": best_path.get("mfe_mae_ratio_60m"),
     }
 
 
@@ -765,12 +844,19 @@ def render_signal_lifecycle_markdown(report: dict[str, Any]) -> str:
         f"- First-seen 60m hit rate: `{read.get('first_seen_hit_rate_60m')}`",
         f"- First-confirmation 60m hit rate: `{read.get('first_confirmation_hit_rate_60m')}`",
         f"- Mature 60m hit rate: `{read.get('mature_hit_rate_60m')}`",
+        f"- First-seen MFE/MAE ratio 60m: `{read.get('first_seen_mfe_mae_ratio_60m')}`",
+        f"- First-seen adverse path share 60m: `{read.get('first_seen_adverse_path_share_60m')}`",
+        f"- Confirmation improves path quality 60m: `{read.get('confirmation_improves_path_quality_60m')}`",
+        f"- Maturity improves path quality 60m: `{read.get('maturity_improves_path_quality_60m')}`",
+        f"- Best path-quality milestone: `{read.get('best_path_quality_milestone')}` "
+        f"(MFE/MAE `{read.get('best_path_quality_mfe_mae_ratio_60m')}`)",
         "",
         "## Milestone Comparison",
         "",
         "Retention shows how many episodes survive to each milestone. "
         "`false_positive_removal_60m` is the share of first-seen 60m misses excluded by waiting; "
         "`true_positive_loss_60m` is the share of first-seen 60m winners excluded by waiting.",
+        " `mfe_mae_ratio_60m` above 1 means favorable excursion exceeded adverse excursion on average.",
         "",
     ]
     lines.extend(
@@ -787,7 +873,13 @@ def render_signal_lifecycle_markdown(report: dict[str, Any]) -> str:
                 "hit_rate_60m",
                 "avg_mfe_60m_bps",
                 "avg_mae_60m_bps",
+                "mfe_mae_ratio_60m",
+                "adverse_path_share_60m",
                 "selected_minus_first_return_60m_bps",
+                "selected_minus_first_mfe_60m_bps",
+                "mae_improvement_vs_first_60m_bps",
+                "path_quality_delta_vs_first_60m",
+                "path_quality_helped_60m_share",
                 "milestone_helped_60m_share",
                 "false_positive_removal_60m",
                 "true_positive_loss_60m",

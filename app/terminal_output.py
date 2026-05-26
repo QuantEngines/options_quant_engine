@@ -2833,6 +2833,18 @@ def _render_data_usability_diagnostics(trade, *, verbose=False):
     print("---------------------------")
     print(f"{'analytics_usable':26}: {analytics_usable}")
     print(f"{'execution_suggestion_usable':26}: {execution_usable}")
+    for label, key in (
+        ("provider_quality_mode", "provider_quality_mode"),
+        ("direction_trust", "provider_direction_trust"),
+        ("execution_trust", "provider_execution_trust"),
+        ("provider_action", "provider_quality_action"),
+    ):
+        value = trade.get(key)
+        if value not in (None, "", []):
+            print(f"{label:26}: {value}")
+    provider_note = trade.get("provider_quality_note")
+    if provider_note:
+        print(f"{'provider_note':26}: {provider_note}")
     if provider_execution_blocked:
         print(f"{'provider_exec_blocked':26}: {provider_execution_blocked}")
 
@@ -3381,7 +3393,12 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         ).upper()
         _direction = (trade or {}).get("direction")
 
-        if "provider_health" in _blocked_by or _reason_code.startswith("PROVIDER_HEALTH_"):
+        _provider_mode = str((trade or {}).get("provider_quality_mode") or "").upper()
+        if _provider_mode == "DATA_UNUSABLE_DIRECTION_BLOCKED":
+            print("  No trade yet. Provider data is not reliable enough for direction or execution.")
+        elif _reason_code == "EXECUTION_DATA_UNUSABLE" or _provider_mode == "ANALYTICS_ONLY_EXECUTION_BLOCKED":
+            print("  No trade yet. Signal analytics are usable, but execution data is not tradable.")
+        elif "provider_health" in _blocked_by or _reason_code.startswith("PROVIDER_HEALTH_"):
             print("  No trade yet. Provider health is blocking execution.")
         elif _confirmation in {"NO_DIRECTION", "CONFLICT"} or not _direction:
             print("  No trade yet. Waiting for directional confirmation.")
@@ -4014,6 +4031,16 @@ _DIAGNOSTIC_KEYS = [
     "provider_health",
     "analytics_usable",
     "execution_suggestion_usable",
+    "provider_quality_mode",
+    "provider_analytics_status",
+    "provider_execution_status",
+    "provider_direction_trust",
+    "provider_execution_trust",
+    "provider_quality_action",
+    "provider_quality_note",
+    "provider_quality_blocks_direction",
+    "provider_quality_blocks_execution",
+    "provider_quality_reasons",
     "tradable_data",
     "feature_reliability_weights",
     "iv_surface_residual_status",
@@ -4120,6 +4147,9 @@ def _render_full_signal_summary(trade, option_chain_frame=None):
         "signal_quality": trade.get("signal_quality"),
         "analytics_usable": trade.get("analytics_usable"),
         "execution_suggestion_usable": trade.get("execution_suggestion_usable"),
+        "provider_quality_mode": trade.get("provider_quality_mode"),
+        "provider_direction_trust": trade.get("provider_direction_trust"),
+        "provider_execution_trust": trade.get("provider_execution_trust"),
         "decision_classification": trade.get("decision_classification"),
         "setup_state": trade.get("setup_state"),
         "setup_quality": trade.get("setup_quality"),

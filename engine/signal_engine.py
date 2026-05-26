@@ -179,6 +179,118 @@ def _build_runtime_data_contract(option_chain_validation):
     }
 
 
+def _build_provider_quality_context(
+    *,
+    provider_health,
+    analytics_usable,
+    execution_suggestion_usable,
+    data_quality_status,
+    tradable_data=None,
+):
+    """Separate provider impact on analytics from provider impact on execution."""
+
+    provider_health = provider_health if isinstance(provider_health, dict) else {}
+    tradable_data = tradable_data if isinstance(tradable_data, dict) else {}
+    analytics_ok = bool(analytics_usable)
+    execution_ok = bool(execution_suggestion_usable)
+
+    provider_summary = _as_upper(provider_health.get("summary_status")) or "UNKNOWN"
+    data_quality = _as_upper(data_quality_status) or "UNKNOWN"
+    block_status = _as_upper(provider_health.get("trade_blocking_status"))
+    row_health = _as_upper(provider_health.get("row_health"))
+    pricing_health = _as_upper(provider_health.get("pricing_health"))
+    pairing_health = _as_upper(provider_health.get("pairing_health"))
+    core_market = _as_upper(provider_health.get("core_marketability_health"))
+    core_pairing = _as_upper(provider_health.get("core_pairing_health"))
+    core_iv = _as_upper(provider_health.get("core_iv_health"))
+    core_quote = _as_upper(provider_health.get("core_quote_integrity_health"))
+    quote_health = _as_upper(provider_health.get("quote_health"))
+    trade_price_health = _as_upper(provider_health.get("trade_price_health"))
+    tradable_status = _as_upper(tradable_data.get("status"))
+
+    blocking_reasons = provider_health.get("trade_blocking_reasons")
+    if not isinstance(blocking_reasons, list):
+        blocking_reasons = []
+    tradable_reasons = tradable_data.get("reasons")
+    if not isinstance(tradable_reasons, list):
+        tradable_reasons = []
+    reasons = _dedupe_keep_order([*blocking_reasons, *tradable_reasons])
+
+    severe_analytics_components = {row_health, pairing_health, core_market, core_pairing}
+    degraded_analytics_components = {core_iv, data_quality, provider_summary}
+    quote_weak = "WEAK" in {core_quote, quote_health, pricing_health, trade_price_health}
+    quote_caution = "CAUTION" in {core_quote, quote_health, pricing_health, trade_price_health}
+
+    if not analytics_ok:
+        analytics_status = "UNUSABLE"
+        direction_trust = "DO_NOT_TRUST_PROVIDER_DIRECTION"
+        blocks_direction = True
+    elif "WEAK" in severe_analytics_components:
+        analytics_status = "DEGRADED"
+        direction_trust = "USE_DIRECTION_WITH_CAUTION"
+        blocks_direction = False
+    elif "WEAK" in degraded_analytics_components or "CAUTION" in degraded_analytics_components:
+        analytics_status = "USABLE_WITH_CAUTION"
+        direction_trust = "TRUST_PROVIDER_ANALYTICS_WITH_CAUTION"
+        blocks_direction = False
+    else:
+        analytics_status = "USABLE"
+        direction_trust = "TRUST_PROVIDER_ANALYTICS"
+        blocks_direction = False
+
+    execution_blocked = (not execution_ok) or block_status in {"BLOCK", "BLOCKED"}
+    if execution_blocked:
+        execution_status = "BLOCKED"
+        execution_trust = "DO_NOT_TRADE_EXECUTION_QUOTES"
+        blocks_execution = True
+    elif quote_weak or tradable_status in {"ANALYTICS_ONLY", "EXECUTION_UNUSABLE"}:
+        execution_status = "DEGRADED"
+        execution_trust = "EXECUTION_QUOTES_DEGRADED"
+        blocks_execution = False
+    elif quote_caution:
+        execution_status = "USABLE_WITH_CAUTION"
+        execution_trust = "EXECUTION_QUOTES_USABLE_WITH_CAUTION"
+        blocks_execution = False
+    else:
+        execution_status = "USABLE"
+        execution_trust = "EXECUTION_QUOTES_USABLE"
+        blocks_execution = False
+
+    if blocks_direction:
+        mode = "DATA_UNUSABLE_DIRECTION_BLOCKED"
+        action = "IGNORE_DIRECTION_AND_EXECUTION"
+        note = "Provider data is not reliable enough for direction or execution."
+    elif blocks_execution:
+        mode = "ANALYTICS_ONLY_EXECUTION_BLOCKED"
+        action = "OBSERVE_SIGNAL_DO_NOT_EXECUTE"
+        note = "Direction analytics are usable, but execution quotes/tradable data are not reliable enough to trade."
+    elif execution_status in {"DEGRADED", "USABLE_WITH_CAUTION"}:
+        mode = "ANALYTICS_OK_EXECUTION_DEGRADED"
+        action = "TRADE_ONLY_WITH_EXECUTION_CAUTION"
+        note = "Direction analytics are usable; execution quality is degraded and should constrain sizing/slippage assumptions."
+    elif analytics_status != "USABLE":
+        mode = "ANALYTICS_CAUTION_EXECUTION_OK"
+        action = "USE_DIRECTION_WITH_CAUTION"
+        note = "Execution quotes are usable, but analytics quality is degraded."
+    else:
+        mode = "ANALYTICS_AND_EXECUTION_USABLE"
+        action = "NORMAL_ANALYTICS_AND_EXECUTION"
+        note = "Provider data is usable for both analytics and execution suggestion."
+
+    return {
+        "provider_quality_mode": mode,
+        "provider_analytics_status": analytics_status,
+        "provider_execution_status": execution_status,
+        "provider_direction_trust": direction_trust,
+        "provider_execution_trust": execution_trust,
+        "provider_quality_action": action,
+        "provider_quality_note": note,
+        "provider_quality_blocks_direction": bool(blocks_direction),
+        "provider_quality_blocks_execution": bool(blocks_execution),
+        "provider_quality_reasons": reasons,
+    }
+
+
 _DECAY_SIGNAL_STATE = {}
 _PATH_SIGNAL_STATE = {}
 _PATH_FILTER = None
@@ -4324,6 +4436,13 @@ def generate_trade(
     provider_health = provider_health if isinstance(provider_health, dict) else {}
     provider_health_summary = _as_upper(provider_health.get("summary_status"))
     data_contract = _build_runtime_data_contract(option_chain_validation)
+    provider_quality_context = _build_provider_quality_context(
+        provider_health=provider_health,
+        analytics_usable=bool(option_chain_validation.get("analytics_usable")) if isinstance(option_chain_validation, dict) else False,
+        execution_suggestion_usable=bool(option_chain_validation.get("execution_suggestion_usable")) if isinstance(option_chain_validation, dict) else False,
+        data_quality_status=data_quality.get("status"),
+        tradable_data=option_chain_validation.get("tradable_data") if isinstance(option_chain_validation, dict) else None,
+    )
 
     at_flip_penalty_applied = 0
     at_flip_size_cap = 1.0
@@ -4531,6 +4650,7 @@ def generate_trade(
         "data_readiness_score": provider_health.get("market_data_readiness_score"),
         "data_confidence_tier": provider_health.get("market_data_readiness_tier"),
         **data_contract,
+        **provider_quality_context,
         "analytics_usable": bool(option_chain_validation.get("analytics_usable")) if isinstance(option_chain_validation, dict) else False,
         "execution_suggestion_usable": bool(option_chain_validation.get("execution_suggestion_usable")) if isinstance(option_chain_validation, dict) else False,
         "tradable_data": option_chain_validation.get("tradable_data") if isinstance(option_chain_validation, dict) else None,

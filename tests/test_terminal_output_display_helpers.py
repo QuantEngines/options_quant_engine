@@ -146,6 +146,11 @@ def test_render_data_usability_diagnostics_shows_usability_and_weights() -> None
             "flow": 0.72,
             "surface": 0.31,
         },
+        "provider_quality_mode": "ANALYTICS_ONLY_EXECUTION_BLOCKED",
+        "provider_direction_trust": "TRUST_PROVIDER_ANALYTICS",
+        "provider_execution_trust": "DO_NOT_TRADE_EXECUTION_QUOTES",
+        "provider_quality_action": "OBSERVE_SIGNAL_DO_NOT_EXECUTE",
+        "provider_quality_note": "Direction analytics are usable, but execution quotes/tradable data are not reliable enough to trade.",
     }
 
     with StringIO() as buffer, redirect_stdout(buffer):
@@ -155,6 +160,9 @@ def test_render_data_usability_diagnostics_shows_usability_and_weights() -> None
     assert "DATA USABILITY" in output
     assert "analytics_usable" in output
     assert "execution_suggestion_usable" in output
+    assert "ANALYTICS_ONLY_EXECUTION_BLOCKED" in output
+    assert "TRUST_PROVIDER_ANALYTICS" in output
+    assert "DO_NOT_TRADE_EXECUTION_QUOTES" in output
     assert "ANALYTICS_ONLY" in output
     assert "feature_weights" in output
 

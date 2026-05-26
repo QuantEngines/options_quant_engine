@@ -177,6 +177,16 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                 "signal_quality": "STRONG",
                 "signal_regime": "EXPANSION_BIAS",
                 "execution_regime": "ACTIVE",
+                "provider_quality_mode": "ANALYTICS_ONLY_EXECUTION_BLOCKED",
+                "provider_analytics_status": "USABLE",
+                "provider_execution_status": "BLOCKED",
+                "provider_direction_trust": "TRUST_PROVIDER_ANALYTICS",
+                "provider_execution_trust": "DO_NOT_TRADE_EXECUTION_QUOTES",
+                "provider_quality_action": "OBSERVE_SIGNAL_DO_NOT_EXECUTE",
+                "provider_quality_note": "Direction analytics are usable, but execution quotes/tradable data are not reliable enough to trade.",
+                "provider_quality_blocks_direction": False,
+                "provider_quality_blocks_execution": True,
+                "provider_quality_reasons": ["wide_spread"],
                 "trade_status": "TRADE",
                 "direction_source": "FLOW+HEDGING_BIAS",
                 "final_flow_signal": "BULLISH_FLOW",
@@ -398,6 +408,13 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(row_a["effective_min_composite_score_threshold"], 58)
         self.assertEqual(row_a["analytics_usable"], True)
         self.assertEqual(row_a["execution_suggestion_usable"], False)
+        self.assertEqual(row_a["provider_quality_mode"], "ANALYTICS_ONLY_EXECUTION_BLOCKED")
+        self.assertEqual(row_a["provider_direction_trust"], "TRUST_PROVIDER_ANALYTICS")
+        self.assertEqual(row_a["provider_execution_trust"], "DO_NOT_TRADE_EXECUTION_QUOTES")
+        self.assertEqual(row_a["provider_quality_action"], "OBSERVE_SIGNAL_DO_NOT_EXECUTE")
+        self.assertEqual(row_a["provider_quality_blocks_direction"], False)
+        self.assertEqual(row_a["provider_quality_blocks_execution"], True)
+        self.assertEqual(row_a["provider_quality_reasons"], "wide_spread")
         self.assertEqual(row_a["tradable_data_status"], "ANALYTICS_ONLY")
         self.assertEqual(row_a["signal_confidence_score"], 68.5)
         self.assertEqual(row_a["signal_confidence_level"], "MODERATE")

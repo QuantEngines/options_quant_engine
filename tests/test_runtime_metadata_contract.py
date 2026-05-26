@@ -12,6 +12,10 @@ def test_split_trade_payload_keeps_trust_scalars_execution_facing():
         "requested_option_source": "ICICI",
         "option_source": "ICICI",
         "spot_source": "YFINANCE_INTRADAY",
+        "provider_quality_mode": "ANALYTICS_ONLY_EXECUTION_BLOCKED",
+        "provider_direction_trust": "TRUST_PROVIDER_ANALYTICS",
+        "provider_execution_trust": "DO_NOT_TRADE_EXECUTION_QUOTES",
+        "provider_quality_action": "OBSERVE_SIGNAL_DO_NOT_EXECUTE",
         "option_chain_validation": {"is_valid": True},
         "option_chain_validation_status": "GOOD",
         "signal_confidence_calibration_guardrail": {"status": "CAUTION", "sample_size": 12},
@@ -23,6 +27,10 @@ def test_split_trade_payload_keeps_trust_scalars_execution_facing():
     assert execution_trade["market_data_provenance_status"] == "CAUTION"
     assert execution_trade["market_data_source_consistency"] == "MIXED_SPOT_OPTION_SOURCE"
     assert execution_trade["requested_option_source"] == "ICICI"
+    assert execution_trade["provider_quality_mode"] == "ANALYTICS_ONLY_EXECUTION_BLOCKED"
+    assert execution_trade["provider_direction_trust"] == "TRUST_PROVIDER_ANALYTICS"
+    assert execution_trade["provider_execution_trust"] == "DO_NOT_TRADE_EXECUTION_QUOTES"
+    assert execution_trade["provider_quality_action"] == "OBSERVE_SIGNAL_DO_NOT_EXECUTE"
     assert execution_trade["signal_confidence_calibration_guardrail"]["status"] == "CAUTION"
     assert execution_trade["signal_confidence_recalibration_guards"] == ["thin_calibration_history"]
     assert trade_audit["market_data_provenance"]["status"] == "CAUTION"
@@ -36,6 +44,7 @@ def test_build_trader_view_falls_back_to_full_trade_for_operator_fields():
         "hybrid_move_probability": 0.71,
         "data_quality_status": "GOOD",
         "market_data_provenance_status": "GOOD",
+        "provider_quality_mode": "ANALYTICS_AND_EXECUTION_USABLE",
     }
 
     view = build_trader_view(trade)
@@ -44,3 +53,4 @@ def test_build_trader_view_falls_back_to_full_trade_for_operator_fields():
     assert view["hybrid_move_probability"] == 0.71
     assert view["data_quality_status"] == "GOOD"
     assert view["market_data_provenance_status"] == "GOOD"
+    assert view["provider_quality_mode"] == "ANALYTICS_AND_EXECUTION_USABLE"

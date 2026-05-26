@@ -188,6 +188,15 @@ def test_generate_trade_routes_to_watchlist_when_execution_suggestion_unusable(m
     assert trade.get("trade_status") == "WATCHLIST"
     assert trade.get("no_trade_reason_code") == "EXECUTION_DATA_UNUSABLE"
     assert "tradable-data gate" in str(trade.get("message") or "")
+    assert trade.get("provider_quality_mode") == "ANALYTICS_ONLY_EXECUTION_BLOCKED"
+    assert trade.get("provider_quality_blocks_direction") is False
+    assert trade.get("provider_quality_blocks_execution") is True
+    assert trade.get("provider_direction_trust") in {
+        "TRUST_PROVIDER_ANALYTICS",
+        "TRUST_PROVIDER_ANALYTICS_WITH_CAUTION",
+    }
+    assert trade.get("provider_execution_trust") == "DO_NOT_TRADE_EXECUTION_QUOTES"
+    assert trade.get("provider_quality_action") == "OBSERVE_SIGNAL_DO_NOT_EXECUTE"
 
 
 def test_generate_trade_includes_iv_surface_residual_penalty_in_scoring(monkeypatch):

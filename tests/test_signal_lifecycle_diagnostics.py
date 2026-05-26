@@ -135,6 +135,14 @@ def test_build_signal_lifecycle_report_compares_first_seen_with_milestones():
     assert milestone_rows["first_confirmation"]["selected_episode_count"] == 1
     assert milestone_rows["first_confirmation"]["avg_return_60m_bps"] == 12.0
     assert milestone_rows["first_confirmation"]["selected_minus_first_return_60m_bps"] == 22.0
+    assert milestone_rows["first_confirmation"]["mfe_mae_ratio_60m"] == 3.333
+    assert milestone_rows["first_confirmation"]["adverse_path_share_60m"] == 0.0
+    assert milestone_rows["first_confirmation"]["selected_minus_first_mfe_60m_bps"] == 17.0
+    assert milestone_rows["first_confirmation"]["mae_improvement_vs_first_60m_bps"] == 12.0
+    assert milestone_rows["first_confirmation"]["path_quality_delta_vs_first_60m"] == 29.0
+    assert milestone_rows["first_confirmation"]["path_quality_helped_60m_share"] == 100.0
     assert milestone_rows["first_confirmation"]["false_positive_removal_60m"] == 50.0
     assert milestone_rows["first_confirmation"]["true_positive_loss_60m"] is None
     assert report["diagnostic_read"]["confirmation_improves_60m_return"] is True
+    assert report["diagnostic_read"]["confirmation_improves_path_quality_60m"] is True
+    assert report["diagnostic_read"]["best_path_quality_milestone"] == "first_confirmation"

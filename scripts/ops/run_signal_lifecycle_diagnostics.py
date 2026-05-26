@@ -58,6 +58,18 @@ def main() -> int:
         "maturity_improves_60m_return": (report.get("diagnostic_read") or {}).get(
             "maturity_improves_60m_return"
         ),
+        "confirmation_improves_path_quality_60m": (report.get("diagnostic_read") or {}).get(
+            "confirmation_improves_path_quality_60m"
+        ),
+        "maturity_improves_path_quality_60m": (report.get("diagnostic_read") or {}).get(
+            "maturity_improves_path_quality_60m"
+        ),
+        "best_path_quality_milestone": (report.get("diagnostic_read") or {}).get(
+            "best_path_quality_milestone"
+        ),
+        "best_path_quality_mfe_mae_ratio_60m": (report.get("diagnostic_read") or {}).get(
+            "best_path_quality_mfe_mae_ratio_60m"
+        ),
         "latest_markdown_path": result.get("latest_markdown_path"),
         "latest_json_path": result.get("latest_json_path"),
         "manifest_path": result.get("manifest_path"),
