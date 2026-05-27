@@ -15,6 +15,13 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from config.direction_probability_policy import (
+    DIRECTION_PROBABILITY_DIRECTIONAL_BIAS,
+    DIRECTION_PROBABILITY_LOGIT,
+    DIRECTION_PROBABILITY_MICROSTRUCTURE_FRICTION,
+    DIRECTION_PROBABILITY_UNCERTAINTY,
+)
+from config.policy_resolver import resolve_mapping
 from strategy.score_calibration import ScoreCalibrator
 
 
@@ -31,8 +38,34 @@ _CALIBRATION_SEGMENT_METRICS: dict[str, int] = {
 }
 _CALIBRATION_SEGMENT_METRICS_LOCK = threading.Lock()
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_RR_SCALE_POINTS = 2.0
-_RR_CLIP = 1.0
+
+
+def _directional_bias_policy() -> dict[str, Any]:
+    return resolve_mapping(
+        "signal_engine.direction_probability_head.directional_bias",
+        DIRECTION_PROBABILITY_DIRECTIONAL_BIAS,
+    )
+
+
+def _microstructure_friction_policy() -> dict[str, Any]:
+    return resolve_mapping(
+        "signal_engine.direction_probability_head.microstructure_friction",
+        DIRECTION_PROBABILITY_MICROSTRUCTURE_FRICTION,
+    )
+
+
+def _logit_policy() -> dict[str, Any]:
+    return resolve_mapping(
+        "signal_engine.direction_probability_head.logit",
+        DIRECTION_PROBABILITY_LOGIT,
+    )
+
+
+def _uncertainty_policy() -> dict[str, Any]:
+    return resolve_mapping(
+        "signal_engine.direction_probability_head.uncertainty",
+        DIRECTION_PROBABILITY_UNCERTAINTY,
+    )
 
 
 def _safe_float(value: Any, default: float | None = None) -> float | None:
@@ -64,12 +97,16 @@ def _binary_entropy(probability: float) -> float:
 
 
 def _provider_status_score(status: str) -> float:
+    policy = _microstructure_friction_policy()
     mapping = {
-        "GOOD": 0.0,
-        "CAUTION": 0.5,
-        "WEAK": 1.0,
+        "GOOD": float(policy.get("provider_good_score", 0.0)),
+        "CAUTION": float(policy.get("provider_caution_score", 0.5)),
+        "WEAK": float(policy.get("provider_weak_score", 1.0)),
     }
-    return mapping.get(_as_upper(status), 0.5)
+    return mapping.get(
+        _as_upper(status),
+        float(policy.get("provider_unknown_score", 0.5)),
+    )
 
 
 def _normalize_rr_points(rr_value: Any, rr_unit: Any = None) -> float | None:
@@ -96,61 +133,79 @@ def _directional_signal_bias(
     volume_pcr_atm: Any,
     gamma_flip_drift: Any,
 ) -> float:
+    policy = _directional_bias_policy()
     score = 0.0
 
     flow = _as_upper(final_flow_signal)
     if flow == "BULLISH_FLOW":
-        score += 1.30
+        score += float(policy.get("flow_bullish_score", 1.30))
     elif flow == "BEARISH_FLOW":
-        score -= 1.30
+        score += float(policy.get("flow_bearish_score", -1.30))
 
     flip = _as_upper(spot_vs_flip)
     if flip == "ABOVE_FLIP":
-        score += 0.85
+        score += float(policy.get("above_flip_score", 0.85))
     elif flip == "BELOW_FLIP":
-        score -= 0.85
+        score += float(policy.get("below_flip_score", -0.85))
 
     hedge = _as_upper(hedging_bias)
     if hedge == "UPSIDE_ACCELERATION":
-        score += 1.00
+        score += float(policy.get("upside_acceleration_score", 1.00))
     elif hedge == "DOWNSIDE_ACCELERATION":
-        score -= 1.00
+        score += float(policy.get("downside_acceleration_score", -1.00))
 
     if _as_upper(gamma_event) == "GAMMA_SQUEEZE":
         if flip == "ABOVE_FLIP":
-            score += 0.35
+            score += float(policy.get("gamma_squeeze_flip_score", 0.35))
         elif flip == "BELOW_FLIP":
-            score -= 0.35
+            score -= float(policy.get("gamma_squeeze_flip_score", 0.35))
 
     regime = _as_upper(gamma_regime)
     if regime in {"NEGATIVE_GAMMA", "SHORT_GAMMA_ZONE"}:
-        score += 0.15 if flip == "ABOVE_FLIP" else -0.15 if flip == "BELOW_FLIP" else 0.0
+        negative_gamma_flip_score = float(policy.get("negative_gamma_flip_score", 0.15))
+        score += (
+            negative_gamma_flip_score
+            if flip == "ABOVE_FLIP"
+            else -negative_gamma_flip_score
+            if flip == "BELOW_FLIP"
+            else 0.0
+        )
 
     oi_velocity = _safe_float(oi_velocity_score, None)
     if oi_velocity is not None:
-        score += _clip(oi_velocity, -0.7, 0.7) * 0.55
+        oi_clip = abs(float(policy.get("oi_velocity_clip", 0.70)))
+        score += _clip(oi_velocity, -oi_clip, oi_clip) * float(
+            policy.get("oi_velocity_weight", 0.55)
+        )
 
     rr_points = _normalize_rr_points(rr_value, rr_unit)
     if rr_points is not None:
         # Positive RR implies put skew dominance (bearish), negative RR bullish.
-        rr_scaled = _clip(-(rr_points / _RR_SCALE_POINTS), -_RR_CLIP, _RR_CLIP)
-        score += 0.6 * rr_scaled
+        rr_scale = max(abs(float(policy.get("rr_scale_points", 2.0))), 1e-9)
+        rr_clip = abs(float(policy.get("rr_clip", 1.0)))
+        rr_scaled = _clip(-(rr_points / rr_scale), -rr_clip, rr_clip)
+        score += float(policy.get("rr_weight", 0.60)) * rr_scaled
 
     rr_m = _as_upper(rr_momentum)
     if rr_m == "RISING_PUT_SKEW":
-        score -= 0.20
+        score += float(policy.get("rr_rising_put_skew_score", -0.20))
     elif rr_m == "FALLING_PUT_SKEW":
-        score += 0.20
+        score += float(policy.get("rr_falling_put_skew_score", 0.20))
 
     pcr = _safe_float(volume_pcr_atm, None)
     if pcr is not None:
-        score += _clip((1.0 - pcr) / 0.6, -0.35, 0.35)
+        pcr_scale = max(abs(float(policy.get("pcr_scale", 0.60))), 1e-9)
+        pcr_clip = abs(float(policy.get("pcr_clip", 0.35)))
+        pcr_neutral = float(policy.get("pcr_neutral", 1.0))
+        score += _clip((pcr_neutral - pcr) / pcr_scale, -pcr_clip, pcr_clip)
 
     flip_drift = None
     if isinstance(gamma_flip_drift, dict):
         flip_drift = _safe_float(gamma_flip_drift.get("drift"), None)
     if flip_drift is not None:
-        score += _clip(flip_drift / 250.0, -0.35, 0.35)
+        drift_scale = max(abs(float(policy.get("flip_drift_scale_points", 250.0))), 1e-9)
+        drift_clip = abs(float(policy.get("flip_drift_clip", 0.35)))
+        score += _clip(flip_drift / drift_scale, -drift_clip, drift_clip)
 
     return float(score)
 
@@ -163,26 +218,53 @@ def _microstructure_friction(
     core_one_sided_quote_ratio: Any,
     core_quote_integrity_health: Any,
 ) -> float:
+    policy = _microstructure_friction_policy()
     provider_component = _provider_status_score(_as_upper(provider_health_summary))
-    blocking_component = 1.0 if _as_upper(provider_health_blocking_status) == "BLOCK" else 0.0
+    blocking_component = (
+        float(policy.get("blocking_component_score", 1.0))
+        if _as_upper(provider_health_blocking_status) == "BLOCK"
+        else 0.0
+    )
 
     quote_integrity = _as_upper(core_quote_integrity_health)
-    quote_component = 1.0 if quote_integrity == "WEAK" else 0.5 if quote_integrity == "CAUTION" else 0.0
+    quote_component = (
+        float(policy.get("quote_weak_score", 1.0))
+        if quote_integrity == "WEAK"
+        else float(policy.get("quote_caution_score", 0.5))
+        if quote_integrity == "CAUTION"
+        else float(policy.get("quote_good_score", 0.0))
+    )
 
     priced_ratio = _safe_float(core_effective_priced_ratio, None)
     priced_component = 0.5
     if priced_ratio is not None:
-        priced_component = _clip((0.60 - priced_ratio) / 0.60, 0.0, 1.0)
+        priced_reference = max(
+            abs(float(policy.get("priced_ratio_reference", 0.60))),
+            1e-9,
+        )
+        priced_component = _clip(
+            (priced_reference - priced_ratio) / priced_reference,
+            0.0,
+            1.0,
+        )
 
     one_sided_ratio = _safe_float(core_one_sided_quote_ratio, None)
-    one_sided_component = 0.0 if one_sided_ratio is None else _clip(one_sided_ratio / 0.55, 0.0, 1.0)
+    one_sided_reference = max(
+        abs(float(policy.get("one_sided_ratio_reference", 0.55))),
+        1e-9,
+    )
+    one_sided_component = (
+        0.0
+        if one_sided_ratio is None
+        else _clip(one_sided_ratio / one_sided_reference, 0.0, 1.0)
+    )
 
     friction = (
-        0.30 * provider_component
-        + 0.30 * blocking_component
-        + 0.20 * quote_component
-        + 0.10 * priced_component
-        + 0.10 * one_sided_component
+        float(policy.get("provider_weight", 0.30)) * provider_component
+        + float(policy.get("blocking_weight", 0.30)) * blocking_component
+        + float(policy.get("quote_weight", 0.20)) * quote_component
+        + float(policy.get("priced_ratio_weight", 0.10)) * priced_component
+        + float(policy.get("one_sided_weight", 0.10)) * one_sided_component
     )
     return _clip(friction, 0.0, 1.0)
 
@@ -400,15 +482,22 @@ def compute_direction_probability_head(
 
     move_probability = _safe_float(hybrid_move_probability, 0.5)
     vote_up = _clip(_safe_float(vote_bull_probability, 0.5) or 0.5, 0.0, 1.0)
+    logit_policy = _logit_policy()
+    neutral_probability = float(logit_policy.get("neutral_probability", 0.50))
 
     logit = (
-        -0.05
-        + 0.90 * directional_bias
-        + 0.80 * (vote_up - 0.5)
-        + 0.55 * ((move_probability or 0.5) - 0.5)
+        float(logit_policy.get("intercept", -0.05))
+        + float(logit_policy.get("directional_bias_weight", 0.90)) * directional_bias
+        + float(logit_policy.get("vote_probability_weight", 0.80))
+        * (vote_up - neutral_probability)
+        + float(logit_policy.get("move_probability_weight", 0.55))
+        * ((move_probability or neutral_probability) - neutral_probability)
     )
     # Microstructure friction attenuates effective directional edge.
-    logit *= (1.0 - 0.60 * friction)
+    logit *= (
+        1.0
+        - float(logit_policy.get("friction_attenuation", 0.60)) * friction
+    )
 
     probability_up_raw = _sigmoid(logit)
     probability_up = probability_up_raw
@@ -462,7 +551,14 @@ def compute_direction_probability_head(
     #   friction     → 0.2609  (≈ 30/115)
     # This prevents the composite from saturating at 1.0 and masking
     # individual component contributions in the output diagnostics.
-    uncertainty = _clip(0.4783 * entropy + 0.2609 * disagreement + 0.2609 * friction, 0.0, 1.0)
+    uncertainty_policy = _uncertainty_policy()
+    uncertainty = _clip(
+        float(uncertainty_policy.get("entropy_weight", 0.4783)) * entropy
+        + float(uncertainty_policy.get("disagreement_weight", 0.2609)) * disagreement
+        + float(uncertainty_policy.get("friction_weight", 0.2609)) * friction,
+        0.0,
+        1.0,
+    )
 
     return {
         "probability_up_raw": round(float(probability_up_raw), 6),

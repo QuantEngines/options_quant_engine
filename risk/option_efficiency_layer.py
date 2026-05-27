@@ -65,10 +65,10 @@ def _score_target_reachability(features):
     # threshold aliasing around boundary values.
     return _smooth_score_from_ratio(
         ratio,
-        center=0.90,
-        steepness=4.0,
-        floor=12.0,
-        ceiling=92.0,
+        center=cfg.target_reachability_center,
+        steepness=cfg.target_reachability_steepness,
+        floor=cfg.target_reachability_score_floor,
+        ceiling=cfg.target_reachability_score_ceiling,
     )
 
 
@@ -98,10 +98,10 @@ def _score_premium_efficiency(features):
     # a bit more headroom than pure target reachability.
     return _smooth_score_from_ratio(
         ratio,
-        center=1.00,
-        steepness=3.6,
-        floor=14.0,
-        ceiling=90.0,
+        center=cfg.premium_efficiency_center,
+        steepness=cfg.premium_efficiency_steepness,
+        floor=cfg.premium_efficiency_score_floor,
+        ceiling=cfg.premium_efficiency_score_ceiling,
     )
 
 
@@ -134,26 +134,26 @@ def _score_strike_efficiency(features):
     # reachability; smooth decay removes hard cliffs near policy thresholds.
     base = _smooth_score_from_ratio(
         1.0 - ratio,
-        center=0.20,
-        steepness=4.2,
-        floor=18.0,
-        ceiling=82.0,
+        center=cfg.strike_efficiency_center,
+        steepness=cfg.strike_efficiency_steepness,
+        floor=cfg.strike_efficiency_score_floor,
+        ceiling=cfg.strike_efficiency_score_ceiling,
     )
 
     # Structural bias by moneyness bucket.
     if bucket == "ATM":
-        base += 8
+        base += cfg.strike_efficiency_atm_bonus
     elif bucket == "ITM":
-        base -= 6
+        base += cfg.strike_efficiency_itm_penalty
     elif bucket == "OTM":
         base += 0
 
     # Penalize expensive ITM setups when premium coverage is weak.
     if bucket == "ITM" and premium_ratio is not None:
-        if premium_ratio < 0.65:
-            base -= 8
-        elif premium_ratio < 0.85:
-            base -= 3
+        if premium_ratio < cfg.strike_efficiency_itm_premium_poor_threshold:
+            base += cfg.strike_efficiency_itm_premium_poor_penalty
+        elif premium_ratio < cfg.strike_efficiency_itm_premium_weak_threshold:
+            base += cfg.strike_efficiency_itm_premium_weak_penalty
 
     return int(_clip(base, 0, 100))
 
@@ -229,41 +229,41 @@ def _overnight_evaluation(
     penalty = 0
     reasons = []
 
-    if option_efficiency_score <= 32:
-        penalty += 4
+    if option_efficiency_score <= cfg.overnight_option_efficiency_poor_threshold:
+        penalty += cfg.overnight_option_efficiency_poor_penalty
         reasons.append("option_efficiency_poor")
-    elif option_efficiency_score <= 45:
-        penalty += 2
+    elif option_efficiency_score <= cfg.overnight_option_efficiency_weak_threshold:
+        penalty += cfg.overnight_option_efficiency_weak_penalty
         reasons.append("option_efficiency_weak")
 
-    if target_reachability_score <= 32:
-        penalty += 3
+    if target_reachability_score <= cfg.overnight_target_reachability_weak_threshold:
+        penalty += cfg.overnight_target_reachability_weak_penalty
         reasons.append("target_reachability_weak")
 
-    if premium_efficiency_score <= 28:
-        penalty += 2
+    if premium_efficiency_score <= cfg.overnight_premium_efficiency_poor_threshold:
+        penalty += cfg.overnight_premium_efficiency_poor_penalty
         reasons.append("premium_efficiency_poor")
-    elif premium_efficiency_score <= 34:
-        penalty += 1
+    elif premium_efficiency_score <= cfg.overnight_premium_efficiency_weak_threshold:
+        penalty += cfg.overnight_premium_efficiency_weak_penalty
         reasons.append("premium_efficiency_weak")
 
-    if strike_efficiency_score <= 20:
-        penalty += 3
+    if strike_efficiency_score <= cfg.overnight_strike_efficiency_poor_threshold:
+        penalty += cfg.overnight_strike_efficiency_poor_penalty
         reasons.append("strike_efficiency_poor")
-    elif strike_efficiency_score <= 35:
-        penalty += 1
+    elif strike_efficiency_score <= cfg.overnight_strike_efficiency_weak_threshold:
+        penalty += cfg.overnight_strike_efficiency_weak_penalty
         reasons.append("strike_efficiency_weak")
 
     premium_coverage_ratio = _safe_float(features.get("premium_coverage_ratio"), None)
     strike_distance_ratio = _safe_float(features.get("strike_distance_ratio"), None)
-    if premium_coverage_ratio is not None and premium_coverage_ratio <= 0.65:
-        penalty += 2
+    if premium_coverage_ratio is not None and premium_coverage_ratio <= cfg.overnight_premium_coverage_min_ratio:
+        penalty += cfg.overnight_premium_coverage_penalty
         reasons.append("premium_coverage_insufficient")
-    if strike_distance_ratio is not None and strike_distance_ratio >= 1.15:
-        penalty += 2
+    if strike_distance_ratio is not None and strike_distance_ratio >= cfg.overnight_strike_distance_max_ratio:
+        penalty += cfg.overnight_strike_distance_penalty
         reasons.append("strike_distance_excessive")
 
-    penalty = int(_clip(penalty, 0, 10))
+    penalty = int(_clip(penalty, 0, cfg.overnight_penalty_cap))
     if penalty >= cfg.overnight_block_threshold:
         return False, reasons[0] if reasons else "overnight_option_efficiency_block", penalty
     if penalty >= cfg.overnight_watch_threshold:
@@ -299,9 +299,9 @@ def classify_option_efficiency_state(features: dict | None) -> OptionEfficiencyS
         option_efficiency_score = cfg.neutral_score
     else:
         option_efficiency_score = int(round(_clip(
-            (0.38 * premium_efficiency_score)
-            + (0.34 * target_reachability_score)
-            + (0.28 * strike_efficiency_score),
+            (cfg.option_efficiency_premium_weight * premium_efficiency_score)
+            + (cfg.option_efficiency_target_weight * target_reachability_score)
+            + (cfg.option_efficiency_strike_weight * strike_efficiency_score),
             0.0,
             100.0,
         )))
@@ -485,13 +485,13 @@ def score_option_efficiency_candidate(
     score_adjustment = 0
     cfg = get_option_efficiency_policy_config()
     if state["option_efficiency_score"] >= cfg.high_efficiency_threshold:
-        score_adjustment = 3
+        score_adjustment = cfg.candidate_high_efficiency_adjustment
     elif state["option_efficiency_score"] >= cfg.good_efficiency_threshold:
-        score_adjustment = 1
+        score_adjustment = cfg.candidate_good_efficiency_adjustment
     elif state["option_efficiency_score"] <= cfg.poor_efficiency_threshold:
-        score_adjustment = -4
+        score_adjustment = cfg.poor_efficiency_penalty
     elif state["strike_efficiency_score"] <= cfg.weak_efficiency_threshold:
-        score_adjustment = -2
+        score_adjustment = cfg.strike_penalty
 
     return {
         "score_adjustment": score_adjustment,

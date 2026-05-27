@@ -92,6 +92,44 @@ def aggregate_event_features(
     if as_of_ts.tzinfo is None:
         as_of_ts = as_of_ts.tz_localize("Asia/Kolkata")
 
+    future_cutoff = as_of_ts + pd.Timedelta(seconds=120)
+    eligible_adjusted: list[EventIntelligenceRecord] = []
+    future_event_count = 0
+    for item in adjusted:
+        event_ts = None
+        if item.event_timestamp:
+            try:
+                event_ts = pd.Timestamp(item.event_timestamp)
+                if event_ts.tzinfo is None:
+                    event_ts = event_ts.tz_localize("Asia/Kolkata")
+            except Exception:
+                event_ts = None
+        if event_ts is not None and event_ts > future_cutoff:
+            future_event_count += 1
+            continue
+        eligible_adjusted.append(item)
+    if not eligible_adjusted:
+        return EventFeatureState(
+            bullish_event_score=0.0,
+            bearish_event_score=0.0,
+            vol_expansion_score=0.0,
+            vol_compression_score=0.0,
+            event_uncertainty_score=0.0,
+            gap_risk_score=0.0,
+            catalyst_alignment_score=0.0,
+            contradictory_event_penalty=0.0,
+            recent_event_cluster_score=0.0,
+            decayed_event_signal=0.0,
+            routed_event_relevance_score=0.0,
+            routed_event_count=0,
+            event_count=0,
+            explanation_lines=[
+                f"Future-dated structured events ignored before as-of context: {future_event_count}."
+            ],
+            structured_events=[],
+        )
+    adjusted = eligible_adjusted
+
     symbol_norm = str(underlying_symbol or "").upper().strip()
     is_index_symbol = symbol_norm in {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "NIFTY50", "MIDCPNIFTY"}
 

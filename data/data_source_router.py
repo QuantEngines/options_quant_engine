@@ -23,6 +23,10 @@ from config.settings import ICICI_DEBUG, NSE_DEBUG
 from data.zerodha_option_chain import ZerodhaOptionChain
 from data.nse_option_chain_downloader import NSEOptionChainDownloader
 from data.icici_breeze_option_chain import ICICIBreezeOptionChain
+from data.iv_validation_enrichment import (
+    attach_iv_validation_diagnostics,
+    build_iv_validation_frame,
+)
 from data.provider_normalization import normalize_live_option_chain
 
 
@@ -120,7 +124,12 @@ class DataSourceRouter:
         raw_chain = getattr(self.loader, fetch_method_name)(symbol)
         normalized_chain = normalize_live_option_chain(raw_chain, source=self.source, symbol=symbol)
 
-        validation = validate_option_chain(normalized_chain)
+        validation_chain, iv_validation_diagnostics = build_iv_validation_frame(
+            normalized_chain,
+            source_label="MODEL_DERIVED_FROM_OPTION_PRICE_PRE_SPOT",
+        )
+        validation = validate_option_chain(validation_chain)
+        validation = attach_iv_validation_diagnostics(validation, iv_validation_diagnostics)
         self.last_validation = validation
         provider_health = validation.get("provider_health", {})
         primary_valid = bool(validation.get("is_valid"))
@@ -129,17 +138,31 @@ class DataSourceRouter:
             summary_status = "INVALID" if not primary_valid else "GOOD"
 
         if not primary_valid or summary_status in ("WEAK", "CAUTION"):
-            _LOG.warning(
-                "Selected data source %s returned option-chain quality %s "
-                "(is_valid=%s, issues=%s, warnings=%s, blocking_reasons=%s). "
-                "Keeping the user-selected source; no fallback provider will be used.",
-                self.source,
-                summary_status,
-                primary_valid,
-                validation.get("issues", []),
-                validation.get("warnings", []),
-                provider_health.get("trade_blocking_reasons", []),
-            )
+            selection_role = str(getattr(self, "selection_role", "PRIMARY_DECISION_SOURCE") or "").upper().strip()
+            if selection_role == "SECONDARY_RESEARCH_ONLY":
+                _LOG.warning(
+                    "Secondary research data source %s returned option-chain quality %s "
+                    "(is_valid=%s, issues=%s, warnings=%s, blocking_reasons=%s). "
+                    "It will be retained only as research evidence; it will not override the primary decision source.",
+                    self.source,
+                    summary_status,
+                    primary_valid,
+                    validation.get("issues", []),
+                    validation.get("warnings", []),
+                    provider_health.get("trade_blocking_reasons", []),
+                )
+            else:
+                _LOG.warning(
+                    "Selected data source %s returned option-chain quality %s "
+                    "(is_valid=%s, issues=%s, warnings=%s, blocking_reasons=%s). "
+                    "Keeping the user-selected source; no fallback provider will be used.",
+                    self.source,
+                    summary_status,
+                    primary_valid,
+                    validation.get("issues", []),
+                    validation.get("warnings", []),
+                    provider_health.get("trade_blocking_reasons", []),
+                )
 
         return normalized_chain
 

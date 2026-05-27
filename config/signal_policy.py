@@ -101,6 +101,18 @@ TRADE_RUNTIME_THRESHOLDS = {
     "composite_weight_data_quality": 0.10,
     "composite_weight_gamma_stability": 0.05,
     "runtime_composite_observation_threshold": 80,
+    # Live-time runtime score supplement. This is deliberately narrow: it uses
+    # only level/wall context that is available at signal time and blocks late
+    # chase/candle-extension cases.
+    "enable_runtime_composite_live_supplement": 1,
+    "runtime_composite_live_supplement_apply_to_score": 0,
+    "runtime_composite_level_wall_supplement_points": 6,
+    "runtime_composite_supplement_min_base_score": 35,
+    "runtime_composite_supplement_max_base_score": 59,
+    "runtime_composite_supplement_require_confirmation": 1,
+    "runtime_composite_supplement_require_analytics_usable": 1,
+    "runtime_composite_supplement_block_late_chase": 1,
+    "runtime_composite_supplement_disable_event_lockdown": 1,
     "enable_high_composite_soft_block_override": 1,
     "high_composite_soft_override_threshold": 85,
     "high_composite_soft_override_allowed_blockers": [
@@ -176,6 +188,7 @@ TRADE_RUNTIME_THRESHOLDS = {
     "historical_outcome_guard_stopout_share_threshold": 0.35,
     "historical_outcome_guard_hold_cap_minutes": 30,
     "historical_outcome_guard_size_cap": 0.70,
+    "outcome_history_point_in_time_maturity_minutes": 390,
     # Session risk governor: throttle or pause fresh ideas after recent stop-out
     # streaks, weak realized edge, or cooling-off periods.
     "enable_session_risk_governor": 1,
@@ -516,10 +529,20 @@ CONFIRMATION_FILTER_CONFIG = {
     #   reversal_veto_steps=1: flip_persist_ratio=0.0  (optimum: 100% stickiness eliminated)
     #   reversal_veto_steps=2+: flip_persist_ratio=0.0 (no additional benefit)
     #
-    "direction_change_penalty": 0.0,  # Bounded to [0.0, 6.0]
+    "direction_change_penalty": 0.0,  # Bounded by direction_change_penalty_min/max
+    "direction_change_penalty_min": 0.0,
+    "direction_change_penalty_max": 6.0,
     "direction_change_decay_steps": 0,  # Post-reversal decay window (0 disables)
+    "direction_change_decay_steps_min": 0,
+    "direction_change_decay_steps_max": 20,
     "direction_change_decay_factor": 0.5,  # Decay multiplier per step (0.0-1.0)
+    "direction_change_decay_factor_min": 0.0,
+    "direction_change_decay_factor_max": 1.0,
     "reversal_veto_steps": 0,  # 0-step grace: reduce stickiness on fast trend reversals
+    "reversal_veto_steps_min": 0,
+    "reversal_veto_steps_max": 20,
+    "open_alignment_scale": 0.004,
+    "prev_close_alignment_scale": 0.006,
     "strong_confirmation_threshold": 6,
     "confirmed_threshold": 2,
     "mixed_threshold": -3,
@@ -553,6 +576,8 @@ CONFIRMATION_FILTER_CONFIG = {
     "pcr_confirmation_conflict": -2,
     "veto_hard_conflicts": 3,
     "veto_move_probability_ceiling": 0.55,
+    "reversal_breakout_min_signals_min": 1,
+    "reversal_breakout_min_signals_max": 4,
 }
 
 

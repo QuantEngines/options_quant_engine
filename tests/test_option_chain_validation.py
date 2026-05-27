@@ -506,6 +506,19 @@ class OptionChainValidationTests(unittest.TestCase):
         self.assertFalse(ph["atm_iv_vs_vix_consistent"])
         self.assertEqual(ph["atm_iv_health"], "CAUTION")
 
+    def test_atm_iv_sanity_range_is_parameterized(self):
+        df = self._make_full_chain(spot=22500)
+
+        with temporary_parameter_pack(
+            "atm_iv_policy_test",
+            overrides={"option_chain_validation.vol_surface_quality.atm_iv_min_decimal": 0.20},
+        ):
+            result = validate_option_chain(df, spot=22500)
+
+        ph = result["provider_health"]
+        self.assertFalse(ph["atm_iv_in_range"])
+        self.assertEqual(ph["atm_iv_health"], "CAUTION")
+
     def test_iv_parity_health_good_on_clean_chain(self):
         """Chain with uniform CE/PE IVs → near-zero divergence → GOOD."""
         df = self._make_full_chain(spot=22500, iv_ce=18.5, iv_pe=19.0)
@@ -528,6 +541,21 @@ class OptionChainValidationTests(unittest.TestCase):
         self.assertEqual(ph["iv_parity_health"], "WEAK")
         iv_parity_warnings = [w for w in result["warnings"] if "iv_parity_breach_detected" in w]
         self.assertEqual(len(iv_parity_warnings), 1)
+
+    def test_iv_parity_divergence_threshold_is_parameterized(self):
+        df = self._make_full_chain(spot=22500, iv_ce=18.5, iv_pe=18.5)
+        df.loc[df["OPTION_TYP"] == "PE", "impliedVolatility"] = 95.0
+
+        with temporary_parameter_pack(
+            "iv_parity_policy_test",
+            overrides={"option_chain_validation.vol_surface_quality.iv_parity_divergence_threshold": 2.0},
+        ):
+            result = validate_option_chain(df, spot=22500)
+
+        ph = result["provider_health"]
+        self.assertEqual(ph["iv_parity_health"], "GOOD")
+        iv_parity_warnings = [w for w in result["warnings"] if "iv_parity_breach_detected" in w]
+        self.assertEqual(iv_parity_warnings, [])
 
     def test_iv_staleness_health_good_on_varied_ivs(self):
         """Each strike has a distinct IV → staleness ratio near 0 → GOOD."""
@@ -559,6 +587,21 @@ class OptionChainValidationTests(unittest.TestCase):
         self.assertIn(ph["iv_staleness_health"], ("CAUTION", "WEAK"))
         staleness_warnings = [w for w in result["warnings"] if "iv_staleness_detected" in w]
         self.assertEqual(len(staleness_warnings), 1)
+
+    def test_iv_staleness_ratio_threshold_is_parameterized(self):
+        df = self._make_full_chain(spot=22500, iv_ce=20.0, iv_pe=20.0, n_strikes=30)
+        df["impliedVolatility"] = 20.0
+
+        with temporary_parameter_pack(
+            "iv_staleness_policy_test",
+            overrides={"option_chain_validation.vol_surface_quality.iv_staleness_good_ratio_max": 1.01},
+        ):
+            result = validate_option_chain(df, spot=22500)
+
+        ph = result["provider_health"]
+        self.assertEqual(ph["iv_staleness_health"], "GOOD")
+        staleness_warnings = [w for w in result["warnings"] if "iv_staleness_detected" in w]
+        self.assertEqual(staleness_warnings, [])
 
     def test_market_data_readiness_score_degrades_when_atm_iv_breaks(self):
         """Clean chains should score materially higher than chains with broken ATM IV."""
@@ -645,6 +688,23 @@ class OptionChainValidationTests(unittest.TestCase):
         self.assertEqual(ph["liquidity_coverage_mode"], "VOLUME_AND_OPEN_INTEREST")
         self.assertIn("weak_liquidity_coverage:VOLUME_AND_OPEN_INTEREST", result["warnings"])
         self.assertTrue(result["is_valid"])
+
+    def test_market_data_readiness_tier_threshold_is_parameterized(self):
+        df = self._make_full_chain(spot=22500)
+        baseline = validate_option_chain(df, spot=22500)
+        baseline_score = baseline["market_data_readiness_score"]
+
+        with temporary_parameter_pack(
+            overrides={
+                "option_chain_validation.provider_health.readiness_scoring.high_tier_min_score": (
+                    baseline_score + 0.1
+                ),
+            },
+        ):
+            adjusted = validate_option_chain(df, spot=22500)
+
+        self.assertEqual(adjusted["market_data_readiness_score"], baseline_score)
+        self.assertNotEqual(adjusted["market_data_readiness_tier"], "HIGH")
 
     def test_expired_selected_expiry_blocks_data_quality_when_as_of_supplied(self):
         df = self._make_full_chain(spot=22500)

@@ -41,6 +41,10 @@ from data.replay_loader import (
     save_option_chain_snapshot,
 )
 from data.global_market_snapshot import build_global_market_snapshot
+from data.iv_validation_enrichment import (
+    attach_iv_validation_diagnostics,
+    build_iv_validation_frame,
+)
 from data.option_chain_validation import validate_option_chain
 from data.expiry_resolver import filter_option_chain_by_expiry, resolve_selected_expiry
 from macro.scheduled_event_risk import evaluate_scheduled_event_risk
@@ -651,11 +655,20 @@ def _prepare_snapshot_context(
     _vix_for_validation = (
         (prepared_global_market_snapshot or {}).get("market_inputs", {}) or {}
     ).get("india_vix_level")
-    option_chain_validation = validate_option_chain(
+    validation_option_chain, iv_validation_diagnostics = build_iv_validation_frame(
         filtered_option_chain,
+        spot=spot_context.get("spot"),
+        valuation_time=spot_timestamp,
+    )
+    option_chain_validation = validate_option_chain(
+        validation_option_chain,
         spot=spot_context.get("spot"),
         india_vix_level=_vix_for_validation,
         as_of=spot_timestamp,
+    )
+    option_chain_validation = attach_iv_validation_diagnostics(
+        option_chain_validation,
+        iv_validation_diagnostics,
     )
     market_data_provenance = _build_market_data_provenance(
         mode=mode,

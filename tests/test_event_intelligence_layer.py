@@ -213,3 +213,44 @@ def test_recency_decay_and_symbol_routing_reduces_stale_irrelevant_events():
     assert state.routed_event_relevance_score > 0.5
     assert state.routed_event_count >= 1
     assert state.bearish_event_score >= state.bullish_event_score
+
+
+def test_event_feature_aggregation_ignores_future_events():
+    as_of = pd.Timestamp("2026-03-26T13:00:00+05:30")
+    future_event = validate_event_record(
+        {
+            "event_type": "large_order_win",
+            "instrument_scope": "index",
+            "expected_direction": "bullish",
+            "directional_confidence": 1.0,
+            "vol_impact": "compression",
+            "vol_confidence": 1.0,
+            "event_strength": 1.0,
+            "summary": "future bullish event",
+            "event_timestamp": "2026-03-26T14:00:00+05:30",
+        }
+    )
+    current_event = validate_event_record(
+        {
+            "event_type": "regulatory_action",
+            "instrument_scope": "index",
+            "expected_direction": "bearish",
+            "directional_confidence": 0.9,
+            "vol_impact": "expansion",
+            "vol_confidence": 0.8,
+            "event_strength": 0.9,
+            "summary": "current adverse event",
+            "event_timestamp": "2026-03-26T12:55:00+05:30",
+        }
+    )
+
+    state = aggregate_event_features(
+        [future_event, current_event],
+        direction_hint="CALL",
+        underlying_symbol="NIFTY",
+        as_of=as_of,
+    )
+
+    assert state.event_count == 1
+    assert state.bearish_event_score > state.bullish_event_score
+    assert all("future bullish event" not in item.get("summary", "") for item in state.structured_events)

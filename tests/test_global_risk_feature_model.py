@@ -197,6 +197,44 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
         self.assertTrue(features["market_data_available"])
         self.assertFalse(features["neutral_fallback"])
 
+    def test_build_global_risk_features_neutralizes_future_market_snapshot(self):
+        features = build_global_risk_features(
+            macro_event_state={
+                "macro_event_risk_score": 0,
+                "event_window_status": "NO_EVENT_DATA",
+                "event_lockdown_flag": False,
+                "event_data_available": True,
+            },
+            macro_news_state={
+                "macro_regime": "MACRO_NEUTRAL",
+                "neutral_fallback": False,
+                "news_confidence_score": 70,
+            },
+            global_market_snapshot={
+                "provider": "TEST",
+                "data_available": True,
+                "neutral_fallback": False,
+                "stale": False,
+                "as_of": "2026-03-14T11:00:00+05:30",
+                "latest_market_timestamp": "2026-03-14T11:00:00+05:30",
+                "issues": [],
+                "warnings": [],
+                "market_inputs": {
+                    "oil_change_24h": 9.0,
+                    "vix_change_24h": 20.0,
+                    "sp500_change_24h": -3.0,
+                },
+            },
+            holding_profile="AUTO",
+            as_of="2026-03-14T10:00:00+05:30",
+        )
+
+        self.assertFalse(features["market_data_available"])
+        self.assertTrue(features["market_features_neutralized"])
+        self.assertEqual(features["market_neutralization_reason"], "market_data_stale")
+        self.assertEqual(features["oil_shock_score"], 0.0)
+        self.assertIn("global_market_snapshot_future:2026-03-14T11:00:00+05:30", features["warnings"])
+
     def test_build_global_risk_features_respects_gift_proxy_metadata(self):
         features = build_global_risk_features(
             macro_event_state={

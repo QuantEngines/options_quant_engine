@@ -50,14 +50,22 @@ def _bounded_direction_change_penalty(cfg):
     penalty = _safe_float(cfg.get("direction_change_penalty"), 0.0)
     if penalty is None:
         return 0.0
-    return max(0.0, min(6.0, float(penalty)))
+    min_penalty = _safe_float(cfg.get("direction_change_penalty_min"), 0.0)
+    max_penalty = _safe_float(cfg.get("direction_change_penalty_max"), 6.0)
+    min_penalty = 0.0 if min_penalty is None else float(min_penalty)
+    max_penalty = 6.0 if max_penalty is None else float(max_penalty)
+    return max(min_penalty, min(max_penalty, float(penalty)))
 
 
 def _bounded_decay_factor(cfg):
     factor = _safe_float(cfg.get("direction_change_decay_factor"), 0.5)
     if factor is None:
         return 0.5
-    return max(0.0, min(1.0, float(factor)))
+    min_factor = _safe_float(cfg.get("direction_change_decay_factor_min"), 0.0)
+    max_factor = _safe_float(cfg.get("direction_change_decay_factor_max"), 1.0)
+    min_factor = 0.0 if min_factor is None else float(min_factor)
+    max_factor = 1.0 if max_factor is None else float(max_factor)
+    return max(min_factor, min(max_factor, float(factor)))
 
 
 def _bounded_decay_steps(cfg):
@@ -65,7 +73,15 @@ def _bounded_decay_steps(cfg):
         steps = int(float(cfg.get("direction_change_decay_steps") or 0))
     except (TypeError, ValueError):
         return 0
-    return max(0, min(20, steps))
+    try:
+        min_steps = int(float(cfg.get("direction_change_decay_steps_min") or 0))
+    except (TypeError, ValueError):
+        min_steps = 0
+    try:
+        max_steps = int(float(cfg.get("direction_change_decay_steps_max") or 20))
+    except (TypeError, ValueError):
+        max_steps = 20
+    return max(min_steps, min(max_steps, steps))
 
 
 def _bounded_reversal_veto_steps(cfg):
@@ -73,7 +89,15 @@ def _bounded_reversal_veto_steps(cfg):
         steps = int(float(cfg.get("reversal_veto_steps") or 0))
     except (TypeError, ValueError):
         return 0
-    return max(0, min(20, steps))
+    try:
+        min_steps = int(float(cfg.get("reversal_veto_steps_min") or 0))
+    except (TypeError, ValueError):
+        min_steps = 0
+    try:
+        max_steps = int(float(cfg.get("reversal_veto_steps_max") or 20))
+    except (TypeError, ValueError):
+        max_steps = 20
+    return max(min_steps, min(max_steps, steps))
 
 
 def _signed_alignment_score(signed_edge, support_score, conflict_score, scale):
@@ -204,7 +228,7 @@ def compute_confirmation_filters(
                 edge,
                 support_score=cfg["open_alignment_support"],
                 conflict_score=abs(float(cfg["open_alignment_conflict"])),
-                scale=0.004,
+                scale=cfg.get("open_alignment_scale", 0.004),
             )
             breakdown["open_alignment_score"] = score
             if score >= 0:
@@ -236,7 +260,7 @@ def compute_confirmation_filters(
                 edge,
                 support_score=cfg["prev_close_alignment_support"],
                 conflict_score=abs(float(cfg["prev_close_alignment_conflict"])),
-                scale=0.006,
+                scale=cfg.get("prev_close_alignment_scale", 0.006),
             )
             breakdown["prev_close_alignment_score"] = score
             if score >= 0:
@@ -534,7 +558,15 @@ def compute_confirmation_filters(
                     min_signals = int(float(rt.get("reversal_breakout_override_min_signals", 2)))
                 except (TypeError, ValueError):
                     min_signals = 2
-                min_signals = max(1, min(4, min_signals))
+                try:
+                    min_signals_min = int(float(cfg.get("reversal_breakout_min_signals_min", 1)))
+                except (TypeError, ValueError):
+                    min_signals_min = 1
+                try:
+                    min_signals_max = int(float(cfg.get("reversal_breakout_min_signals_max", 4)))
+                except (TypeError, ValueError):
+                    min_signals_max = 4
+                min_signals = max(min_signals_min, min(min_signals_max, min_signals))
 
                 directional_flow_ok = final_flow_signal in {"BULLISH_FLOW", "BEARISH_FLOW"}
                 move_prob_ok = move_prob is not None and move_prob >= override_prob_floor

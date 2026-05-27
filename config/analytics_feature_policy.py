@@ -133,6 +133,18 @@ class DealerFlowPolicyConfig:
 
 
 @dataclass(frozen=True)
+class DealerGammaProxyPolicyConfig:
+    """Policy controls for dealer-gamma proxy assumptions."""
+
+    fallback_distance_scale: float = 1.0
+    fallback_distance_power: float = 1.0
+    neutral_gross_gamma_ratio: float = 0.05
+    call_gamma_sign: float = 1.0
+    put_gamma_sign: float = -1.0
+    largest_gamma_max_distance_pct: float = 0.10
+
+
+@dataclass(frozen=True)
 class TechnicalAnalysisPolicyConfig:
     """Policy controls for spot-history technical indicators."""
 
@@ -205,6 +217,13 @@ def get_dealer_flow_policy_config() -> DealerFlowPolicyConfig:
     from config.policy_resolver import resolve_dataclass_config
 
     return resolve_dataclass_config("analytics.dealer_flow", DealerFlowPolicyConfig())
+
+
+def get_dealer_gamma_proxy_policy_config() -> DealerGammaProxyPolicyConfig:
+    """Return policy bundle used by dealer-gamma proxy analytics."""
+    from config.policy_resolver import resolve_dataclass_config
+
+    return resolve_dataclass_config("analytics.dealer_gamma_proxy", DealerGammaProxyPolicyConfig())
 
 
 def get_technical_analysis_policy_config() -> TechnicalAnalysisPolicyConfig:

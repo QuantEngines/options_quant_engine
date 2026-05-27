@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from risk.option_efficiency_layer import build_option_efficiency_state
+from config.policy_resolver import temporary_parameter_pack
+from risk.option_efficiency_layer import (
+    build_option_efficiency_state,
+    classify_option_efficiency_state,
+    score_option_efficiency_candidate,
+)
 
 
 class OptionEfficiencyLayerTests(unittest.TestCase):
@@ -134,6 +139,72 @@ class OptionEfficiencyLayerTests(unittest.TestCase):
         self.assertGreaterEqual(near_target["target_reachability_score"], mid_target["target_reachability_score"])
         self.assertGreaterEqual(mid_target["target_reachability_score"], far_target["target_reachability_score"])
         self.assertNotEqual(near_target["target_reachability_score"], mid_target["target_reachability_score"])
+
+    def test_option_efficiency_component_weights_are_parameterized(self):
+        features = {
+            "expected_move_coverage_ratio": 2.0,
+            "premium_coverage_ratio": 0.1,
+            "strike_distance_ratio": 0.0,
+            "strike_moneyness_bucket": "ATM",
+        }
+
+        with temporary_parameter_pack(
+            overrides={
+                "option_efficiency.core.option_efficiency_premium_weight": 1.0,
+                "option_efficiency.core.option_efficiency_target_weight": 0.0,
+                "option_efficiency.core.option_efficiency_strike_weight": 0.0,
+            },
+        ):
+            state = classify_option_efficiency_state(features)
+
+        self.assertEqual(state.option_efficiency_score, state.premium_efficiency_score)
+
+    def test_candidate_score_adjustment_is_parameterized(self):
+        row = {
+            "strikePrice": 22000,
+            "OPTION_TYP": "CE",
+            "lastPrice": 95,
+            "impliedVolatility": 18.0,
+            "DELTA": 0.5,
+        }
+
+        with temporary_parameter_pack(
+            overrides={
+                "option_efficiency.core.high_efficiency_threshold": 0,
+                "option_efficiency.core.candidate_high_efficiency_adjustment": 7,
+            },
+        ):
+            payload = score_option_efficiency_candidate(
+                row,
+                spot=22000,
+                direction="CALL",
+                selected_expiry="2026-03-21",
+                valuation_time="2026-03-14T10:00:00+05:30",
+            )
+
+        self.assertEqual(payload["score_adjustment"], 7)
+
+    def test_overnight_option_efficiency_penalty_policy_is_parameterized(self):
+        features = {
+            "expected_move_coverage_ratio": 2.0,
+            "premium_coverage_ratio": 2.0,
+            "strike_distance_ratio": 0.0,
+            "strike_moneyness_bucket": "ATM",
+            "holding_context": {"overnight_relevant": True},
+        }
+
+        with temporary_parameter_pack(
+            overrides={
+                "option_efficiency.core.overnight_option_efficiency_weak_threshold": 100,
+                "option_efficiency.core.overnight_option_efficiency_weak_penalty": 5,
+                "option_efficiency.core.overnight_block_threshold": 5,
+            },
+        ):
+            state = classify_option_efficiency_state(features)
+
+        self.assertFalse(state.overnight_hold_allowed)
+        self.assertEqual(state.overnight_hold_reason, "option_efficiency_weak")
+        self.assertEqual(state.overnight_option_efficiency_penalty, 5)
 
 
 if __name__ == "__main__":

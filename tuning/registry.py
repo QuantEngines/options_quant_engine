@@ -20,6 +20,7 @@ from dataclasses import fields
 from typing import Any
 
 from config.analytics_feature_policy import (
+    DealerGammaProxyPolicyConfig,
     DealerFlowPolicyConfig,
     FlowImbalancePolicyConfig,
     GammaFlipPolicyConfig,
@@ -31,6 +32,12 @@ from config.analytics_feature_policy import (
     VolatilityRegimePolicyConfig,
 )
 from config.dealer_hedging_pressure_policy import DealerHedgingPressurePolicyConfig
+from config.direction_probability_policy import (
+    DIRECTION_PROBABILITY_DIRECTIONAL_BIAS,
+    DIRECTION_PROBABILITY_LOGIT,
+    DIRECTION_PROBABILITY_MICROSTRUCTURE_FRICTION,
+    DIRECTION_PROBABILITY_UNCERTAINTY,
+)
 from config.event_window_policy import EventWindowPolicyConfig
 from config.gamma_vol_acceleration_policy import GammaVolAccelerationPolicyConfig
 from config.global_risk_policy import GlobalRiskPolicyConfig
@@ -49,6 +56,8 @@ from config.signal_consistency_policy import SignalConsistencyPolicyConfig
 from config.signal_drift_policy import SIGNAL_DRIFT_MONITOR_POLICY
 from config.signal_evaluation_scoring import (
     SIGNAL_EVALUATION_DIRECTION_WEIGHTS,
+    SIGNAL_EVALUATION_LABEL_QUALITY_POLICY,
+    SIGNAL_EVALUATION_REPORTING_POLICY,
     SIGNAL_EVALUATION_SCORE_WEIGHTS,
     SIGNAL_EVALUATION_SELECTION_POLICY,
     SIGNAL_EVALUATION_THRESHOLDS,
@@ -71,6 +80,12 @@ from config.signal_policy import (
     TradeModifierPolicyConfig,
 )
 from config.strike_selection_policy import STRIKE_SELECTION_SCORE_CONFIG
+from data.option_chain_validation import (
+    READINESS_COMPONENT_NA_SCORES,
+    READINESS_COMPONENT_WEIGHTS,
+    READINESS_SCORING_DEFAULTS,
+    VOL_SURFACE_QUALITY_DEFAULTS,
+)
 from macro.macro_news_config import (
     HeadlineClassificationConfig,
     MacroNewsAdjustmentConfig,
@@ -573,18 +588,19 @@ def build_default_parameter_registry() -> ParameterRegistry:
             max_value=20,
         )
     )
-    definitions.extend(
-        _from_mapping(
-            prefix="trade_strength.runtime_thresholds",
-            module="config.signal_policy",
-            group="trade_strength",
-            category="runtime_thresholds",
-            mapping=TRADE_RUNTIME_THRESHOLDS,
-            description_prefix="Trade runtime threshold",
-            min_value=0,
-            max_value=100,
+    for name, value in TRADE_RUNTIME_THRESHOLDS.items():
+        definitions.append(
+            _parameter_definition(
+                key=f"trade_strength.runtime_thresholds.{name}",
+                module="config.signal_policy",
+                group="trade_strength",
+                category="runtime_thresholds",
+                default_value=value,
+                description=f"Trade runtime threshold: {name}",
+                min_value=0,
+                max_value=1440 if name == "outcome_history_point_in_time_maturity_minutes" else 100,
+            )
         )
-    )
     definitions.extend(
         _from_dataclass(
             prefix="signal_engine.data_quality",
@@ -866,6 +882,54 @@ def build_default_parameter_registry() -> ParameterRegistry:
             ),
         ]
     )
+    definitions.extend(
+        _from_mapping(
+            prefix="signal_engine.direction_probability_head.directional_bias",
+            module="config.direction_probability_policy",
+            group="signal_engine",
+            category="direction_probability_head",
+            mapping=DIRECTION_PROBABILITY_DIRECTIONAL_BIAS,
+            description_prefix="Direction-probability head directional-bias parameter",
+            min_value=-5.0,
+            max_value=5.0,
+        )
+    )
+    definitions.extend(
+        _from_mapping(
+            prefix="signal_engine.direction_probability_head.microstructure_friction",
+            module="config.direction_probability_policy",
+            group="signal_engine",
+            category="direction_probability_head",
+            mapping=DIRECTION_PROBABILITY_MICROSTRUCTURE_FRICTION,
+            description_prefix="Direction-probability head microstructure-friction parameter",
+            min_value=0.0,
+            max_value=5.0,
+        )
+    )
+    definitions.extend(
+        _from_mapping(
+            prefix="signal_engine.direction_probability_head.logit",
+            module="config.direction_probability_policy",
+            group="signal_engine",
+            category="direction_probability_head",
+            mapping=DIRECTION_PROBABILITY_LOGIT,
+            description_prefix="Direction-probability head logit parameter",
+            min_value=-5.0,
+            max_value=5.0,
+        )
+    )
+    definitions.extend(
+        _from_mapping(
+            prefix="signal_engine.direction_probability_head.uncertainty",
+            module="config.direction_probability_policy",
+            group="signal_engine",
+            category="direction_probability_head",
+            mapping=DIRECTION_PROBABILITY_UNCERTAINTY,
+            description_prefix="Direction-probability head uncertainty parameter",
+            min_value=0.0,
+            max_value=1.0,
+        )
+    )
 
     definitions.extend(
         [
@@ -989,6 +1053,63 @@ def build_default_parameter_registry() -> ParameterRegistry:
             ),
         ]
     )
+    definitions.extend(
+        [
+            _parameter_definition(
+                key=f"option_chain_validation.provider_health.readiness_na_scores.{component}",
+                module="data.option_chain_validation",
+                group="data_quality",
+                category="provider_health_readiness",
+                default_value=default_value,
+                description=f"Market-data readiness N/A component score for {component}",
+                min_value=0.0,
+                max_value=1.0,
+            )
+            for component, default_value in READINESS_COMPONENT_NA_SCORES.items()
+        ]
+    )
+    definitions.extend(
+        [
+            _parameter_definition(
+                key=f"option_chain_validation.provider_health.readiness_weights.{component}",
+                module="data.option_chain_validation",
+                group="data_quality",
+                category="provider_health_readiness",
+                default_value=default_value,
+                description=f"Market-data readiness component weight for {component}",
+                min_value=0.0,
+                max_value=1.0,
+            )
+            for component, default_value in READINESS_COMPONENT_WEIGHTS.items()
+        ]
+    )
+    definitions.extend(
+        [
+            _parameter_definition(
+                key=f"option_chain_validation.provider_health.readiness_scoring.{name}",
+                module="data.option_chain_validation",
+                group="data_quality",
+                category="provider_health_readiness",
+                default_value=default_value,
+                description=f"Market-data readiness scoring parameter: {name}",
+                min_value=0.0,
+                max_value=100.0,
+            )
+            for name, default_value in READINESS_SCORING_DEFAULTS.items()
+        ]
+    )
+    definitions.extend(
+        _from_mapping(
+            prefix="option_chain_validation.vol_surface_quality",
+            module="data.option_chain_validation",
+            group="data_quality",
+            category="vol_surface_quality",
+            mapping=VOL_SURFACE_QUALITY_DEFAULTS,
+            description_prefix="Option-chain volatility-surface quality gate",
+            min_value=0.0,
+            max_value=10.0,
+        )
+    )
 
     definitions.extend(
         _from_dataclass(
@@ -1053,6 +1174,32 @@ def build_default_parameter_registry() -> ParameterRegistry:
             max_values={
                 "gamma_weight": 2.0,
                 "charm_weight": 2.0,
+            },
+        )
+    )
+    definitions.extend(
+        _from_dataclass(
+            prefix="analytics.dealer_gamma_proxy",
+            module="config.analytics_feature_policy",
+            group="analytics",
+            category="dealer_gamma_proxy",
+            config_obj=DealerGammaProxyPolicyConfig(),
+            description_prefix="Analytics dealer-gamma proxy assumption",
+            min_values={
+                "fallback_distance_scale": 0.0,
+                "fallback_distance_power": 0.1,
+                "neutral_gross_gamma_ratio": 0.0,
+                "call_gamma_sign": -2.0,
+                "put_gamma_sign": -2.0,
+                "largest_gamma_max_distance_pct": 0.0,
+            },
+            max_values={
+                "fallback_distance_scale": 10.0,
+                "fallback_distance_power": 5.0,
+                "neutral_gross_gamma_ratio": 0.5,
+                "call_gamma_sign": 2.0,
+                "put_gamma_sign": 2.0,
+                "largest_gamma_max_distance_pct": 1.0,
             },
         )
     )
@@ -1471,6 +1618,97 @@ def build_default_parameter_registry() -> ParameterRegistry:
                 live_safe=False,
             )
             for name, value in SIGNAL_EVALUATION_SELECTION_POLICY.items()
+        ]
+    )
+    definitions.extend(
+        _from_mapping(
+            prefix="evaluation_thresholds.label_quality",
+            module="config.signal_evaluation_scoring",
+            group="evaluation_thresholds",
+            category="label_quality",
+            mapping=SIGNAL_EVALUATION_LABEL_QUALITY_POLICY,
+            description_prefix="Signal evaluation label-quality governance policy",
+            min_value=0.0,
+            max_value=500.0,
+            live_safe=False,
+        )
+    )
+    definitions.extend(
+        [
+            _parameter_definition(
+                key=f"evaluation_thresholds.reporting.{name}",
+                module="config.signal_evaluation_scoring",
+                group="evaluation_thresholds",
+                category="reporting",
+                default_value=value,
+                description=f"Signal evaluation report presentation/evidence policy: {name}",
+                min_value={
+                    "default_top_n": 1,
+                    "markdown_threshold_replay_rows": 1,
+                    "markdown_regime_threshold_rows": 1,
+                    "markdown_walk_forward_rows": 1,
+                    "daily_threshold_replay_rows": 1,
+                    "daily_threshold_summary_rows": 1,
+                    "daily_table_preview_rows": 1,
+                    "min_reliable_sample": 1,
+                    "strong_sample": 2,
+                    "information_coefficient_min_sample": 2,
+                    "score_bucket_cut_1": 0.0,
+                    "score_bucket_cut_2": 0.0,
+                    "score_bucket_cut_3": 0.0,
+                    "score_bucket_cut_4": 0.0,
+                    "premium_bucket_cut_1": 0.0,
+                    "premium_bucket_cut_2": 0.0,
+                    "premium_bucket_cut_3": 0.0,
+                    "premium_bucket_cut_4": 0.0,
+                    "probability_bucket_cut_1": 0.0,
+                    "probability_bucket_cut_2": 0.0,
+                    "probability_bucket_cut_3": 0.0,
+                    "probability_bucket_cut_4": 0.0,
+                    "probability_bucket_high_cap": 0.5,
+                    "daily_research_action_min_directional_rows": 1,
+                    "daily_research_action_regime_reliable_rows": 1,
+                    "daily_probability_miscalibration_gap": 0.0,
+                    "daily_probability_miscalibration_mild_gap": 0.0,
+                    "daily_information_coefficient_min_rows": 2,
+                    "daily_information_coefficient_moderate_threshold": 0.0,
+                    "daily_information_coefficient_strong_threshold": 0.0,
+                }.get(name),
+                max_value={
+                    "default_top_n": 100,
+                    "markdown_threshold_replay_rows": 100,
+                    "markdown_regime_threshold_rows": 100,
+                    "markdown_walk_forward_rows": 100,
+                    "daily_threshold_replay_rows": 100,
+                    "daily_threshold_summary_rows": 100,
+                    "daily_table_preview_rows": 100,
+                    "min_reliable_sample": 5000,
+                    "strong_sample": 10000,
+                    "information_coefficient_min_sample": 5000,
+                    "score_bucket_cut_1": 100.0,
+                    "score_bucket_cut_2": 100.0,
+                    "score_bucket_cut_3": 100.0,
+                    "score_bucket_cut_4": 100.0,
+                    "premium_bucket_cut_1": 5000.0,
+                    "premium_bucket_cut_2": 5000.0,
+                    "premium_bucket_cut_3": 5000.0,
+                    "premium_bucket_cut_4": 5000.0,
+                    "probability_bucket_cut_1": 1.0,
+                    "probability_bucket_cut_2": 1.0,
+                    "probability_bucket_cut_3": 1.0,
+                    "probability_bucket_cut_4": 1.0,
+                    "probability_bucket_high_cap": 2.0,
+                    "daily_research_action_min_directional_rows": 5000,
+                    "daily_research_action_regime_reliable_rows": 10000,
+                    "daily_probability_miscalibration_gap": 1.0,
+                    "daily_probability_miscalibration_mild_gap": 1.0,
+                    "daily_information_coefficient_min_rows": 5000,
+                    "daily_information_coefficient_moderate_threshold": 1.0,
+                    "daily_information_coefficient_strong_threshold": 1.0,
+                }.get(name),
+                live_safe=False,
+            )
+            for name, value in SIGNAL_EVALUATION_REPORTING_POLICY.items()
         ]
     )
     definitions.extend(

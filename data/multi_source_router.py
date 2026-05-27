@@ -95,7 +95,8 @@ class MultiSourceDataRouter:
         self.primary_source = self.sources[0]
         self.source = self.primary_source
         self.max_workers = max(1, int(max_workers or min(len(self.sources), 4)))
-        self.routers = {source: DataSourceRouter(source) for source in self.sources}
+        self.routers: dict[str, DataSourceRouter] = {}
+        self.router_errors: dict[str, str] = {}
         self.last_validation = None
         self.last_collection: dict[str, Any] | None = None
         self.last_provider_frames: dict[str, pd.DataFrame] = {}
@@ -103,14 +104,36 @@ class MultiSourceDataRouter:
     @property
     def loader(self):
         """Expose the primary loader for existing spot-source helpers."""
-        primary_router = self.routers.get(self.primary_source)
+        try:
+            primary_router = self._router_for_source(self.primary_source)
+        except Exception:
+            return None
         return getattr(primary_router, "loader", None)
 
+    def _router_for_source(self, source: str) -> DataSourceRouter:
+        source = str(source or "").upper().strip()
+        router = self.routers.get(source)
+        if router is not None:
+            return router
+        try:
+            router = DataSourceRouter(source)
+        except Exception as exc:
+            self.router_errors[source] = f"{type(exc).__name__}: {exc}"
+            raise
+        self.routers[source] = router
+        self.router_errors.pop(source, None)
+        return router
+
     def _fetch_one(self, source: str, symbol: str) -> dict[str, Any]:
-        router = self.routers[source]
         started = _now_ist()
         start_perf = time.perf_counter()
         try:
+            router = self._router_for_source(source)
+            router.selection_role = (
+                "PRIMARY_DECISION_SOURCE"
+                if source == self.primary_source
+                else "SECONDARY_RESEARCH_ONLY"
+            )
             frame = router.get_option_chain(symbol)
             validation = router.last_validation if isinstance(router.last_validation, dict) else {}
             finished = _now_ist()
@@ -142,10 +165,32 @@ class MultiSourceDataRouter:
     def get_option_chain(self, symbol: str):
         """Fetch all configured providers and return the primary provider frame."""
         results: dict[str, dict[str, Any]] = {}
+        fetch_sources: list[str] = []
+
+        # Some provider SDK imports mutate process-global import state during
+        # initialization. Keep that phase serial, then parallelize the network
+        # fetches once every available router is ready.
+        for source in self.sources:
+            try:
+                self._router_for_source(source)
+                fetch_sources.append(source)
+            except Exception as exc:
+                results[source] = {
+                    "source": source,
+                    "ok": False,
+                    "frame": None,
+                    "validation": None,
+                    "row_count": 0,
+                    "started_at": _now_ist().isoformat(),
+                    "finished_at": _now_ist().isoformat(),
+                    "elapsed_ms": 0.0,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             futures = {
                 pool.submit(self._fetch_one, source, symbol): source
-                for source in self.sources
+                for source in fetch_sources
             }
             for future in as_completed(futures):
                 record = future.result()
@@ -167,6 +212,12 @@ class MultiSourceDataRouter:
             validation = record.get("validation")
             serializable = dict(record)
             serializable["validation"] = _provider_health_summary(validation)
+            serializable["decision_role"] = (
+                "PRIMARY_DECISION_SOURCE"
+                if source == self.primary_source
+                else "SECONDARY_RESEARCH_ONLY"
+            )
+            serializable["research_only"] = source != self.primary_source
             provider_records.append(serializable)
 
         successful_sources = [record["source"] for record in provider_records if record.get("ok")]
@@ -187,6 +238,8 @@ class MultiSourceDataRouter:
             "requested_sources": list(self.sources),
             "successful_sources": successful_sources,
             "failed_sources": failed_sources,
+            "primary_decision_source": self.primary_source,
+            "secondary_research_sources": [source for source in self.sources if source != self.primary_source],
             "provider_records": provider_records,
             "primary_ok": primary_ok,
             "primary_error": None if primary_ok else (primary_record or {}).get("error"),
@@ -199,7 +252,10 @@ class MultiSourceDataRouter:
         return provider_frames[self.primary_source]
 
     def get_expiry_candidates(self) -> list:
-        primary_router = self.routers.get(self.primary_source)
+        try:
+            primary_router = self._router_for_source(self.primary_source)
+        except Exception:
+            return []
         if primary_router is None or not hasattr(primary_router, "get_expiry_candidates"):
             return []
         return primary_router.get_expiry_candidates()

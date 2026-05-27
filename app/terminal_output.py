@@ -256,17 +256,207 @@ def _format_multi_source_ingestion(result=None):
     context = (result or {}).get("multi_source_ingestion") if isinstance(result, dict) else None
     if not isinstance(context, dict) or not context.get("enabled"):
         return None
-    primary = context.get("primary_source")
+    primary = context.get("primary_decision_source") or context.get("primary_source")
     requested = context.get("requested_sources") or []
     successful = context.get("successful_sources") or []
     failed = context.get("failed_sources") or []
+    secondary = context.get("secondary_research_sources")
+    if not isinstance(secondary, list):
+        secondary = [item for item in requested if str(item).upper().strip() != str(primary).upper().strip()]
     requested_text = ",".join(str(item) for item in requested if item)
     successful_text = ",".join(str(item) for item in successful if item) or "none"
     failed_text = ",".join(str(item) for item in failed if item)
-    summary = f"primary={primary}; requested={requested_text}; ok={successful_text}"
+    secondary_text = ",".join(str(item) for item in secondary if item) or "none"
+    summary = f"primary_decision={primary}; secondary_research={secondary_text}; requested={requested_text}; ok={successful_text}"
     if failed_text:
         summary += f"; failed={failed_text}"
     return summary
+
+
+def _format_atm_iv_market_summary(trade):
+    """Return ATM IV with provider-quality context when available."""
+    if not isinstance(trade, dict):
+        return None
+    atm_iv = trade.get("atm_iv")
+    if atm_iv in (None, "", "N/A"):
+        return None
+    try:
+        atm_text = f"{float(atm_iv):.2f}"
+    except (TypeError, ValueError):
+        atm_text = str(atm_iv)
+
+    provider_health = trade.get("provider_health") if isinstance(trade.get("provider_health"), dict) else {}
+    context = []
+    atm_health = provider_health.get("atm_iv_health")
+    core_iv = provider_health.get("core_iv_health")
+    iv_health = provider_health.get("iv_health")
+    atm_midpoint = provider_health.get("atm_iv_midpoint")
+    if atm_health:
+        context.append(f"atm={atm_health}")
+    if core_iv and core_iv != atm_health:
+        context.append(f"core_iv={core_iv}")
+    if iv_health and iv_health not in {atm_health, core_iv}:
+        context.append(f"iv={iv_health}")
+    if atm_midpoint is not None:
+        try:
+            midpoint_pct = float(atm_midpoint) * 100.0
+            if abs(midpoint_pct - float(atm_iv)) > 0.25:
+                context.append(f"validation_mid={midpoint_pct:.1f}%")
+        except (TypeError, ValueError):
+            pass
+    if not context:
+        return atm_text
+    return f"{atm_text} ({', '.join(str(item) for item in context[:3])})"
+
+
+def _format_provider_quality_market_summary(trade):
+    """Return a one-line data-quality/tradeability summary for compact output."""
+    if not isinstance(trade, dict):
+        return None
+    provider_health = trade.get("provider_health") if isinstance(trade.get("provider_health"), dict) else {}
+    parts = []
+    summary = provider_health.get("summary_status")
+    if summary:
+        parts.append(f"health={summary}")
+    analytics = trade.get("analytics_usable")
+    execution = trade.get("execution_suggestion_usable")
+    if analytics is not None:
+        parts.append(f"analytics={'usable' if analytics else 'blocked'}")
+    if execution is not None:
+        execution_blocked = _is_provider_execution_blocked(trade)
+        parts.append(f"execution={'blocked' if execution_blocked or not execution else 'usable'}")
+    provider_mode = trade.get("provider_quality_mode")
+    if provider_mode:
+        parts.append(f"mode={provider_mode}")
+    if not parts:
+        return None
+    return "; ".join(str(item) for item in parts[:4])
+
+
+def _format_runtime_composite_for_decision(trade):
+    """Format runtime composite even when no direction prevented calculation."""
+    if not isinstance(trade, dict):
+        return None
+    required = trade.get("effective_min_composite_score_threshold") or trade.get("min_composite_score_threshold")
+    formatted = _format_score_gate(trade.get("runtime_composite_score"), required)
+    if formatted is not None:
+        return formatted
+    confirmation = str(trade.get("confirmation_status") or trade.get("confirmation") or "").upper().strip()
+    if confirmation == "NO_DIRECTION" or not trade.get("direction"):
+        return "not computed (direction pending)"
+    return None
+
+
+def _format_runtime_composite_supplement_for_decision(trade):
+    if not isinstance(trade, dict):
+        return None
+    applied_raw = trade.get("runtime_composite_supplement_applied")
+    applied = (
+        applied_raw is True
+        or str(applied_raw).strip().upper() in {"1", "1.0", "TRUE", "YES", "Y", "ON"}
+    )
+    if not applied:
+        return None
+    adjustment = _coerce_score_int(trade.get("runtime_composite_supplement_score_adjustment")) or 0
+    base_score = _coerce_score_int(
+        trade.get("runtime_composite_supplement_base_score")
+        if trade.get("runtime_composite_supplement_base_score") is not None
+        else trade.get("runtime_composite_base_score")
+    )
+    adjusted_score = _coerce_score_int(
+        trade.get("runtime_composite_supplement_adjusted_score") or trade.get("runtime_composite_score")
+    )
+    rule = str(trade.get("runtime_composite_supplement_rule") or "live_supplement").strip()
+    if base_score is not None and adjusted_score is not None:
+        return f"{adjustment:+d} {rule} ({base_score}->{adjusted_score})"
+    return f"{adjustment:+d} {rule}"
+
+
+def _should_render_provider_compact_diagnostics(trade):
+    """Return True when compact output should expose provider/data usability detail."""
+    if not isinstance(trade, dict):
+        return False
+    status = str(trade.get("trade_status") or "").upper()
+    if status in {
+        "WATCHLIST",
+        "NO_TRADE",
+        "BLOCKED_SETUP",
+        "DATA_INVALID",
+        "GLOBAL_RISK_BLOCKED",
+        "EVENT_LOCKDOWN",
+    }:
+        return True
+    provider_health = trade.get("provider_health") if isinstance(trade.get("provider_health"), dict) else {}
+    if str(provider_health.get("summary_status") or "").upper().strip() in {"CAUTION", "WEAK"}:
+        return True
+    if trade.get("execution_suggestion_usable") is False:
+        return True
+    if _is_provider_execution_blocked(trade):
+        return True
+    provider_mode = str(trade.get("provider_quality_mode") or "").upper().strip()
+    return provider_mode in {
+        "ANALYTICS_ONLY_EXECUTION_BLOCKED",
+        "DATA_UNUSABLE_DIRECTION_BLOCKED",
+    }
+
+
+def _is_provider_execution_blocked(trade):
+    """Return effective execution block after provider-health overlays."""
+    if not isinstance(trade, dict):
+        return False
+    provider_health = trade.get("provider_health") if isinstance(trade.get("provider_health"), dict) else {}
+    blocked_by = {
+        str(item).strip().lower()
+        for item in (trade.get("blocked_by") or [])
+        if item is not None
+    }
+    provider_block_status = str(
+        provider_health.get("trade_blocking_status")
+        or trade.get("provider_health_blocking_status")
+        or trade.get("market_data_trade_blocking_status")
+        or ""
+    ).upper().strip()
+    provider_execution_status = str(trade.get("provider_execution_status") or "").upper().strip()
+    provider_execution_trust = str(trade.get("provider_execution_trust") or "").upper().strip()
+    provider_mode = str(trade.get("provider_quality_mode") or "").upper().strip()
+    reason_code = str(trade.get("no_trade_reason_code") or "").upper().strip()
+    return bool(
+        provider_block_status in {"BLOCK", "BLOCKED"}
+        or provider_execution_status == "BLOCKED"
+        or provider_execution_trust == "DO_NOT_TRADE_EXECUTION_QUOTES"
+        or provider_mode == "ANALYTICS_ONLY_EXECUTION_BLOCKED"
+        or bool(trade.get("provider_quality_blocks_execution"))
+        or "provider_health" in blocked_by
+        or reason_code.startswith("PROVIDER_HEALTH_")
+    )
+
+
+def _provider_execution_block_phrase(trade):
+    """Return compact wording for an effective provider execution block."""
+    if not _is_provider_execution_blocked(trade):
+        return "execution data is not tradable"
+    if isinstance(trade, dict) and trade.get("execution_suggestion_usable") is True:
+        provider_health = trade.get("provider_health") if isinstance(trade.get("provider_health"), dict) else {}
+        reasons = provider_health.get("trade_blocking_reasons")
+        reasons = reasons if isinstance(reasons, list) else []
+        if any("iv" in str(reason).lower() for reason in reasons):
+            return "provider IV/surface health is blocking execution readiness"
+        return "provider health is blocking execution readiness"
+    return "execution data is not tradable"
+
+
+def _format_provider_note_for_display(trade):
+    """Return provider note text aligned with raw vs effective execution usability."""
+    if not isinstance(trade, dict):
+        return None
+    if _is_provider_execution_blocked(trade) and trade.get("execution_suggestion_usable") is True:
+        provider_health = trade.get("provider_health") if isinstance(trade.get("provider_health"), dict) else {}
+        reasons = provider_health.get("trade_blocking_reasons")
+        reasons = reasons if isinstance(reasons, list) else []
+        if any("iv" in str(reason).lower() for reason in reasons):
+            return "Raw quotes are usable, but provider IV/surface health is blocking execution readiness."
+        return "Raw quotes are usable, but provider-health checks are blocking execution readiness."
+    return trade.get("provider_quality_note")
 
 
 def _print_market_data_provenance(*, result=None, trade=None):
@@ -327,7 +517,9 @@ def _render_score_threshold_block(title, *, current, required, suffix=""):
 
     print(f"\n  {title}")
     gap = required_int - current_int
-    bar_filled = max(0, min(20, round(20 * current_int / max(required_int, 1))))
+    bar_ratio = 20 * current_int / max(required_int, 1)
+    bar_filled = math.ceil(bar_ratio) if current_int >= required_int else math.floor(bar_ratio)
+    bar_filled = max(0, min(20, bar_filled))
     bar = "█" * bar_filled + "░" * (20 - bar_filled)
     gap_str = f"  ({gap:+d} to threshold)" if gap > 0 else "  ✓ threshold met"
     if suffix:
@@ -955,6 +1147,41 @@ def _resolve_top_oi_levels(trade, option_chain_frame, *, top_n=5):
         except Exception:
             source_name = ""
 
+    valuation_raw = None
+    if isinstance(trade, dict):
+        valuation_raw = trade.get("valuation_time") or trade.get("signal_timestamp") or trade.get("timestamp")
+    try:
+        valuation_ts = pd.to_datetime([valuation_raw], errors="coerce", utc=True)[0]
+    except Exception:
+        valuation_ts = pd.NaT
+
+    def _prior_baseline_frame(chain_frame):
+        if chain_frame is None or pd.isna(valuation_ts):
+            return chain_frame
+        try:
+            timestamp_col = None
+            for candidate in ("signal_timestamp", "timestamp", "valuation_time", "as_of", "quoteTimestamp"):
+                if candidate in getattr(chain_frame, "columns", []):
+                    timestamp_col = candidate
+                    break
+            latest_ts = None
+            if timestamp_col is not None:
+                timestamps = pd.to_datetime(chain_frame[timestamp_col], errors="coerce", utc=True).dropna()
+                if not timestamps.empty:
+                    latest_ts = timestamps.max()
+            if latest_ts is None:
+                attrs = getattr(chain_frame, "attrs", {}) or {}
+                for candidate in ("timestamp", "valuation_time", "as_of", "snapshot_timestamp"):
+                    parsed = pd.to_datetime([attrs.get(candidate)], errors="coerce", utc=True)[0]
+                    if not pd.isna(parsed):
+                        latest_ts = parsed
+                        break
+            if latest_ts is not None and latest_ts > valuation_ts:
+                return None
+        except Exception:
+            return chain_frame
+        return chain_frame
+
     def _normalize_expiry_key(value):
         if value is None:
             return None
@@ -1041,9 +1268,11 @@ def _resolve_top_oi_levels(trade, option_chain_frame, *, top_n=5):
         raw_frames = trade.get("premium_baseline_chain_frames") or {}
         if isinstance(raw_frames, dict):
             for horizon_name, frame in raw_frames.items():
+                frame = _prior_baseline_frame(frame)
                 if frame is not None:
                     premium_baseline_frames[str(horizon_name)] = frame
         legacy_premium_frame = trade.get("premium_baseline_chain_frame")
+        legacy_premium_frame = _prior_baseline_frame(legacy_premium_frame)
         if legacy_premium_frame is not None and "5m" not in premium_baseline_frames:
             premium_baseline_frames["5m"] = legacy_premium_frame
 
@@ -1051,15 +1280,18 @@ def _resolve_top_oi_levels(trade, option_chain_frame, *, top_n=5):
         raw_frames = option_chain_frame.attrs.get("premium_baseline_chain_frames") or {}
         if isinstance(raw_frames, dict):
             for horizon_name, frame in raw_frames.items():
+                frame = _prior_baseline_frame(frame)
                 if frame is not None and str(horizon_name) not in premium_baseline_frames:
                     premium_baseline_frames[str(horizon_name)] = frame
         legacy_premium_frame = option_chain_frame.attrs.get("premium_baseline_chain_frame")
+        legacy_premium_frame = _prior_baseline_frame(legacy_premium_frame)
         if legacy_premium_frame is not None and "5m" not in premium_baseline_frames:
             premium_baseline_frames["5m"] = legacy_premium_frame
 
     fallback_previous_chain = trade.get("previous_chain_frame") if isinstance(trade, dict) else None
     if fallback_previous_chain is None and isinstance(option_chain_frame, pd.DataFrame):
         fallback_previous_chain = option_chain_frame.attrs.get("previous_chain_frame")
+    fallback_previous_chain = _prior_baseline_frame(fallback_previous_chain)
 
     previous_oi_by_key = None
 
@@ -1085,6 +1317,7 @@ def _resolve_top_oi_levels(trade, option_chain_frame, *, top_n=5):
             oi_baseline = trade.get("zerodha_oi_baseline_chain_frame") if isinstance(trade, dict) else None
             if oi_baseline is None and isinstance(option_chain_frame, pd.DataFrame):
                 oi_baseline = option_chain_frame.attrs.get("zerodha_oi_baseline_chain_frame")
+            oi_baseline = _prior_baseline_frame(oi_baseline)
         if oi_baseline is None:
             oi_baseline = premium_baseline_frames.get("5m")
         if oi_baseline is None:
@@ -2608,10 +2841,42 @@ def _render_dealer_gamma_levels(trade):
         pressure_items.append(("vanna", vanna_regime))
     if charm_regime and charm_regime not in ("UNKNOWN", "NEUTRAL_CHARM"):
         pressure_items.append(("charm", charm_regime))
-    if pressure_items:
+    dealer_bias_note = _dealer_bias_visual_note(trade, magnets=magnets)
+    if pressure_items or dealer_bias_note:
         print(f"\n  Dealer Pressure")
         for label, value in pressure_items:
             print(f"    {label:<22}: {value}")
+        if dealer_bias_note:
+            print(f"    {'dealer_bias_note':<22}: {dealer_bias_note}")
+
+
+def _dealer_bias_visual_note(trade, *, magnets=None):
+    """Explain visually surprising dealer-bias/magnet combinations."""
+    if not isinstance(trade, dict):
+        return None
+    bias = str(trade.get("dealer_hedging_bias") or "").upper().strip()
+    if "ACCELERATION" not in bias:
+        return None
+    spot = trade.get("spot")
+    try:
+        spot_value = float(spot)
+    except (TypeError, ValueError):
+        return None
+    levels = []
+    for level in magnets or []:
+        try:
+            levels.append(float(level))
+        except (TypeError, ValueError):
+            continue
+    if not levels:
+        return None
+    above = sum(1 for level in levels if level > spot_value)
+    below = sum(1 for level in levels if level < spot_value)
+    if "DOWNSIDE" in bias and above > 0 and below == 0:
+        return "bias is hedge-flow pressure; displayed magnets are upside levels"
+    if "UPSIDE" in bias and below > 0 and above == 0:
+        return "bias is hedge-flow pressure; displayed magnets are downside levels"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2761,6 +3026,14 @@ def _render_provider_health_compact_detail(trade):
             "    iv quality: "
             f"atm={atm_str}, parity={parity_str}, staleness={stale_str}"
         )
+    iv_validation_source = provider_health.get("iv_validation_source")
+    if iv_validation_source:
+        raw_iv_rows = provider_health.get("raw_positive_iv_rows")
+        validation_iv_rows = provider_health.get("validation_positive_iv_rows")
+        if raw_iv_rows is not None and validation_iv_rows is not None:
+            print(f"    iv source : {iv_validation_source} ({raw_iv_rows}->{validation_iv_rows} rows)")
+        else:
+            print(f"    iv source : {iv_validation_source}")
     readiness_score = provider_health.get("market_data_readiness_score")
     readiness_tier = provider_health.get("market_data_readiness_tier")
     weak_components = provider_health.get("market_data_weak_components")
@@ -2829,28 +3102,14 @@ def _render_data_usability_diagnostics(trade, *, verbose=False):
     if analytics_usable is None and execution_usable is None and not tradable_data and not reliability:
         return
 
-    provider_health = trade.get("provider_health") if isinstance(trade.get("provider_health"), dict) else {}
-    blocked_by = {
-        str(item).strip().lower()
-        for item in (trade.get("blocked_by") or [])
-        if item is not None
-    }
-    provider_block_status = str(
-        provider_health.get("trade_blocking_status")
-        or trade.get("provider_health_blocking_status")
-        or trade.get("market_data_trade_blocking_status")
-        or ""
-    ).upper().strip()
-    provider_execution_blocked = bool(
-        provider_block_status in {"BLOCK", "BLOCKED"}
-        or "provider_health" in blocked_by
-        or str(trade.get("no_trade_reason_code") or "").upper().startswith("PROVIDER_HEALTH_")
-    )
+    provider_execution_blocked = _is_provider_execution_blocked(trade)
 
     print("\nDATA USABILITY")
     print("---------------------------")
     print(f"{'analytics_usable':26}: {analytics_usable}")
     print(f"{'execution_suggestion_usable':26}: {execution_usable}")
+    if provider_execution_blocked and execution_usable is True:
+        print(f"{'effective_execution_usable':26}: False (provider block active)")
     for label, key in (
         ("provider_quality_mode", "provider_quality_mode"),
         ("direction_trust", "provider_direction_trust"),
@@ -2860,7 +3119,7 @@ def _render_data_usability_diagnostics(trade, *, verbose=False):
         value = trade.get(key)
         if value not in (None, "", []):
             print(f"{label:26}: {value}")
-    provider_note = trade.get("provider_quality_note")
+    provider_note = _format_provider_note_for_display(trade)
     if provider_note:
         print(f"{'provider_note':26}: {provider_note}")
     if provider_execution_blocked:
@@ -2964,7 +3223,35 @@ def _render_signal_confidence(trade, *, show_components=True):
         print(f"{'option_efficiency':26}: {result['option_efficiency_component']}")
 
 
-def _render_regime_rollout_status(result):
+def _rollout_has_compact_action(result, *, regime_eval=None, shadow_comparison=None, shadow_summary=None, latest_session=None):
+    """Return True when rollout status is actionable enough for compact mode."""
+    if not isinstance(result, dict):
+        return False
+    regime_eval = regime_eval if isinstance(regime_eval, dict) else {}
+    shadow_comparison = shadow_comparison if isinstance(shadow_comparison, dict) else {}
+    shadow_summary = shadow_summary if isinstance(shadow_summary, dict) else {}
+    latest_session = latest_session if isinstance(latest_session, dict) else {}
+
+    if bool(result.get("shadow_mode_active")):
+        return True
+    if bool(latest_session.get("policy_alert")):
+        return True
+    alert_level = str(latest_session.get("alert_level") or "").upper().strip()
+    if alert_level in {"ALERT", "RED", "BLOCK", "FAIL", "FAILED"}:
+        return True
+    shadow_log_status = str(result.get("shadow_log_status") or "").upper().strip()
+    if shadow_log_status in {"FAILED", "ERROR", "NOT_CAPTURED"}:
+        return True
+    validation_status = str(shadow_comparison.get("validation_status") or "").upper().strip()
+    if validation_status in {"ALERT", "BLOCK", "FAILED", "DRIFT"}:
+        return True
+    route_reason = str(regime_eval.get("reason") or "").upper().strip()
+    if route_reason not in {"", "ALREADY_AUTHORITATIVE"} and bool(regime_eval.get("shadow_candidate_pack")):
+        return True
+    return False
+
+
+def _render_regime_rollout_status(result, *, compact=False):
     """Render shadow-rollout diagnostics and recent validation session summary."""
     if not isinstance(result, dict):
         return
@@ -2973,6 +3260,15 @@ def _render_regime_rollout_status(result):
     shadow_comparison = result.get("shadow_comparison") if isinstance(result.get("shadow_comparison"), dict) else {}
     shadow_summary = result.get("shadow_validation_summary") if isinstance(result.get("shadow_validation_summary"), dict) else {}
     latest_session = shadow_summary.get("latest_session_validation") if isinstance(shadow_summary.get("latest_session_validation"), dict) else {}
+
+    if compact and not _rollout_has_compact_action(
+        result,
+        regime_eval=regime_eval,
+        shadow_comparison=shadow_comparison,
+        shadow_summary=shadow_summary,
+        latest_session=latest_session,
+    ):
+        return
 
     if not regime_eval and not shadow_comparison and not shadow_summary:
         return
@@ -3123,7 +3419,7 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         "prev_close": spot_summary.get("prev_close"),
         "max_pain": _max_pain_str,
         "expected_move": _expected_move_str,
-        "atm_iv": trade.get("atm_iv") if trade else None,
+        "atm_iv": _format_atm_iv_market_summary(trade),
         "macro_event_risk": macro_event_state.get("macro_event_risk_score"),
         "event_lockdown": macro_event_state.get("event_lockdown_flag"),
         "requested_option_source": _provenance_fields.get("requested_option_source"),
@@ -3132,6 +3428,7 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         "spot_source": _provenance_fields.get("spot_source"),
         "source_consistency": _provenance_fields.get("source_consistency"),
         "data_provenance": _provenance_fields.get("provenance_status"),
+        "provider_quality": _format_provider_quality_market_summary(trade),
     })
     _render_market_summary_levels_table(
         spot=spot,
@@ -3226,7 +3523,14 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
             ]
             prior_text = prior_ctx.get("prior_direction")
             if prior_text:
-                prior_text = f"{prior_text} ({prior_ctx.get('prior_score')})"
+                prior_score = prior_ctx.get("prior_score")
+                try:
+                    prior_abs = abs(float(prior_score))
+                except (TypeError, ValueError):
+                    prior_abs = None
+                prior_text = f"{prior_text} (score {prior_score})"
+                if prior_text.startswith("NEUTRAL") and prior_abs is not None and prior_abs > 0:
+                    prior_text += "; below directional threshold"
                 if prior_reasons:
                     prior_text += f" via {', '.join(prior_reasons[:3])}"
             _print_section("HISTORICAL CONTEXT", {
@@ -3271,7 +3575,7 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
                 "wall_read": wall_ctx.get("state"),
             })
 
-    _render_regime_rollout_status(result)
+    _render_regime_rollout_status(result, compact=True)
 
     # Prepare the trade-decision block early, but render it directly above
     # TRADING SUGGESTION so the two execution-facing sections stay together.
@@ -3289,17 +3593,11 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         )
         
         decision_classification = trade.get("decision_classification")
-        runtime_composite_required = (
-            trade.get("effective_min_composite_score_threshold")
-            or trade.get("min_composite_score_threshold")
-        )
         decision_dict = {
             "decision": decision_classification,
             "trade_strength": display.get("trade_strength") if display else None,
-            "runtime_composite_score": _format_score_gate(
-                trade.get("runtime_composite_score"),
-                runtime_composite_required,
-            ),
+            "runtime_composite_score": _format_runtime_composite_for_decision(trade),
+            "runtime_score_supplement": _format_runtime_composite_supplement_for_decision(trade),
             "signal_quality": display.get("signal_quality") if display else None,
             "confirmation": trade.get("confirmation_status"),
             "reversal_stage": trade.get("reversal_stage"),
@@ -3417,11 +3715,11 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
             print("  No trade yet. Provider data is not reliable enough for direction or execution.")
         elif _confirmation in {"NO_DIRECTION", "CONFLICT"} or not _direction:
             if _provider_mode == "ANALYTICS_ONLY_EXECUTION_BLOCKED":
-                print("  No trade yet. Waiting for directional confirmation; execution data is not tradable.")
+                print(f"  No trade yet. Waiting for directional confirmation; {_provider_execution_block_phrase(trade)}.")
             else:
                 print("  No trade yet. Waiting for directional confirmation.")
         elif _reason_code == "EXECUTION_DATA_UNUSABLE" or _provider_mode == "ANALYTICS_ONLY_EXECUTION_BLOCKED":
-            print("  No trade yet. Signal analytics are usable, but execution data is not tradable.")
+            print(f"  No trade yet. Signal analytics are usable, but {_provider_execution_block_phrase(trade)}.")
         elif "provider_health" in _blocked_by or _reason_code.startswith("PROVIDER_HEALTH_"):
             print("  No trade yet. Provider health is blocking execution.")
         elif _reason_text:
@@ -3449,7 +3747,9 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
 
             print(f"\n  Trade Strength Threshold")
             _gap = _min_strength - _cur_strength
-            _bar_filled = max(0, min(20, round(20 * _cur_strength / max(_min_strength, 1))))
+            _bar_ratio = 20 * _cur_strength / max(_min_strength, 1)
+            _bar_filled = math.ceil(_bar_ratio) if _cur_strength >= _min_strength else math.floor(_bar_ratio)
+            _bar_filled = max(0, min(20, _bar_filled))
             _bar = "█" * _bar_filled + "░" * (20 - _bar_filled)
             _gap_str = f"  ({_gap:+d} to threshold)" if _gap > 0 else "  ✓ threshold met"
             if _no_direction:
@@ -3569,16 +3869,7 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
                 for price_trigger in price_triggers:
                     print(f"      • {price_trigger}")
 
-        _status = str((trade or {}).get("trade_status") or "").upper()
-        _show_provider_detail = _status in {
-            "WATCHLIST",
-            "NO_TRADE",
-            "BLOCKED_SETUP",
-            "DATA_INVALID",
-            "GLOBAL_RISK_BLOCKED",
-            "EVENT_LOCKDOWN",
-        }
-        if _show_provider_detail:
+        if _should_render_provider_compact_diagnostics(trade):
             _render_provider_health_compact_detail(trade)
             _render_data_usability_diagnostics(trade, verbose=False)
 
@@ -3722,11 +4013,12 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         for finding in consistency_findings:
             print(f"  • {finding}")
 
-    # ── 7. BREAKOUT PROBABILITY (POINTS) ───────────────────────────────
+    # ── 7. RANGE BREACH PROBABILITY (POINTS) ───────────────────────────
     breakout_rows, breakout_has_direction = _compute_breakout_probability_rows(trade)
     if breakout_rows:
-        print("\nBREAKOUT PROBABILITY (POINTS)")
+        print("\nRANGE BREACH PROBABILITY (POINTS)")
         print("---------------------------")
+        print("  note: range breach probability, not directional trade probability")
         for threshold, up_prob, down_prob in breakout_rows:
             if breakout_has_direction:
                 print(f"{f'+/- {threshold} pts':26}: up {up_prob:.0%} | down {down_prob:.0%}")

@@ -85,6 +85,103 @@ def test_generate_trade_passes_days_to_expiry_into_market_state(monkeypatch):
     assert captured["days_to_expiry"] == 1.0
 
 
+def test_generate_trade_ignores_future_previous_chain(monkeypatch):
+    captured = {"prev_df": "not-called"}
+
+    class _StopReview(Exception):
+        pass
+
+    def _fake_normalize_option_chain(option_chain, spot=None, valuation_time=None):
+        return option_chain
+
+    def _fake_collect_market_state(df, spot, symbol=None, prev_df=None, days_to_expiry=None, **kwargs):
+        captured["prev_df"] = prev_df
+        raise _StopReview()
+
+    monkeypatch.setattr(signal_engine, "normalize_option_chain", _fake_normalize_option_chain)
+    monkeypatch.setattr(signal_engine, "_collect_market_state", _fake_collect_market_state)
+
+    option_chain = pd.DataFrame(
+        {
+            "strikePrice": [22500],
+            "OPTION_TYP": ["CE"],
+            "lastPrice": [100.0],
+            "timestamp": ["2026-03-27T10:00:00+05:30"],
+        }
+    )
+    future_previous_chain = pd.DataFrame(
+        {
+            "strikePrice": [22500],
+            "OPTION_TYP": ["CE"],
+            "lastPrice": [95.0],
+            "timestamp": ["2026-03-27T10:05:00+05:30"],
+        }
+    )
+
+    with pytest.raises(_StopReview):
+        signal_engine.generate_trade(
+            symbol="NIFTY",
+            spot=22500.0,
+            option_chain=option_chain,
+            previous_chain=future_previous_chain,
+            option_chain_validation={"selected_expiry": "2026-03-28 10:00:00"},
+            valuation_time="2026-03-27T10:00:00+05:30",
+        )
+
+    assert captured["prev_df"] is None
+
+
+def test_generate_trade_accepts_timestamp_free_previous_chain_for_live_memory(monkeypatch):
+    captured = {"prev_df": "not-called"}
+
+    class _StopReview(Exception):
+        pass
+
+    def _fake_normalize_option_chain(option_chain, spot=None, valuation_time=None):
+        return option_chain
+
+    def _fake_collect_market_state(df, spot, symbol=None, prev_df=None, days_to_expiry=None, **kwargs):
+        captured["prev_df"] = prev_df
+        raise _StopReview()
+
+    monkeypatch.setattr(signal_engine, "normalize_option_chain", _fake_normalize_option_chain)
+    monkeypatch.setattr(signal_engine, "_collect_market_state", _fake_collect_market_state)
+
+    option_chain = pd.DataFrame(
+        {
+            "strikePrice": [22500],
+            "OPTION_TYP": ["CE"],
+            "lastPrice": [100.0],
+            "timestamp": ["2026-03-27T10:00:00+05:30"],
+        }
+    )
+    timestamp_free_previous_chain = pd.DataFrame(
+        {
+            "strikePrice": [22500],
+            "OPTION_TYP": ["CE"],
+            "lastPrice": [95.0],
+        }
+    )
+
+    with pytest.raises(_StopReview):
+        signal_engine.generate_trade(
+            symbol="NIFTY",
+            spot=22500.0,
+            option_chain=option_chain,
+            previous_chain=timestamp_free_previous_chain,
+            option_chain_validation={"selected_expiry": "2026-03-28 10:00:00"},
+            valuation_time="2026-03-27T10:00:00+05:30",
+        )
+
+    assert captured["prev_df"] is timestamp_free_previous_chain
+    accepted, diagnostics = signal_engine._filter_prior_snapshot_frame(
+        timestamp_free_previous_chain,
+        "2026-03-27T10:00:00+05:30",
+    )
+    assert accepted is timestamp_free_previous_chain
+    assert diagnostics["status"] == "ACCEPTED_TIMESTAMP_UNAVAILABLE"
+
+
 def test_generate_trade_disables_live_auxiliary_history_in_historical_mode(monkeypatch):
     import features.ta_indicators as ta_indicators
 
@@ -462,6 +559,7 @@ def test_portfolio_concentration_context_ignores_watchlist_only_history(monkeypa
             "symbol": ["NIFTY"] * 6,
             "direction": ["CALL"] * 6,
             "trade_status": ["WATCHLIST"] * 6,
+            "signal_timestamp": [f"2026-04-17T09:{20 + i:02d}:00+05:30" for i in range(6)],
             "tradeability_score": [68, 70, 69, 71, 67, 72],
         }
     )
@@ -469,7 +567,7 @@ def test_portfolio_concentration_context_ignores_watchlist_only_history(monkeypa
     monkeypatch.setattr(signal_engine, "_load_recent_outcome_history_frame", lambda: (history, "test"))
 
     context = signal_engine._compute_portfolio_concentration_context(
-        payload={"symbol": "NIFTY", "direction": "CALL"},
+        payload={"symbol": "NIFTY", "direction": "CALL", "valuation_time": "2026-04-17T10:00:00+05:30"},
         runtime_thresholds={
             "enable_portfolio_concentration_guard": 1,
             "portfolio_concentration_lookback_signals": 6,

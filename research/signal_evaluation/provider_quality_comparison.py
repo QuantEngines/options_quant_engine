@@ -19,6 +19,10 @@ from typing import Any
 import pandas as pd
 
 from config.market_data_policy import IST_TIMEZONE
+from data.iv_validation_enrichment import (
+    attach_iv_validation_diagnostics,
+    build_iv_validation_frame,
+)
 from data.option_chain_validation import _resolve_column_name, validate_option_chain
 from data.replay_loader import load_option_chain_snapshot, load_spot_snapshot
 
@@ -257,7 +261,13 @@ def _profile_snapshot(
     error = None
     try:
         frame = load_option_chain_snapshot(str(record["path"]))
-        validation = validate_option_chain(frame, spot=spot, as_of=timestamp)
+        validation_frame, iv_validation_diagnostics = build_iv_validation_frame(
+            frame,
+            spot=spot,
+            valuation_time=timestamp,
+        )
+        validation = validate_option_chain(validation_frame, spot=spot, as_of=timestamp)
+        validation = attach_iv_validation_diagnostics(validation, iv_validation_diagnostics)
     except Exception as exc:
         frame = pd.DataFrame()
         validation = {}
@@ -291,6 +301,10 @@ def _profile_snapshot(
         "one_sided_quote_rows": _safe_int(validation.get("one_sided_quote_rows")),
         "effective_priced_ratio": _safe_float(validation.get("effective_priced_ratio")),
         "iv_ratio": _safe_float(validation.get("iv_ratio")),
+        "iv_validation_source": validation.get("iv_validation_source"),
+        "raw_positive_iv_rows": _safe_int(validation.get("raw_positive_iv_rows")),
+        "validation_positive_iv_rows": _safe_int(validation.get("validation_positive_iv_rows")),
+        "model_derived_iv_applied": bool(validation.get("model_derived_iv_applied")) if validation else False,
         "paired_strike_ratio": _safe_float(validation.get("paired_strike_ratio")),
         "is_valid": bool(validation.get("is_valid")) if validation else False,
         "is_stale": bool(validation.get("is_stale")) if validation else False,
@@ -387,6 +401,10 @@ def _pair_profiles(
         if best_idx is None or best_delta is None or best_delta > max_pair_seconds:
             continue
         right = second[best_idx]
+        left_ts = pd.Timestamp(left["timestamp"])
+        right_ts = pd.Timestamp(right["timestamp"])
+        right_after_left = max((right_ts - left_ts).total_seconds(), 0.0)
+        left_after_right = max((left_ts - right_ts).total_seconds(), 0.0)
         unused_second.remove(best_idx)
         paired_paths.add(str(left.get("path")))
         paired_paths.add(str(right.get("path")))
@@ -403,6 +421,15 @@ def _pair_profiles(
                 "left_timestamp": left["timestamp"],
                 "right_timestamp": right["timestamp"],
                 "pair_delta_seconds": round(float(best_delta), 3),
+                "right_after_left_seconds": round(float(right_after_left), 3),
+                "left_after_right_seconds": round(float(left_after_right), 3),
+                "research_only": True,
+                "causal_replay_eligible": bool(right_after_left == 0.0),
+                "pairing_note": (
+                    "offline_near_sync_research_pair"
+                    if right_after_left == 0.0
+                    else "offline_near_sync_research_pair_right_after_left"
+                ),
                 "analytics_preferred_source": _pick_preferred(left, right, purpose="analytics"),
                 "execution_preferred_source": _pick_preferred(left, right, purpose="execution"),
                 "left_readiness_score": left.get("readiness_score"),
@@ -482,6 +509,9 @@ def _build_markdown(report: dict[str, Any]) -> str:
         f"- Snapshot profiles: {len(report['snapshot_profiles'])}",
         f"- Paired comparisons: {len(report['paired_comparisons'])}",
         f"- Unpaired snapshots: {len(report['unpaired_snapshots'])}",
+        f"- Scope: `{report.get('comparison_scope', 'OFFLINE_RESEARCH_ONLY')}`",
+        "",
+        "This report is an offline provider-quality artifact. It does not select or override the live decision provider.",
         "",
     ]
     lines.extend(
@@ -509,6 +539,7 @@ def _build_markdown(report: dict[str, Any]) -> str:
             [
                 "left_timestamp",
                 "pair_delta_seconds",
+                "causal_replay_eligible",
                 "analytics_preferred_source",
                 "execution_preferred_source",
                 "left_readiness_score",
@@ -582,6 +613,8 @@ def build_provider_quality_comparison(
         "symbol": str(symbol).upper().strip(),
         "sources": list(sources),
         "session_date": session_date,
+        "comparison_scope": "OFFLINE_RESEARCH_ONLY",
+        "live_decision_policy": "primary source remains the only live decision source; secondary sources are research-only evidence",
         "option_snapshot_dir": _rel(option_snapshot_dir),
         "spot_snapshot_dir": _rel(spot_snapshot_dir),
         "max_pair_seconds": max_pair_seconds,

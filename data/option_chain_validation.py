@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config.policy_resolver import get_parameter_value
+from config.policy_resolver import get_parameter_value, resolve_mapping
 from data.expiry_resolver import ordered_expiries
 from data.feature_reliability import compute_feature_reliability_weights
 from data.tradable_data_layer import evaluate_tradable_data_layer
@@ -44,6 +44,109 @@ COLUMN_ALIASES = {
         "fetch_timestamp",
     ],
 }
+
+READINESS_COMPONENT_NA_SCORES = {
+    "row": 0.60,
+    "atm_iv": 0.68,
+    "iv_parity": 0.70,
+    "iv_staleness": 0.70,
+    "duplicate": 0.80,
+    "quote_integrity": 0.72,
+    "quote_freshness": 0.72,
+    "quote_spread": 0.72,
+    "liquidity_coverage": 0.68,
+    "expiry": 0.72,
+}
+
+READINESS_COMPONENT_WEIGHTS = {
+    "row": 0.06,
+    "pricing": 0.12,
+    "core_marketability": 0.16,
+    "core_pairing": 0.12,
+    "core_iv": 0.12,
+    "atm_iv": 0.10,
+    "iv_parity": 0.07,
+    "iv_staleness": 0.05,
+    "duplicate": 0.03,
+    "quote_integrity": 0.03,
+    "quote_freshness": 0.05,
+    "quote_spread": 0.05,
+    "liquidity_coverage": 0.03,
+    "expiry": 0.01,
+}
+
+READINESS_SCORING_DEFAULTS = {
+    "critical_failure_penalty": 7.0,
+    "critical_failure_penalty_cap": 28.0,
+    "severe_failure_score_cap": 64.0,
+    "multi_failure_score_cap": 49.0,
+    "summary_weak_penalty": 8.0,
+    "summary_caution_penalty": 3.0,
+    "high_tier_min_score": 85.0,
+    "moderate_tier_min_score": 70.0,
+    "low_tier_min_score": 50.0,
+    "weak_component_score_threshold": 0.40,
+}
+
+READINESS_COMPONENT_HEALTH_KEYS = {
+    "row": "row_health",
+    "pricing": "pricing_health",
+    "core_marketability": "core_marketability_health",
+    "core_pairing": "core_pairing_health",
+    "core_iv": "core_iv_health",
+    "atm_iv": "atm_iv_health",
+    "iv_parity": "iv_parity_health",
+    "iv_staleness": "iv_staleness_health",
+    "duplicate": "duplicate_health",
+    "quote_integrity": "core_quote_integrity_health",
+    "quote_freshness": "quote_freshness_health",
+    "quote_spread": "quote_spread_health",
+    "liquidity_coverage": "liquidity_coverage_health",
+    "expiry": "expiry_health",
+}
+
+VOL_SURFACE_QUALITY_DEFAULTS = {
+    "atm_nearest_strike_count": 3,
+    "min_positive_iv": 0.005,
+    "atm_iv_min_decimal": 0.04,
+    "atm_iv_max_decimal": 1.50,
+    "atm_vix_ratio_min": 0.30,
+    "atm_vix_ratio_max": 3.00,
+    "iv_parity_min_pairs": 3,
+    "iv_parity_divergence_threshold": 0.60,
+    "iv_parity_good_breach_ratio_max": 0.20,
+    "iv_parity_caution_breach_ratio_max": 0.50,
+    "iv_staleness_min_valid_rows": 10,
+    "iv_staleness_round_decimals": 4,
+    "iv_staleness_min_cluster_rows": 5,
+    "iv_staleness_cluster_ratio_floor": 0.08,
+    "iv_staleness_max_valid_iv_decimal": 2.00,
+    "iv_staleness_good_ratio_max": 0.20,
+    "iv_staleness_caution_ratio_max": 0.40,
+    "iv_ratio_good_floor": 0.40,
+    "iv_ratio_caution_floor": 0.15,
+    "core_iv_ratio_good_floor": 0.50,
+    "core_iv_ratio_caution_floor": 0.25,
+}
+
+
+def _vol_surface_quality_policy() -> dict:
+    return resolve_mapping("option_chain_validation.vol_surface_quality", VOL_SURFACE_QUALITY_DEFAULTS)
+
+
+def _policy_float(policy: dict, key: str, default: float) -> float:
+    try:
+        return float(policy.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _policy_int(policy: dict, key: str, default: int) -> int:
+    try:
+        value = int(float(policy.get(key, default)))
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(value, 0)
 
 
 def _resolve_column_name(option_chain, canonical_name: str) -> str | None:
@@ -190,6 +293,8 @@ def _assess_atm_iv_quality(
         CAUTION — one leg missing, or out of range, or VIX-inconsistent
         WEAK    — neither CE nor PE ATM IV present
     """
+    policy = _vol_surface_quality_policy()
+    min_positive_iv = _policy_float(policy, "min_positive_iv", 0.005)
     _absent: dict = {
         "atm_iv_present": False,
         "atm_iv_midpoint": None,
@@ -226,16 +331,17 @@ def _assess_atm_iv_quality(
     # Nearest 3 unique strikes regardless of IV status — absence of IV at ATM
     # must be detectable even when OTM strikes carry valid IV.
     strike_min_dist = typed.groupby("strike")["distance"].min()
-    nearest_3_strikes = strike_min_dist.nsmallest(3).index.tolist()
+    nearest_strike_count = max(_policy_int(policy, "atm_nearest_strike_count", 3), 1)
+    nearest_3_strikes = strike_min_dist.nsmallest(nearest_strike_count).index.tolist()
     if not nearest_3_strikes:
         return _absent
 
     atm_rows = typed[typed["strike"].isin(nearest_3_strikes)]
     atm_ce_iv = atm_rows.loc[
-        (atm_rows["opt_type"] == "CE") & (atm_rows["iv"].gt(0.005)), "iv"
+        (atm_rows["opt_type"] == "CE") & (atm_rows["iv"].gt(min_positive_iv)), "iv"
     ]
     atm_pe_iv = atm_rows.loc[
-        (atm_rows["opt_type"] == "PE") & (atm_rows["iv"].gt(0.005)), "iv"
+        (atm_rows["opt_type"] == "PE") & (atm_rows["iv"].gt(min_positive_iv)), "iv"
     ]
     atm_ce_found = len(atm_ce_iv) > 0
     atm_pe_found = len(atm_pe_iv) > 0
@@ -257,7 +363,11 @@ def _assess_atm_iv_quality(
     atm_iv_midpoint = round(atm_iv_decimal, 6)
 
     # Absolute sanity range: 4%–150% annualized
-    atm_iv_in_range = bool(0.04 <= atm_iv_midpoint <= 1.50)
+    atm_iv_in_range = bool(
+        _policy_float(policy, "atm_iv_min_decimal", 0.04)
+        <= atm_iv_midpoint
+        <= _policy_float(policy, "atm_iv_max_decimal", 1.50)
+    )
 
     # Cross-check against India VIX if supplied
     atm_iv_vs_vix_consistent = None
@@ -266,7 +376,11 @@ def _assess_atm_iv_quality(
         if vix_decimal is not None and vix_decimal > 0:
             ratio = atm_iv_midpoint / vix_decimal
             # Reasonable band: 0.3×–3.0× India VIX
-            atm_iv_vs_vix_consistent = bool(0.3 <= ratio <= 3.0)
+            atm_iv_vs_vix_consistent = bool(
+                _policy_float(policy, "atm_vix_ratio_min", 0.30)
+                <= ratio
+                <= _policy_float(policy, "atm_vix_ratio_max", 3.00)
+            )
 
     both_present = atm_ce_found and atm_pe_found
     either_present = atm_ce_found or atm_pe_found
@@ -312,6 +426,8 @@ def _assess_iv_parity_consistency(
         WEAK    — > 50% of pairs breached
         N/A     — fewer than 3 paired strikes available for assessment
     """
+    policy = _vol_surface_quality_policy()
+    min_positive_iv = _policy_float(policy, "min_positive_iv", 0.005)
     _absent: dict = {
         "iv_parity_health": "N/A",
         "iv_parity_breach_ratio": None,
@@ -333,7 +449,7 @@ def _assess_iv_parity_consistency(
     )
     core = chain[
         chain["in_core"]
-        & chain["iv"].gt(0.005)
+        & chain["iv"].gt(min_positive_iv)
         & chain["opt_type"].isin(["CE", "PE"])
         & chain["strike"].notna()
     ].copy()
@@ -345,17 +461,17 @@ def _assess_iv_parity_consistency(
         return _absent
     paired = pivot.dropna(subset=["CE", "PE"])
     n_pairs = len(paired)
-    if n_pairs < 3:
+    if n_pairs < _policy_int(policy, "iv_parity_min_pairs", 3):
         return {"iv_parity_health": "N/A", "iv_parity_breach_ratio": None, "iv_parity_checked_pairs": n_pairs}
 
     mean_iv = (paired["CE"] + paired["PE"]) / 2.0
     divergence = (paired["CE"] - paired["PE"]).abs() / mean_iv.replace(0.0, float("nan"))
-    n_breached = int(divergence.gt(0.60).sum())
+    n_breached = int(divergence.gt(_policy_float(policy, "iv_parity_divergence_threshold", 0.60)).sum())
     breach_ratio = round(n_breached / max(n_pairs, 1), 4)
 
-    if breach_ratio < 0.20:
+    if breach_ratio < _policy_float(policy, "iv_parity_good_breach_ratio_max", 0.20):
         iv_parity_health = "GOOD"
-    elif breach_ratio < 0.50:
+    elif breach_ratio < _policy_float(policy, "iv_parity_caution_breach_ratio_max", 0.50):
         iv_parity_health = "CAUTION"
     else:
         iv_parity_health = "WEAK"
@@ -383,6 +499,8 @@ def _assess_iv_staleness(iv_series: pd.Series) -> dict:
         CAUTION — 20%–40%
         WEAK    — > 40%
     """
+    policy = _vol_surface_quality_policy()
+    min_positive_iv = _policy_float(policy, "min_positive_iv", 0.005)
     _good: dict = {"iv_staleness_health": "GOOD", "iv_stale_ratio": 0.0}
     if iv_series is None or iv_series.empty:
         return _good
@@ -392,20 +510,26 @@ def _assess_iv_staleness(iv_series: pd.Series) -> dict:
         return _good
     # Normalize percent-form IVs (e.g. 18.5 → 0.185) before uniformity check
     normalized = positive.where(positive.le(1.5), positive / 100.0)
-    valid_iv = normalized[normalized.gt(0.005) & normalized.lt(2.0)]
+    valid_iv = normalized[
+        normalized.gt(min_positive_iv)
+        & normalized.lt(_policy_float(policy, "iv_staleness_max_valid_iv_decimal", 2.00))
+    ]
     n_valid = len(valid_iv)
-    if n_valid < 10:
+    if n_valid < _policy_int(policy, "iv_staleness_min_valid_rows", 10):
         return _good
 
-    rounded = valid_iv.round(4)
+    rounded = valid_iv.round(_policy_int(policy, "iv_staleness_round_decimals", 4))
     value_counts = rounded.value_counts()
-    freq_floor = max(5, int(n_valid * 0.08))
+    freq_floor = max(
+        _policy_int(policy, "iv_staleness_min_cluster_rows", 5),
+        int(n_valid * _policy_float(policy, "iv_staleness_cluster_ratio_floor", 0.08)),
+    )
     stale_rows = int(value_counts[value_counts.ge(freq_floor)].sum())
     stale_ratio = round(stale_rows / n_valid, 4)
 
-    if stale_ratio < 0.20:
+    if stale_ratio < _policy_float(policy, "iv_staleness_good_ratio_max", 0.20):
         health = "GOOD"
-    elif stale_ratio < 0.40:
+    elif stale_ratio < _policy_float(policy, "iv_staleness_caution_ratio_max", 0.40):
         health = "CAUTION"
     else:
         health = "WEAK"
@@ -741,45 +865,41 @@ def _compute_market_data_readiness(provider_health: dict, *, critical_failures: 
             "component_scores": {},
         }
 
-    components = {
-        "row": _score_health_label(provider_health.get("row_health"), na_score=0.60),
-        "pricing": _score_health_label(provider_health.get("pricing_health")),
-        "core_marketability": _score_health_label(provider_health.get("core_marketability_health")),
-        "core_pairing": _score_health_label(provider_health.get("core_pairing_health")),
-        "core_iv": _score_health_label(provider_health.get("core_iv_health")),
-        "atm_iv": _score_health_label(provider_health.get("atm_iv_health"), na_score=0.68),
-        "iv_parity": _score_health_label(provider_health.get("iv_parity_health"), na_score=0.70),
-        "iv_staleness": _score_health_label(provider_health.get("iv_staleness_health"), na_score=0.70),
-        "duplicate": _score_health_label(provider_health.get("duplicate_health"), na_score=0.80),
-        "quote_integrity": _score_health_label(provider_health.get("core_quote_integrity_health"), na_score=0.72),
-        "quote_freshness": _score_health_label(provider_health.get("quote_freshness_health"), na_score=0.72),
-        "quote_spread": _score_health_label(provider_health.get("quote_spread_health"), na_score=0.72),
-        "liquidity_coverage": _score_health_label(provider_health.get("liquidity_coverage_health"), na_score=0.68),
-        "expiry": _score_health_label(provider_health.get("expiry_health"), na_score=0.72),
-    }
-    weights = {
-        "row": 0.06,
-        "pricing": 0.12,
-        "core_marketability": 0.16,
-        "core_pairing": 0.12,
-        "core_iv": 0.12,
-        "atm_iv": 0.10,
-        "iv_parity": 0.07,
-        "iv_staleness": 0.05,
-        "duplicate": 0.03,
-        "quote_integrity": 0.03,
-        "quote_freshness": 0.05,
-        "quote_spread": 0.05,
-        "liquidity_coverage": 0.03,
-        "expiry": 0.01,
-    }
+    na_scores = resolve_mapping(
+        "option_chain_validation.provider_health.readiness_na_scores",
+        READINESS_COMPONENT_NA_SCORES,
+    )
+    weights = resolve_mapping(
+        "option_chain_validation.provider_health.readiness_weights",
+        READINESS_COMPONENT_WEIGHTS,
+    )
+    scoring = resolve_mapping(
+        "option_chain_validation.provider_health.readiness_scoring",
+        READINESS_SCORING_DEFAULTS,
+    )
 
-    weighted = sum(components[key] * weights[key] for key in weights)
+    components = {}
+    for component, health_key in READINESS_COMPONENT_HEALTH_KEYS.items():
+        na_score = float(
+            na_scores.get(component, READINESS_COMPONENT_NA_SCORES.get(component, 0.65))
+        )
+        components[component] = _score_health_label(
+            provider_health.get(health_key),
+            na_score=na_score,
+        )
+
+    weights = {key: float(value) for key, value in weights.items()}
+    scoring = {key: float(value) for key, value in scoring.items()}
+
+    weighted = sum(components[key] * weights[key] for key in READINESS_COMPONENT_WEIGHTS)
     score = 100.0 * weighted
 
     critical_failures = critical_failures or []
     if critical_failures:
-        score -= min(28.0, 7.0 * float(len(critical_failures)))
+        score -= min(
+            scoring["critical_failure_penalty_cap"],
+            scoring["critical_failure_penalty"] * float(len(critical_failures)),
+        )
 
     severe_failure_set = {
         str(item).strip().lower()
@@ -795,27 +915,31 @@ def _compute_market_data_readiness(provider_health: dict, *, critical_failures: 
             "selected_expiry_expired",
         }
     ):
-        score = min(score, 64.0)
+        score = min(score, scoring["severe_failure_score_cap"])
     if len(severe_failure_set) >= 2:
-        score = min(score, 49.0)
+        score = min(score, scoring["multi_failure_score_cap"])
 
     summary_status = str(provider_health.get("summary_status") or "").upper().strip()
     if summary_status == "WEAK":
-        score -= 8.0
+        score -= scoring["summary_weak_penalty"]
     elif summary_status == "CAUTION":
-        score -= 3.0
+        score -= scoring["summary_caution_penalty"]
 
     score = round(max(0.0, min(100.0, score)), 1)
-    if score >= 85.0:
+    if score >= scoring["high_tier_min_score"]:
         tier = "HIGH"
-    elif score >= 70.0:
+    elif score >= scoring["moderate_tier_min_score"]:
         tier = "MODERATE"
-    elif score >= 50.0:
+    elif score >= scoring["low_tier_min_score"]:
         tier = "LOW"
     else:
         tier = "FRAGILE"
 
-    weak_components = [key for key, value in components.items() if value < 0.40]
+    weak_components = [
+        key
+        for key, value in components.items()
+        if value < scoring["weak_component_score_threshold"]
+    ]
     return {
         "score": score,
         "tier": tier,
@@ -1181,6 +1305,7 @@ def validate_option_chain(
     effective_priced_rows = max(priced_rows, quoted_rows)
     effective_priced_ratio = round(effective_priced_rows / max(row_count, 1), 4)
     iv_ratio = round(iv_rows / max(row_count, 1), 4)
+    vol_surface_policy = _vol_surface_quality_policy()
 
     trade_price_health = "GOOD" if priced_ratio >= 0.55 else "CAUTION" if priced_ratio >= 0.35 else "WEAK"
     quote_health = None
@@ -1212,7 +1337,13 @@ def validate_option_chain(
             else "ONE_SIDED"
         ),
         "pairing_health": "GOOD" if paired_strike_ratio >= 0.75 else "CAUTION" if paired_strike_ratio >= 0.5 else "WEAK",
-        "iv_health": "GOOD" if iv_ratio >= 0.4 else "CAUTION" if iv_ratio >= 0.15 else "WEAK",
+        "iv_health": (
+            "GOOD"
+            if iv_ratio >= _policy_float(vol_surface_policy, "iv_ratio_good_floor", 0.40)
+            else "CAUTION"
+            if iv_ratio >= _policy_float(vol_surface_policy, "iv_ratio_caution_floor", 0.15)
+            else "WEAK"
+        ),
         "duplicate_health": "GOOD" if duplicate_ratio == 0 else "CAUTION" if duplicate_ratio <= 0.05 else "WEAK",
         "summary_status": "GOOD",
         "row_health_escalation_applied": False,
@@ -1286,7 +1417,11 @@ def validate_option_chain(
 
     core_marketability_health = _health_from_ratio(core_effective_priced_ratio, 0.65, 0.45)
     core_pairing_health = _health_from_ratio(core_paired_ratio, 0.85, 0.65)
-    core_iv_health = _health_from_ratio(core_iv_ratio, 0.50, 0.25)
+    core_iv_health = _health_from_ratio(
+        core_iv_ratio,
+        _policy_float(vol_surface_policy, "core_iv_ratio_good_floor", 0.50),
+        _policy_float(vol_surface_policy, "core_iv_ratio_caution_floor", 0.25),
+    )
     if has_two_sided_quote_columns:
         core_quote_integrity_health = (
             "GOOD"

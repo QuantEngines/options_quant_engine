@@ -15,10 +15,20 @@ Downstream Usage:
 """
 import pandas as pd
 
+from config.analytics_feature_policy import get_dealer_gamma_proxy_policy_config
+
+
+def _fallback_gamma_from_distance(distance):
+    cfg = get_dealer_gamma_proxy_policy_config()
+    scale = max(float(cfg.fallback_distance_scale), 0.0)
+    power = max(float(cfg.fallback_distance_power), 1e-6)
+    return 1.0 / ((1.0 + (scale * distance)) ** power)
+
 
 def _signed_option_type(series: pd.Series) -> pd.Series:
+    cfg = get_dealer_gamma_proxy_policy_config()
     normalized = series.astype(str).str.upper().str.strip()
-    signed = normalized.map({"CE": 1.0, "PE": -1.0})
+    signed = normalized.map({"CE": float(cfg.call_gamma_sign), "PE": float(cfg.put_gamma_sign)})
     if signed.isna().any():
         unknown = sorted(set(normalized[signed.isna()].tolist()))
         raise ValueError(f"Unknown OPTION_TYP values in market_gamma_map: {unknown}")
@@ -50,7 +60,7 @@ def calculate_market_gamma(option_chain):
     # gamma-flip and structure maps remain usable instead of collapsing to zero.
     if bool((gamma.abs() <= 0).all()) and spot_proxy is not None and spot_proxy > 0:
         distance = (strikes - spot_proxy).abs() / max(spot_proxy, 1e-6)
-        gamma = (1.0 / (1.0 + distance.fillna(float("inf")))).astype(float)
+        gamma = _fallback_gamma_from_distance(distance.fillna(float("inf"))).astype(float)
 
     option_type = df.get("OPTION_TYP", pd.Series(index=df.index, dtype=object))
     signed = _signed_option_type(option_type)
@@ -71,7 +81,8 @@ def market_gamma_regime(gex):
     total_gex = gex.sum()
     gross_gex = gex.abs().sum()
 
-    if gross_gex == 0 or abs(total_gex) <= gross_gex * 0.05:
+    cfg = get_dealer_gamma_proxy_policy_config()
+    if gross_gex == 0 or abs(total_gex) <= gross_gex * float(cfg.neutral_gross_gamma_ratio):
         return "NEUTRAL_GAMMA"
 
     if total_gex > 0:
@@ -80,12 +91,16 @@ def market_gamma_regime(gex):
     return "NEGATIVE_GAMMA"
 
 
-def largest_gamma_strikes(gex, top_n=5, spot=None, max_distance_pct=0.10):
+def largest_gamma_strikes(gex, top_n=5, spot=None, max_distance_pct=None):
     """
     Find strikes with largest gamma concentration.
     When *spot* is given, restrict to strikes within *max_distance_pct* of spot
     so that deep OTM hedging strikes do not dominate near-spot clusters.
     """
+    cfg = get_dealer_gamma_proxy_policy_config()
+    if max_distance_pct is None:
+        max_distance_pct = float(cfg.largest_gamma_max_distance_pct)
+
     if spot is not None and spot > 0:
         lower = spot * (1 - max_distance_pct)
         upper = spot * (1 + max_distance_pct)

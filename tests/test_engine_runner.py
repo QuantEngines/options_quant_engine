@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 import app.engine_runner as engine_runner
+from analytics.greeks_engine import _bs_price_for_iv, _parse_expiry_years
 
 
 class _HeadlineRecord:
@@ -53,6 +54,33 @@ def _option_chain_with_timestamp(timestamp: str, *, source: str = "NSE") -> pd.D
     frame["source"] = source
     frame["timestamp"] = timestamp
     return frame
+
+
+def _zero_provider_iv_priced_chain(*, spot: float, expiry: str, valuation_time: str) -> pd.DataFrame:
+    tte = _parse_expiry_years(expiry, valuation_time=valuation_time)
+    rows = []
+    for strike in range(int(spot) - 500, int(spot) + 550, 50):
+        for option_type in ("CE", "PE"):
+            price = _bs_price_for_iv(spot, strike, tte, 0.1225, option_type)
+            bid = max(price - 0.05, price * 0.99, 0.01)
+            ask = max(price + 0.05, bid + 0.01)
+            rows.append(
+                {
+                    "strikePrice": strike,
+                    "OPTION_TYP": option_type,
+                    "lastPrice": price,
+                    "bidPrice": bid,
+                    "askPrice": ask,
+                    "openInterest": 100000,
+                    "changeinOI": 0,
+                    "impliedVolatility": 0.0,
+                    "IV": 0.0,
+                    "EXPIRY_DT": expiry,
+                    "source": "ZERODHA",
+                    "timestamp": valuation_time,
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def _spot_snapshot() -> dict:
@@ -334,6 +362,40 @@ def test_run_preloaded_engine_snapshot_exposes_mixed_source_provenance(monkeypat
     assert "mixed_spot_option_source" in provenance["warnings"]
     assert "market_data_provenance:mixed_spot_option_source" in result["spot_validation"]["warnings"]
     assert captured["option_chain_validation"]["market_data_provenance"]["status"] == "CAUTION"
+
+
+def test_zero_provider_iv_chain_uses_model_derived_iv_for_validation():
+    spot = 23877.2
+    valuation_time = "2026-05-27T14:44:47+05:30"
+    option_chain = _zero_provider_iv_priced_chain(
+        spot=spot,
+        expiry="2026-06-02",
+        valuation_time=valuation_time,
+    )
+
+    validation_frame, diagnostics = engine_runner.build_iv_validation_frame(
+        option_chain,
+        spot=spot,
+        valuation_time=valuation_time,
+    )
+    validation = engine_runner.validate_option_chain(
+        validation_frame,
+        spot=spot,
+        india_vix_level=12.0,
+        as_of=valuation_time,
+    )
+    validation = engine_runner.attach_iv_validation_diagnostics(validation, diagnostics)
+
+    provider_health = validation["provider_health"]
+    assert diagnostics["raw_positive_iv_rows"] == 0
+    assert diagnostics["validation_positive_iv_rows"] > 0
+    assert validation["iv_validation_source"] == "MODEL_DERIVED_FROM_OPTION_PRICE"
+    assert validation["model_derived_iv_applied"] is True
+    assert "iv_model_derived_from_option_price" in validation["warnings"]
+    assert "core_iv_weak" not in provider_health["trade_blocking_reasons"]
+    assert "atm_iv_weak" not in provider_health["trade_blocking_reasons"]
+    assert provider_health["core_iv_health"] in {"GOOD", "CAUTION"}
+    assert provider_health["atm_iv_health"] in {"GOOD", "CAUTION"}
 
 
 def test_run_preloaded_engine_snapshot_blocks_severe_timestamp_mismatch(monkeypatch):

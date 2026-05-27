@@ -158,6 +158,32 @@ def _neutral_macro_news_state(event_state: dict | None = None, issues=None, warn
     )
 
 
+def _as_ist_timestamp(value):
+    try:
+        ts = pd.Timestamp(value) if value is not None else pd.Timestamp.now(tz="Asia/Kolkata")
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("Asia/Kolkata")
+        return ts
+    except Exception:
+        return pd.Timestamp.now(tz="Asia/Kolkata")
+
+
+def _filter_headline_records_point_in_time(records, *, as_of=None):
+    as_of_ts = _as_ist_timestamp(as_of)
+    future_cutoff = as_of_ts + pd.Timedelta(seconds=120)
+    filtered = []
+    future_count = 0
+    for record in records or []:
+        timestamp = getattr(record, "timestamp", None)
+        if timestamp is None:
+            continue
+        if _as_ist_timestamp(timestamp) > future_cutoff:
+            future_count += 1
+            continue
+        filtered.append(record)
+    return filtered, future_count
+
+
 def _build_event_intelligence_state(
     *,
     headline_state: HeadlineIngestionState,
@@ -173,7 +199,11 @@ def _build_event_intelligence_state(
             "structured_event_preview": [],
         }
 
-    raw_events = build_raw_event_payloads(headline_state.records)
+    records, _future_count = _filter_headline_records_point_in_time(
+        headline_state.records,
+        as_of=as_of or headline_state.fetched_at,
+    )
+    raw_events = build_raw_event_payloads(records)
     structured = []
     for item in raw_events:
         record = extract_structured_event(
@@ -243,12 +273,29 @@ def _weighted_headline_aggregates(classified: list[HeadlineClassification], as_o
     recent_count = 0
 
     preview = []
+    eligible = []
 
     for item in classified:
         ts = pd.Timestamp(item.timestamp)
         if ts.tzinfo is None:
             ts = ts.tz_localize("Asia/Kolkata")
+        if ts > now_ts + pd.Timedelta(seconds=120):
+            continue
+        eligible.append((item, ts))
 
+    if not eligible:
+        return {
+            "macro_sentiment_score": 0.0,
+            "volatility_shock_score": 0.0,
+            "headline_impact_score": 0.0,
+            "india_macro_bias": 0.0,
+            "global_risk_bias": 0.0,
+            "headline_velocity": 0.0,
+            "news_confidence_score": 0.0,
+            "classification_preview": [],
+        }
+
+    for item, ts in eligible:
         age_minutes = max((now_ts - ts).total_seconds() / 60.0, 0.0)
         decay = 1.0 / (1.0 + age_minutes / max(cfg.decay_half_life_minutes, 1.0))
         impact_weight = max(item.headline_impact_score / 100.0, 0.1)
@@ -281,7 +328,7 @@ def _weighted_headline_aggregates(classified: list[HeadlineClassification], as_o
 
     headline_velocity = _clip(recent_count / max(cfg.headline_velocity_base_count, 1), 0.0, 1.0)
     news_confidence = _clip(
-        (len(classified) / max(cfg.confidence_count_divisor, 1.0)) * cfg.confidence_count_weight
+        (len(eligible) / max(cfg.confidence_count_divisor, 1.0)) * cfg.confidence_count_weight
         + headline_velocity * cfg.confidence_velocity_weight
         + min(total_weight, 1.0) * cfg.confidence_total_weight_weight,
         0.0,
@@ -394,7 +441,22 @@ def build_macro_news_state(
             issues=list(headline_state.issues),
         )
 
-    classified = classify_headlines(headline_state.records)
+    resolved_as_of = as_of or headline_state.fetched_at
+    filtered_records, future_count = _filter_headline_records_point_in_time(
+        headline_state.records,
+        as_of=resolved_as_of,
+    )
+    warnings = list(headline_state.warnings)
+    if future_count:
+        warnings.append(f"future_headline_records_ignored:{future_count}")
+    if not filtered_records:
+        return _neutral_macro_news_state(
+            event_state=event_state,
+            warnings=warnings or ["no_point_in_time_headlines"],
+            issues=list(headline_state.issues),
+        )
+
+    classified = classify_headlines(filtered_records)
     aggregates = _weighted_headline_aggregates(classified, as_of=as_of or headline_state.fetched_at)
 
     macro_event_risk_score = int(_safe_float(event_state.get("macro_event_risk_score"), 0))
@@ -429,14 +491,14 @@ def build_macro_news_state(
         india_macro_bias=aggregates["india_macro_bias"],
         global_risk_bias=aggregates["global_risk_bias"],
         headline_velocity=aggregates["headline_velocity"],
-        headline_count=len(headline_state.records),
+        headline_count=len(filtered_records),
         classified_headline_count=len(classified),
         event_window_status=event_state.get("event_window_status", "NO_EVENT_DATA"),
         next_event_name=event_state.get("next_event_name"),
         neutral_fallback=False,
         macro_regime_reasons=macro_regime_reasons,
         issues=list(headline_state.issues),
-        warnings=list(headline_state.warnings),
+        warnings=warnings,
         classification_preview=aggregates["classification_preview"],
         event_intelligence_enabled=bool(event_intel_state["event_intelligence_enabled"]),
         event_features=event_intel_state["event_features"],

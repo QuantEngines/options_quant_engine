@@ -31,6 +31,7 @@ from config.signal_evaluation_policy import (
     bucket_from_thresholds,
 )
 from config.signal_evaluation_scoring import (
+    get_signal_evaluation_label_quality_policy,
     get_signal_evaluation_direction_weights,
     get_signal_evaluation_score_weights,
     get_signal_evaluation_thresholds,
@@ -55,6 +56,38 @@ PRIMARY_LABEL_HORIZON_MINUTES = 60
 PRIMARY_LABEL_HORIZON = f"{PRIMARY_LABEL_HORIZON_MINUTES}m"
 PRIMARY_LABEL_COLUMN = f"correct_{PRIMARY_LABEL_HORIZON}"
 PRIMARY_RETURN_COLUMN = f"signed_return_{PRIMARY_LABEL_HORIZON}_bps"
+
+
+def _label_quality_policy() -> dict:
+    return get_signal_evaluation_label_quality_policy()
+
+
+def _policy_float(policy: dict, key: str, default: float) -> float:
+    resolved = _safe_float(policy.get(key), None)
+    return float(default if resolved is None else resolved)
+
+
+def _policy_int(policy: dict, key: str, default: int) -> int:
+    resolved = _safe_float(policy.get(key), None)
+    if resolved is None or resolved <= 0:
+        return int(default)
+    return int(resolved)
+
+
+def _primary_label_horizon_minutes(policy: dict | None = None) -> int:
+    return _policy_int(policy or _label_quality_policy(), "primary_label_horizon_minutes", PRIMARY_LABEL_HORIZON_MINUTES)
+
+
+def _primary_label_horizon(policy: dict | None = None) -> str:
+    return f"{_primary_label_horizon_minutes(policy)}m"
+
+
+def _primary_label_column(policy: dict | None = None) -> str:
+    return f"correct_{_primary_label_horizon(policy)}"
+
+
+def _primary_return_column(policy: dict | None = None) -> str:
+    return f"signed_return_{_primary_label_horizon(policy)}_bps"
 
 
 def _coerce_ts(value) -> pd.Timestamp:
@@ -204,63 +237,66 @@ def _append_unique_reason(reasons: list[str], reason: str) -> None:
 
 
 def _derive_label_quality_fields(row: dict) -> dict:
-    primary_label = _binary_label(row.get(PRIMARY_LABEL_COLUMN))
-    primary_return = _safe_float(row.get(PRIMARY_RETURN_COLUMN), None)
+    policy = _label_quality_policy()
+    primary_horizon_minutes = _primary_label_horizon_minutes(policy)
+    primary_horizon = _primary_label_horizon(policy)
+    primary_label = _binary_label(row.get(_primary_label_column(policy)))
+    primary_return = _safe_float(row.get(_primary_return_column(policy)), None)
     outcome_status = _normalized_outcome_status(row, primary_label)
     reasons: list[str] = []
-    score = 100.0
+    score = _policy_float(policy, "base_score", 100.0)
     hard_block = False
 
     if _signal_direction_multiplier(row.get("direction")) == 0:
         _append_unique_reason(reasons, "direction_unresolved")
-        score = min(score, 15.0)
+        score = min(score, _policy_float(policy, "direction_unresolved_score_cap", 15.0))
         hard_block = True
 
     if _truthy_flag(row.get("target_stop_same_bar_ambiguous")):
         _append_unique_reason(reasons, "target_stop_ambiguous")
-        score = min(score, 25.0)
+        score = min(score, _policy_float(policy, "target_stop_ambiguous_score_cap", 25.0))
         hard_block = True
 
     intraday_disabled_reason = str(row.get("intraday_eval_disabled_reason") or "").strip()
     if intraday_disabled_reason:
         _append_unique_reason(reasons, f"intraday_eval_disabled:{intraday_disabled_reason}")
-        score = min(score, 20.0)
+        score = min(score, _policy_float(policy, "intraday_eval_disabled_score_cap", 20.0))
         hard_block = True
 
     entry_spot = _safe_float(row.get("spot_at_signal"), None)
     if entry_spot is None or entry_spot <= 0:
         _append_unique_reason(reasons, "entry_spot_unavailable")
-        score = min(score, 20.0)
+        score = min(score, _policy_float(policy, "entry_spot_unavailable_score_cap", 20.0))
         hard_block = True
 
     if outcome_status == "PENDING":
         _append_unique_reason(reasons, "outcome_pending")
-        score = min(score, 10.0)
+        score = min(score, _policy_float(policy, "outcome_pending_score_cap", 10.0))
     elif outcome_status == "PARTIAL":
         _append_unique_reason(reasons, "outcome_partial")
-        score = min(score, 85.0)
+        score = min(score, _policy_float(policy, "outcome_partial_score_cap", 85.0))
     elif outcome_status == "UNKNOWN":
         _append_unique_reason(reasons, "outcome_status_unknown")
-        score = min(score, 75.0)
+        score = min(score, _policy_float(policy, "outcome_unknown_score_cap", 75.0))
     elif outcome_status != "COMPLETE":
         _append_unique_reason(reasons, f"outcome_status:{outcome_status.lower()}")
-        score = min(score, 60.0)
+        score = min(score, _policy_float(policy, "outcome_other_score_cap", 60.0))
 
     observed_minutes = _safe_float(row.get("observed_minutes"), None)
-    if observed_minutes is not None and observed_minutes < PRIMARY_LABEL_HORIZON_MINUTES and primary_label is None:
+    if observed_minutes is not None and observed_minutes < primary_horizon_minutes and primary_label is None:
         _append_unique_reason(reasons, "insufficient_observation_window")
-        score = min(score, 35.0)
+        score = min(score, _policy_float(policy, "insufficient_observation_score_cap", 35.0))
 
     if primary_label is None:
         _append_unique_reason(reasons, "primary_horizon_unavailable")
-        score = min(score, 35.0)
+        score = min(score, _policy_float(policy, "primary_horizon_unavailable_score_cap", 35.0))
     elif primary_return is None:
         _append_unique_reason(reasons, "primary_return_unavailable")
-        score = min(score, 70.0)
+        score = min(score, _policy_float(policy, "primary_return_unavailable_score_cap", 70.0))
 
     calibration_label_available = primary_label is not None and not hard_block
     if not calibration_label_available and primary_label is not None:
-        score = min(score, 45.0)
+        score = min(score, _policy_float(policy, "calibration_unavailable_with_label_score_cap", 45.0))
 
     if hard_block:
         label_status = "AMBIGUOUS" if _truthy_flag(row.get("target_stop_same_bar_ambiguous")) else "UNUSABLE"
@@ -276,9 +312,9 @@ def _derive_label_quality_fields(row: dict) -> dict:
         "label_quality_score": round(float(score), 2),
         "label_quality_reasons": "|".join(reasons),
         "calibration_label": primary_label if calibration_label_available else pd.NA,
-        "calibration_label_horizon": PRIMARY_LABEL_HORIZON,
+        "calibration_label_horizon": primary_horizon,
         "calibration_label_available": bool(calibration_label_available),
-        "primary_outcome_horizon": PRIMARY_LABEL_HORIZON,
+        "primary_outcome_horizon": primary_horizon,
         "primary_outcome_return_bps": round(float(primary_return), 2) if primary_return is not None else pd.NA,
     }
 
@@ -838,7 +874,26 @@ def build_signal_evaluation_row(
         "prev_close": spot_summary.get("prev_close"),
         "lookback_avg_range_pct": spot_summary.get("lookback_avg_range_pct"),
         "trade_strength": trade.get("trade_strength"),
+        "runtime_composite_base_score": trade.get("runtime_composite_base_score"),
         "runtime_composite_score": trade.get("runtime_composite_score"),
+        "runtime_composite_supplement_apply_to_score": trade.get("runtime_composite_supplement_apply_to_score"),
+        "runtime_composite_supplement_candidate_triggered": trade.get(
+            "runtime_composite_supplement_candidate_triggered"
+        ),
+        "runtime_composite_supplement_applied": trade.get("runtime_composite_supplement_applied"),
+        "runtime_composite_supplement_rule": trade.get("runtime_composite_supplement_rule"),
+        "runtime_composite_supplement_candidate_adjustment": trade.get(
+            "runtime_composite_supplement_candidate_adjustment"
+        ),
+        "runtime_composite_supplement_score_adjustment": trade.get("runtime_composite_supplement_score_adjustment"),
+        "runtime_composite_supplement_reason": trade.get("runtime_composite_supplement_reason"),
+        "runtime_composite_supplement_base_score": trade.get("runtime_composite_supplement_base_score"),
+        "runtime_composite_supplement_adjusted_score": trade.get("runtime_composite_supplement_adjusted_score"),
+        "runtime_composite_supplement_components": json.dumps(
+            trade.get("runtime_composite_supplement_components") or {},
+            sort_keys=True,
+            default=str,
+        ),
         "runtime_composite_observation_tier": trade.get("runtime_composite_observation_tier"),
         "runtime_composite_observation_threshold": trade.get("runtime_composite_observation_threshold"),
         "runtime_composite_soft_override_threshold": trade.get("runtime_composite_soft_override_threshold"),

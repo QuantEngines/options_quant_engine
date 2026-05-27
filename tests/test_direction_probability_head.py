@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from config.policy_resolver import temporary_parameter_pack
 from strategy.direction_probability_head import compute_direction_probability_head
 from strategy.direction_probability_head import get_direction_head_calibration_metrics
 from strategy.direction_probability_head import reset_direction_head_calibration_metrics
@@ -38,6 +39,68 @@ def test_direction_probability_head_outputs_probabilities_and_uncertainty():
     assert 0.0 <= out["uncertainty"] <= 1.0
     assert 0.0 <= out["confidence"] <= 1.0
     assert out["calibration_applied"] is False
+
+
+def test_direction_probability_head_default_coefficients_are_stable():
+    out = compute_direction_probability_head(
+        final_flow_signal="BULLISH_FLOW",
+        spot_vs_flip="ABOVE_FLIP",
+        hedging_bias="UPSIDE_ACCELERATION",
+        gamma_event="GAMMA_SQUEEZE",
+        gamma_regime="NEGATIVE_GAMMA",
+        macro_regime="RISK_OFF",
+        volatility_regime="VOL_EXPANSION",
+        oi_velocity_score=0.25,
+        rr_value=-0.8,
+        rr_momentum="FALLING_PUT_SKEW",
+        volume_pcr_atm=0.78,
+        gamma_flip_drift={"drift": 25},
+        hybrid_move_probability=0.62,
+        vote_bull_probability=0.63,
+        provider_health_summary="CAUTION",
+        provider_health_blocking_status="PASS",
+        core_effective_priced_ratio=0.52,
+        core_one_sided_quote_ratio=0.22,
+        core_quote_integrity_health="CAUTION",
+        apply_calibration=False,
+    )
+
+    assert out["directional_bias_score"] == 4.6775
+    assert out["microstructure_friction_score"] == 0.303333
+    assert out["logit"] == 3.541736
+    assert out["probability_up_raw"] == 0.971852
+    assert out["uncertainty"] == 0.256822
+
+
+def test_direction_probability_head_coefficients_resolve_from_parameter_pack():
+    kwargs = dict(
+        final_flow_signal="BULLISH_FLOW",
+        spot_vs_flip="AT_FLIP",
+        hedging_bias="PINNING",
+        gamma_event="NONE",
+        gamma_regime="NEUTRAL_GAMMA",
+        macro_regime="MACRO_NEUTRAL",
+        volatility_regime="NORMAL_VOL",
+        hybrid_move_probability=0.50,
+        vote_bull_probability=0.50,
+        provider_health_summary="GOOD",
+        provider_health_blocking_status="PASS",
+        core_effective_priced_ratio=0.90,
+        core_one_sided_quote_ratio=0.0,
+        core_quote_integrity_health="GOOD",
+        apply_calibration=False,
+    )
+    baseline = compute_direction_probability_head(**kwargs)
+
+    with temporary_parameter_pack(
+        overrides={
+            "signal_engine.direction_probability_head.directional_bias.flow_bullish_score": 0.0,
+        },
+    ):
+        adjusted = compute_direction_probability_head(**kwargs)
+
+    assert adjusted["directional_bias_score"] < baseline["directional_bias_score"]
+    assert adjusted["probability_up_raw"] < baseline["probability_up_raw"]
 
 
 def test_direction_probability_head_applies_calibrator(tmp_path: Path):

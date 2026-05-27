@@ -22,6 +22,7 @@ from typing import Any
 
 import pandas as pd
 
+from config.signal_evaluation_scoring import get_signal_evaluation_reporting_policy
 from research.signal_evaluation.confidence import outcome_confidence_fields, sample_guardrail
 from research.signal_evaluation.label_quality import apply_quality_label_view, label_quality_summary
 from research.signal_evaluation.report_manifest import write_report_reproducibility_manifest
@@ -82,6 +83,50 @@ COVERAGE_FIELDS = (
 )
 
 from utils.numerics import safe_float as _safe_float  # noqa: F401
+
+
+def _reporting_policy() -> dict[str, Any]:
+    return get_signal_evaluation_reporting_policy()
+
+
+def _policy_int(policy: dict[str, Any], key: str, fallback: int, *, floor: int = 1) -> int:
+    try:
+        return max(int(policy.get(key, fallback)), floor)
+    except Exception:
+        return max(int(fallback), floor)
+
+
+def _policy_float(policy: dict[str, Any], key: str, fallback: float) -> float:
+    try:
+        value = float(policy.get(key, fallback))
+    except Exception:
+        value = float(fallback)
+    return value
+
+
+def _sorted_policy_cuts(policy: dict[str, Any], prefix: str, fallbacks: tuple[float, ...]) -> list[float]:
+    values = [
+        _policy_float(policy, f"{prefix}_cut_{idx}", fallback)
+        for idx, fallback in enumerate(fallbacks, start=1)
+    ]
+    return sorted(set(values))
+
+
+def _number_text(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return str(round(float(value), 4)).rstrip("0").rstrip(".")
+
+
+def _bucket_labels(cuts: list[float], *, default_cuts: tuple[float, ...], default_labels: list[str], suffix: str) -> list[str]:
+    if list(default_cuts) == list(cuts):
+        return default_labels
+    if not cuts:
+        return [f"all_{suffix}"]
+    labels = [f"lt_{_number_text(cuts[0])}"]
+    labels.extend(f"{_number_text(left)}_{_number_text(right)}" for left, right in zip(cuts, cuts[1:]))
+    labels.append(f"{_number_text(cuts[-1])}_plus")
+    return labels
 
 
 def _round_or_none(value: Any, digits: int = 4) -> float | None:
@@ -390,8 +435,15 @@ def _score_bucket_performance(frame: pd.DataFrame, score_field: str = "composite
     if working.empty:
         return []
 
-    bins = [float("-inf"), 35.0, 50.0, 65.0, 80.0, float("inf")]
-    labels = ["0_34", "35_49", "50_64", "65_79", "80_100"]
+    policy = _reporting_policy()
+    cuts = _sorted_policy_cuts(policy, "score_bucket", (35.0, 50.0, 65.0, 80.0))
+    bins = [float("-inf"), *cuts, float("inf")]
+    labels = _bucket_labels(
+        cuts,
+        default_cuts=(35.0, 50.0, 65.0, 80.0),
+        default_labels=["0_34", "35_49", "50_64", "65_79", "80_100"],
+        suffix="score",
+    )
     working["score_bucket"] = pd.cut(working[score_field], bins=bins, labels=labels)
 
     rows = []
@@ -593,8 +645,15 @@ def _premium_bucket_performance(frame: pd.DataFrame) -> list[dict[str, Any]]:
     if working.empty:
         return []
 
-    bins = [float("-inf"), 50.0, 100.0, 150.0, 250.0, float("inf")]
-    labels = ["0_49", "50_99", "100_149", "150_249", "250_plus"]
+    policy = _reporting_policy()
+    cuts = _sorted_policy_cuts(policy, "premium_bucket", (50.0, 100.0, 150.0, 250.0))
+    bins = [float("-inf"), *cuts, float("inf")]
+    labels = _bucket_labels(
+        cuts,
+        default_cuts=(50.0, 100.0, 150.0, 250.0),
+        default_labels=["0_49", "50_99", "100_149", "150_249", "250_plus"],
+        suffix="premium",
+    )
     working["premium_bucket"] = pd.cut(working["entry_price"], bins=bins, labels=labels)
 
     rows = []
@@ -631,7 +690,8 @@ def _information_coefficient(frame: pd.DataFrame) -> dict[str, Any]:
     working[prob_col] = pd.to_numeric(working[prob_col], errors="coerce")
     working[return_col] = pd.to_numeric(working[return_col], errors="coerce")
     working = working.dropna()
-    if len(working) < 10:
+    min_sample = _policy_int(_reporting_policy(), "information_coefficient_min_sample", 10)
+    if len(working) < min_sample:
         return result
     ic = working[prob_col].corr(working[return_col], method="spearman")
     result["information_coefficient_60m"] = _round_or_none(ic, 4)
@@ -653,8 +713,18 @@ def _calibration_analysis(frame: pd.DataFrame) -> list[dict[str, Any]]:
     working = working.dropna()
     if working.empty:
         return []
-    bins = [0.0, 0.35, 0.50, 0.65, 0.80, 1.01]
-    labels = ["0_34", "35_49", "50_64", "65_79", "80_100"]
+    policy = _reporting_policy()
+    cuts = _sorted_policy_cuts(policy, "probability_bucket", (0.35, 0.50, 0.65, 0.80))
+    high_cap = max(_policy_float(policy, "probability_bucket_high_cap", 1.01), cuts[-1] if cuts else 1.0)
+    if cuts and high_cap <= cuts[-1]:
+        high_cap = cuts[-1] + 1e-9
+    bins = [0.0, *cuts, high_cap]
+    labels = _bucket_labels(
+        cuts,
+        default_cuts=(0.35, 0.50, 0.65, 0.80),
+        default_labels=["0_34", "35_49", "50_64", "65_79", "80_100"],
+        suffix="probability",
+    )
     working["prob_bucket"] = pd.cut(working[prob_col], bins=bins, labels=labels)
     rows = []
     for bucket, group in working.groupby("prob_bucket", dropna=False, observed=False):
@@ -747,7 +817,7 @@ def build_signal_evaluation_summary(
     *,
     production_pack_name: str | None = None,
     dataset_path: str | None = None,
-    top_n: int = 10,
+    top_n: int | None = None,
 ) -> dict[str, Any]:
     """
     Purpose:
@@ -768,6 +838,8 @@ def build_signal_evaluation_summary(
     Notes:
         The output is designed to remain serializable so experiments, reports, and governance decisions can be reproduced later.
     """
+    policy = _reporting_policy()
+    top_n = _policy_int(policy, "default_top_n", 10) if top_n is None else max(int(top_n), 1)
     raw_enriched = _frame_with_timestamp(frame)
     enriched = apply_quality_label_view(raw_enriched)
     score_statistics = {
@@ -829,6 +901,10 @@ def render_signal_evaluation_markdown(summary: dict[str, Any]) -> str:
     Notes:
         The output is designed to remain serializable so evaluation artifacts can be replayed, audited, and compared across experiments.
     """
+    policy = _reporting_policy()
+    threshold_row_limit = _policy_int(policy, "markdown_threshold_replay_rows", 10)
+    regime_threshold_row_limit = _policy_int(policy, "markdown_regime_threshold_rows", 10)
+    walk_forward_row_limit = _policy_int(policy, "markdown_walk_forward_rows", 10)
     period = summary.get("evaluation_period", {})
     signal_frequency = summary.get("signal_frequency", {})
     lines = [
@@ -929,7 +1005,7 @@ def render_signal_evaluation_markdown(summary: dict[str, Any]) -> str:
                 "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
             ]
         )
-        for row in threshold_rows[:10]:
+        for row in threshold_rows[:threshold_row_limit]:
             lines.append(
                 f"| {row.get('candidate_rank')} | {row.get('threshold_field')} | {row.get('threshold_value')} | {row.get('signal_count')} | {row.get('label_count_60m')} | {row.get('hit_rate_60m')} | {row.get('avg_signed_return_60m_bps')} | {row.get('objective_score')} | {row.get('holdout_avg_signed_return_60m_bps')} | {row.get('sample_quality')} | {row.get('stability_status')} |"
             )
@@ -945,7 +1021,7 @@ def render_signal_evaluation_markdown(summary: dict[str, Any]) -> str:
                 "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
             ]
         )
-        for row in regime_threshold_rows[:10]:
+        for row in regime_threshold_rows[:regime_threshold_row_limit]:
             lines.append(
                 f"| {row.get('candidate_rank')} | {row.get('regime_field')} | {row.get('regime_value')} | {row.get('threshold_field')} | {row.get('threshold_value')} | {row.get('label_count_60m')} | {row.get('hit_rate_60m')} | {row.get('avg_signed_return_60m_bps')} | {row.get('sample_quality')} | {row.get('stability_status')} |"
             )
@@ -974,7 +1050,7 @@ def render_signal_evaluation_markdown(summary: dict[str, Any]) -> str:
                     "| ---: | --- | ---: | --- | ---: | ---: | ---: | ---: |",
                 ]
             )
-            for row in walk_rows[:10]:
+            for row in walk_rows[:walk_forward_row_limit]:
                 lines.append(
                     f"| {row.get('split_id')} | {row.get('threshold_field')} | {row.get('threshold_value')} | {row.get('split_status')} | {row.get('train_label_count_60m')} | {row.get('holdout_label_count_60m')} | {row.get('holdout_hit_rate_60m')} | {row.get('holdout_avg_signed_return_60m_bps')} |"
                 )
@@ -1157,7 +1233,7 @@ def write_signal_evaluation_report(
     dataset_path: str | None = None,
     output_dir: str | Path = SIGNAL_EVALUATION_REPORTS_DIR,
     report_name: str | None = None,
-    top_n: int = 10,
+    top_n: int | None = None,
 ) -> dict[str, Any]:
     """
     Purpose:

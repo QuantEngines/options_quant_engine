@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from config.analytics_feature_policy import get_dealer_gamma_proxy_policy_config
+
 
 def _resolve_columns(df: pd.DataFrame) -> tuple[str | None, str | None, str | None]:
     strike_col = "STRIKE_PR" if "STRIKE_PR" in df.columns else ("strikePrice" if "strikePrice" in df.columns else None)
@@ -26,8 +28,9 @@ def _resolve_columns(df: pd.DataFrame) -> tuple[str | None, str | None, str | No
 
 
 def _signed_option_type(series: pd.Series) -> pd.Series:
+    cfg = get_dealer_gamma_proxy_policy_config()
     normalized = series.astype(str).str.upper().str.strip()
-    signed = normalized.map({"CE": 1.0, "PE": -1.0})
+    signed = normalized.map({"CE": float(cfg.call_gamma_sign), "PE": float(cfg.put_gamma_sign)})
     if signed.isna().any():
         unknown = sorted(set(normalized[signed.isna()].tolist()))
         raise ValueError(f"Unknown OPTION_TYP values in gamma_walls: {unknown}")
@@ -50,11 +53,14 @@ def _gamma_exposure_by_strike(df: pd.DataFrame) -> pd.Series:
         gamma = pd.to_numeric(work["GAMMA"], errors="coerce").fillna(0.0)
     else:
         # Fallback proxy when explicit gamma is unavailable.
+        cfg = get_dealer_gamma_proxy_policy_config()
         spot_proxy = float(work[strike_col].median()) if work[strike_col].notna().any() else 0.0
         if spot_proxy <= 0:
             return pd.Series(dtype=float)
         distance = (work[strike_col] - spot_proxy).abs() / max(spot_proxy, 1e-6)
-        gamma = 1.0 / (1.0 + distance)
+        scale = max(float(cfg.fallback_distance_scale), 0.0)
+        power = max(float(cfg.fallback_distance_power), 1e-6)
+        gamma = 1.0 / ((1.0 + (scale * distance)) ** power)
 
     signed = _signed_option_type(work[type_col])
     work["_signed_gamma_exposure"] = gamma * work[oi_col] * signed

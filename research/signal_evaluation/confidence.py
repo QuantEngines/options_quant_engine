@@ -13,6 +13,28 @@ DEFAULT_STRONG_SAMPLE = 100
 _Z_95 = 1.959963984540054
 
 
+def _sample_policy_bounds(
+    min_sample: int | None,
+    strong_sample: int | None,
+) -> tuple[int, int]:
+    if min_sample is not None and strong_sample is not None:
+        resolved_min = int(min_sample)
+        resolved_strong = int(strong_sample)
+    else:
+        try:
+            from config.signal_evaluation_scoring import get_signal_evaluation_reporting_policy
+
+            policy = get_signal_evaluation_reporting_policy()
+        except Exception:
+            policy = {}
+        resolved_min = int(min_sample if min_sample is not None else policy.get("min_reliable_sample", DEFAULT_MIN_RELIABLE_SAMPLE))
+        resolved_strong = int(strong_sample if strong_sample is not None else policy.get("strong_sample", DEFAULT_STRONG_SAMPLE))
+
+    resolved_min = max(resolved_min, 1)
+    resolved_strong = max(resolved_strong, resolved_min + 1)
+    return resolved_min, resolved_strong
+
+
 def _round_or_none(value: Any, digits: int) -> float | None:
     try:
         if value is None or pd.isna(value):
@@ -25,13 +47,12 @@ def _round_or_none(value: Any, digits: int) -> float | None:
 def sample_quality(
     sample_count: int,
     *,
-    min_sample: int = DEFAULT_MIN_RELIABLE_SAMPLE,
-    strong_sample: int = DEFAULT_STRONG_SAMPLE,
+    min_sample: int | None = None,
+    strong_sample: int | None = None,
 ) -> str:
     """Classify whether a metric has enough observations to trust."""
     count = int(sample_count or 0)
-    min_sample = max(int(min_sample), 1)
-    strong_sample = max(int(strong_sample), min_sample + 1)
+    min_sample, strong_sample = _sample_policy_bounds(min_sample, strong_sample)
     if count <= 0:
         return "NO_EVIDENCE"
     if count < min_sample:
@@ -44,14 +65,15 @@ def sample_quality(
 def sample_guardrail(
     sample_count: int,
     *,
-    min_sample: int = DEFAULT_MIN_RELIABLE_SAMPLE,
-    strong_sample: int = DEFAULT_STRONG_SAMPLE,
+    min_sample: int | None = None,
+    strong_sample: int | None = None,
 ) -> dict[str, Any]:
     """Return JSON-friendly sample quality metadata."""
+    min_sample, strong_sample = _sample_policy_bounds(min_sample, strong_sample)
     return {
         "sample_quality": sample_quality(sample_count, min_sample=min_sample, strong_sample=strong_sample),
-        "min_reliable_sample": int(max(min_sample, 1)),
-        "strong_sample": int(max(strong_sample, max(min_sample, 1) + 1)),
+        "min_reliable_sample": min_sample,
+        "strong_sample": strong_sample,
     }
 
 
@@ -110,8 +132,8 @@ def outcome_confidence_fields(
     signed_returns_bps: pd.Series | list[Any] | None,
     *,
     sample_count: int | None = None,
-    min_sample: int = DEFAULT_MIN_RELIABLE_SAMPLE,
-    strong_sample: int = DEFAULT_STRONG_SAMPLE,
+    min_sample: int | None = None,
+    strong_sample: int | None = None,
 ) -> dict[str, Any]:
     """Build confidence metadata for hit-rate and signed-return metrics."""
     hit_series = (

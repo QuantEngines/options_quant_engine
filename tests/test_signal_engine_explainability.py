@@ -5,12 +5,76 @@ import pandas as pd
 from engine.signal_engine import (
     _build_decision_explainability,
     _collect_neutralization_states,
+    _compute_runtime_composite_live_supplement,
     _evaluate_historical_outcome_guard,
     _evaluate_regime_segment_guard,
     _evaluate_session_risk_governor,
     _evaluate_trade_slot_governor,
     _evaluate_trade_promotion_governor,
 )
+
+
+def test_runtime_composite_live_supplement_adds_level_wall_bonus_only_for_confirmed_live_context():
+    payload = {
+        "direction": "PUT",
+        "confirmation_status": "STRONG_CONFIRMATION",
+        "analytics_usable": True,
+        "spot": 23880,
+        "support_wall": 23850,
+        "resistance_wall": 24100,
+        "historical_context": {"wall_context": {"state": "NEAR_SUPPORT_WALL"}},
+        "max_pain_zone": "NEAR_MAX_PAIN",
+    }
+    thresholds = {
+        "enable_runtime_composite_live_supplement": 1,
+        "runtime_composite_level_wall_supplement_points": 6,
+        "runtime_composite_supplement_min_base_score": 35,
+        "runtime_composite_supplement_max_base_score": 59,
+        "runtime_composite_supplement_require_confirmation": 1,
+        "runtime_composite_supplement_require_analytics_usable": 1,
+        "runtime_composite_supplement_block_late_chase": 1,
+    }
+
+    supplement = _compute_runtime_composite_live_supplement(payload, 53, thresholds)
+
+    assert supplement["applied"] is True
+    assert supplement["rule"] == "level_wall_plus_6"
+    assert supplement["score_adjustment"] == 6
+    assert supplement["adjusted_score"] == 59
+    assert supplement["components"]["directional_wall"] is True
+
+
+def test_runtime_composite_live_supplement_blocks_late_chase_and_unconfirmed_rows():
+    thresholds = {
+        "enable_runtime_composite_live_supplement": 1,
+        "runtime_composite_level_wall_supplement_points": 6,
+        "runtime_composite_supplement_min_base_score": 35,
+        "runtime_composite_supplement_max_base_score": 59,
+        "runtime_composite_supplement_require_confirmation": 1,
+        "runtime_composite_supplement_require_analytics_usable": 1,
+        "runtime_composite_supplement_block_late_chase": 1,
+    }
+    base_payload = {
+        "direction": "CALL",
+        "analytics_usable": True,
+        "historical_context": {"wall_context": {"state": "NEAR_RESISTANCE_WALL"}},
+    }
+
+    late = _compute_runtime_composite_live_supplement(
+        {**base_payload, "confirmation_status": "CONFIRMED", "ta_candle_late_chase": True},
+        53,
+        thresholds,
+    )
+    unconfirmed = _compute_runtime_composite_live_supplement(
+        {**base_payload, "confirmation_status": "NO_DIRECTION"},
+        53,
+        thresholds,
+    )
+
+    assert late["applied"] is False
+    assert late["reason"] == "late_chase_guard"
+    assert unconfirmed["applied"] is False
+    assert unconfirmed["reason"] == "confirmation_guard"
 
 
 def test_directionless_two_sided_setup_is_explicitly_ambiguous_watchlist():
@@ -296,6 +360,7 @@ def test_historical_outcome_guard_blocks_fragile_regime_profile():
     payload = {
         "symbol": "NIFTY",
         "direction": "CALL",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
         "gamma_regime": "POSITIVE_GAMMA",
         "macro_regime": "MACRO_NEUTRAL",
         "spot_vs_flip": "ABOVE_FLIP",
@@ -306,6 +371,8 @@ def test_historical_outcome_guard_blocks_fragile_regime_profile():
             {
                 "symbol": "NIFTY",
                 "direction": "CALL",
+                "signal_timestamp": "2026-03-13T10:00:00+05:30",
+                "outcome_status": "COMPLETE",
                 "gamma_regime": "POSITIVE_GAMMA",
                 "macro_regime": "MACRO_NEUTRAL",
                 "spot_vs_flip": "ABOVE_FLIP",
@@ -375,6 +442,7 @@ def test_regime_segment_guard_blocks_underperforming_segment():
     payload = {
         "symbol": "NIFTY",
         "direction": "PUT",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
         "gamma_regime": "NEGATIVE_GAMMA",
         "volatility_regime": "VOL_EXPANSION",
         "macro_regime": "RISK_OFF",
@@ -389,6 +457,8 @@ def test_regime_segment_guard_blocks_underperforming_segment():
             {
                 "symbol": "NIFTY",
                 "direction": "PUT",
+                "signal_timestamp": "2026-03-13T10:00:00+05:30",
+                "outcome_status": "COMPLETE",
                 "gamma_regime": "NEGATIVE_GAMMA",
                 "volatility_regime": "VOL_EXPANSION",
                 "macro_regime": "RISK_OFF",
@@ -416,6 +486,51 @@ def test_regime_segment_guard_blocks_underperforming_segment():
     assert guard["verdict"] == "BLOCK"
     assert guard["sample_size"] == 14
     assert "NEGATIVE_GAMMA" in str(guard["segment_key"])
+
+
+def test_historical_outcome_guard_ignores_unmatured_future_rows():
+    payload = {
+        "symbol": "NIFTY",
+        "direction": "CALL",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
+        "gamma_regime": "POSITIVE_GAMMA",
+        "macro_regime": "MACRO_NEUTRAL",
+        "spot_vs_flip": "ABOVE_FLIP",
+        "signal_regime": "EXPANSION_BIAS",
+    }
+    history = pd.DataFrame(
+        [
+            {
+                "symbol": "NIFTY",
+                "direction": "CALL",
+                "signal_timestamp": f"2026-03-14T09:{20 + i:02d}:00+05:30",
+                "outcome_status": "COMPLETE",
+                "gamma_regime": "POSITIVE_GAMMA",
+                "macro_regime": "MACRO_NEUTRAL",
+                "spot_vs_flip": "ABOVE_FLIP",
+                "signal_regime": "EXPANSION_BIAS",
+                "signed_return_60m_bps": -30.0,
+                "signed_return_session_close_bps": -45.0,
+                "tradeability_score": 35.0,
+                "correct_60m": 0,
+                "correct_session_close": 0,
+            }
+            for i in range(8)
+        ]
+    )
+
+    guard = _evaluate_historical_outcome_guard(
+        payload=payload,
+        history_frame=history,
+        runtime_thresholds={
+            "enable_historical_outcome_guard": 1,
+            "historical_outcome_guard_min_samples": 4,
+            "outcome_history_point_in_time_maturity_minutes": 390,
+        },
+    )
+
+    assert guard["verdict"] == "UNAVAILABLE"
+    assert guard["reason"] == "no_point_in_time_history"
 
 
 def test_watchlist_surfaces_regime_segment_guard_as_blocker():
@@ -492,7 +607,8 @@ def test_session_risk_governor_blocks_after_recent_stopout_streak():
             {
                 "symbol": "NIFTY",
                 "direction": "CALL",
-                "timestamp": f"2026-03-14T10:{10 + i:02d}:00+05:30",
+                "timestamp": f"2026-03-13T10:{10 + i:02d}:00+05:30",
+                "outcome_status": "COMPLETE",
                 "signed_return_session_close_bps": value,
                 "tradeability_score": 42.0,
                 "exit_quality_label": label,
@@ -525,6 +641,75 @@ def test_session_risk_governor_blocks_after_recent_stopout_streak():
     assert guard["stopout_streak"] >= 2
     assert guard["cooldown_active"] is True
     assert guard["budget_remaining_pct"] <= 35
+
+
+def test_session_risk_governor_ignores_unmatured_same_day_outcomes():
+    payload = {
+        "symbol": "NIFTY",
+        "direction": "CALL",
+        "valuation_time": "2026-03-14T11:00:00+05:30",
+    }
+    history = pd.DataFrame(
+        [
+            {
+                "symbol": "NIFTY",
+                "direction": "CALL",
+                "timestamp": f"2026-03-14T10:{10 + i:02d}:00+05:30",
+                "outcome_status": "COMPLETE",
+                "signed_return_session_close_bps": -25.0,
+                "exit_quality_label": "STOPPED_OUT",
+            }
+            for i in range(4)
+        ]
+    )
+
+    guard = _evaluate_session_risk_governor(
+        payload=payload,
+        history_frame=history,
+        runtime_thresholds={
+            "enable_session_risk_governor": 1,
+            "session_risk_lookback_signals": 4,
+            "session_risk_min_samples": 3,
+            "outcome_history_point_in_time_maturity_minutes": 390,
+        },
+    )
+
+    assert guard["verdict"] == "UNAVAILABLE"
+    assert guard["reason"] == "no_point_in_time_history"
+
+
+def test_trade_slot_governor_ignores_future_same_day_rows():
+    payload = {
+        "symbol": "NIFTY",
+        "direction": "CALL",
+        "valuation_time": "2026-03-14T10:00:00+05:30",
+    }
+    history = pd.DataFrame(
+        [
+            {
+                "symbol": "NIFTY",
+                "direction": "CALL",
+                "signal_timestamp": f"2026-03-14T10:{10 + i:02d}:00+05:30",
+                "trade_status": "TRADE",
+            }
+            for i in range(4)
+        ]
+    )
+
+    guard = _evaluate_trade_slot_governor(
+        payload=payload,
+        history_frame=history,
+        runtime_thresholds={
+            "enable_trade_slot_governor": 1,
+            "trade_slot_lookback_signals": 4,
+            "trade_slot_min_samples": 1,
+            "trade_slot_max_total_signals": 1,
+            "trade_slot_max_same_direction_signals": 1,
+        },
+    )
+
+    assert guard["verdict"] == "PASS"
+    assert guard["active_signal_count"] == 0
 
 
 def test_watchlist_surfaces_session_risk_governor_as_blocker():

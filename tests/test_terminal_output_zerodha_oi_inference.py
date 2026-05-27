@@ -302,6 +302,94 @@ def test_resolve_top_oi_levels_prefers_rolling_baseline_over_previous_snapshot()
     assert call_rows[0][6] == "PREMIUM_WEAK_CONFLICT"
 
 
+def test_resolve_top_oi_levels_ignores_future_premium_baseline() -> None:
+    current_chain = pd.DataFrame(
+        {
+            "strikePrice": [22950],
+            "OPTION_TYP": ["CE"],
+            "openInterest": [1200],
+            "changeinOI": [80],
+            "lastPrice": [90.0],
+            "EXPIRY_DT": ["2026-04-07"],
+            "source": ["ICICI"],
+            "timestamp": ["2026-04-07T10:00:00+05:30"],
+        }
+    )
+    previous_chain = pd.DataFrame(
+        {
+            "strikePrice": [22950],
+            "OPTION_TYP": ["CE"],
+            "openInterest": [1100],
+            "lastPrice": [80.0],
+            "EXPIRY_DT": ["2026-04-07"],
+            "source": ["ICICI"],
+            "timestamp": ["2026-04-07T09:59:00+05:30"],
+        }
+    )
+    future_premium_baseline = pd.DataFrame(
+        {
+            "strikePrice": [22950],
+            "OPTION_TYP": ["CE"],
+            "openInterest": [1100],
+            "lastPrice": [110.0],
+            "EXPIRY_DT": ["2026-04-07"],
+            "source": ["ICICI"],
+            "timestamp": ["2026-04-07T10:05:00+05:30"],
+        }
+    )
+    trade = {
+        "selected_expiry": "2026-04-07",
+        "valuation_time": "2026-04-07T10:00:00+05:30",
+        "spot": 22950.0,
+        "prev_close": 22300.0,
+        "previous_chain_frame": previous_chain,
+        "premium_baseline_chain_frame": future_premium_baseline,
+    }
+
+    call_rows, _ = _resolve_top_oi_levels(trade, current_chain, top_n=1)
+
+    assert call_rows[0][3] == "BUY_BUILDUP"
+
+
+def test_resolve_top_oi_levels_accepts_timestamp_free_live_memory_baseline() -> None:
+    current_chain = pd.DataFrame(
+        {
+            "strikePrice": [22950],
+            "OPTION_TYP": ["CE"],
+            "openInterest": [1200],
+            "changeinOI": [80],
+            "lastPrice": [90.0],
+            "EXPIRY_DT": ["2026-04-07"],
+            "source": ["ICICI"],
+            "timestamp": ["2026-04-07T10:00:00+05:30"],
+        }
+    )
+    timestamp_free_baseline = pd.DataFrame(
+        {
+            "strikePrice": [22950],
+            "OPTION_TYP": ["CE"],
+            "openInterest": [1100],
+            "lastPrice": [110.0],
+            "EXPIRY_DT": ["2026-04-07"],
+            "source": ["ICICI"],
+        }
+    )
+    trade = {
+        "selected_expiry": "2026-04-07",
+        "valuation_time": "2026-04-07T10:00:00+05:30",
+        "spot": 22950.0,
+        "prev_close": 22300.0,
+        "previous_chain_frame": timestamp_free_baseline,
+        "premium_baseline_chain_frame": timestamp_free_baseline,
+    }
+
+    call_rows, _ = _resolve_top_oi_levels(trade, current_chain, top_n=1)
+
+    assert call_rows[0][2] == 100.0
+    assert call_rows[0][3] == "WRITE_BUILDUP"
+    assert call_rows[0][6] == "PREMIUM_WEAK_CONFLICT"
+
+
 def test_resolve_top_oi_levels_uses_multi_horizon_reason_codes() -> None:
     current_chain = pd.DataFrame(
         {

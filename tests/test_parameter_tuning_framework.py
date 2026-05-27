@@ -95,16 +95,29 @@ def test_parameter_registry_exposes_key_groups():
     registry = get_parameter_registry()
 
     assert "trade_strength.scoring.flow_call_bullish" in registry.keys()
+    assert "trade_strength.runtime_thresholds.outcome_history_point_in_time_maturity_minutes" in registry.keys()
     assert "confirmation_filter.core.flow_support" in registry.keys()
+    assert "confirmation_filter.core.open_alignment_scale" in registry.keys()
+    assert "confirmation_filter.core.direction_change_penalty_max" in registry.keys()
     assert "signal_engine.data_quality.invalid_spot_penalty" in registry.keys()
     assert "signal_engine.probability.vacuum_breakout_strength" in registry.keys()
+    assert "signal_engine.direction_probability_head.directional_bias.flow_bullish_score" in registry.keys()
+    assert "signal_engine.direction_probability_head.logit.directional_bias_weight" in registry.keys()
     assert "signal_engine.trade_strength_continuous.hybrid_probability_floor" in registry.keys()
     assert "signal_engine.exit_timing.peak_alpha_minutes" in registry.keys()
     assert "signal_engine.consistency.default_trade_escalation_min_severity" in registry.keys()
     assert "tradable_data_layer.analytics.min_rows" in registry.keys()
     assert "option_chain_validation.provider_health.core_window_points" in registry.keys()
+    assert "option_chain_validation.provider_health.readiness_weights.core_marketability" in registry.keys()
+    assert "option_chain_validation.provider_health.readiness_scoring.high_tier_min_score" in registry.keys()
+    assert "option_chain_validation.vol_surface_quality.atm_iv_min_decimal" in registry.keys()
+    assert "option_chain_validation.vol_surface_quality.iv_parity_divergence_threshold" in registry.keys()
+    assert "option_efficiency.core.option_efficiency_premium_weight" in registry.keys()
+    assert "option_efficiency.core.overnight_option_efficiency_weak_threshold" in registry.keys()
     assert "analytics.flow_imbalance.bullish_threshold" in registry.keys()
     assert "analytics.gamma_flip.neutral_band_pct" in registry.keys()
+    assert "analytics.dealer_gamma_proxy.neutral_gross_gamma_ratio" in registry.keys()
+    assert "analytics.dealer_gamma_proxy.largest_gamma_max_distance_pct" in registry.keys()
     assert "analytics.technical_analysis.sma_fast_window" in registry.keys()
     assert "analytics.mean_reversion.zscore_threshold" in registry.keys()
     assert "analytics.volume_pcr.bearish_threshold" in registry.keys()
@@ -117,6 +130,17 @@ def test_parameter_registry_exposes_key_groups():
     assert "event_windows.core.pre_event_warning_minutes" in registry.keys()
     assert "keyword_category.impact.geopolitics" in registry.keys()
     assert "evaluation_thresholds.selection.trade_strength_floor" in registry.keys()
+    assert "evaluation_thresholds.label_quality.primary_label_horizon_minutes" in registry.keys()
+    assert "evaluation_thresholds.label_quality.direction_unresolved_score_cap" in registry.keys()
+    assert "evaluation_thresholds.reporting.default_top_n" in registry.keys()
+    assert "evaluation_thresholds.reporting.score_bucket_cut_4" in registry.keys()
+    assert "evaluation_thresholds.reporting.daily_probability_miscalibration_gap" in registry.keys()
+
+    maturity_definition = registry.get(
+        "trade_strength.runtime_thresholds.outcome_history_point_in_time_maturity_minutes"
+    )
+    assert maturity_definition.default_value == 390
+    assert maturity_definition.max_value >= maturity_definition.default_value
 
 
 def test_static_runtime_policy_keys_are_registered():

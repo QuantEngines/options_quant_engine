@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from config.policy_resolver import temporary_parameter_pack
 from research.signal_evaluation.reports import (
     average_realized_return_by_horizon,
     average_score_by_signal_quality,
@@ -188,6 +189,44 @@ class SignalEvaluationReportsTests(unittest.TestCase):
                         child.unlink()
                     elif child.is_dir():
                         child.rmdir()
+
+    def test_reporting_policy_controls_default_top_n_and_sample_quality(self):
+        frame = self._sample_frame()
+        frame["signal_timestamp"] = [
+            "2026-03-10T09:20:00+05:30",
+            "2026-03-10T09:25:00+05:30",
+        ]
+        frame["symbol"] = ["NIFTY", "BANKNIFTY"]
+        frame["correct_60m"] = [1, 0]
+        frame["signed_return_60m_bps"] = [54.0, -23.0]
+
+        with temporary_parameter_pack(
+            overrides={
+                "evaluation_thresholds.reporting.default_top_n": 1,
+                "evaluation_thresholds.reporting.min_reliable_sample": 2,
+                "evaluation_thresholds.reporting.strong_sample": 4,
+            },
+        ):
+            summary = build_signal_evaluation_summary(frame)
+
+        self.assertEqual(len(summary["signals_by_symbol"]), 1)
+        horizon_60m = next(row for row in summary["horizon_performance"] if row["horizon"] == "60m")
+        self.assertEqual(horizon_60m["sample_quality"], "LOW_CONFIDENCE")
+        self.assertEqual(horizon_60m["min_reliable_sample"], 2)
+        self.assertEqual(horizon_60m["strong_sample"], 4)
+
+    def test_reporting_policy_controls_score_buckets(self):
+        frame = self._sample_frame()
+        frame["correct_60m"] = [1, 0]
+        frame["signed_return_60m_bps"] = [54.0, -23.0]
+
+        with temporary_parameter_pack(
+            overrides={"evaluation_thresholds.reporting.score_bucket_cut_4": 70.0},
+        ):
+            summary = build_signal_evaluation_summary(frame)
+
+        bucket_names = {row["score_bucket"] for row in summary["score_bucket_performance"]}
+        self.assertIn("70_plus", bucket_names)
 
     def test_summary_uses_quality_approved_primary_labels(self):
         frame = self._sample_frame()

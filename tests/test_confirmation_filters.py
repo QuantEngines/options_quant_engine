@@ -104,6 +104,38 @@ def test_direction_change_penalty_is_clamped_to_bounded_range():
     assert penalized["breakdown"]["direction_change_penalty"] == -6.0
 
 
+def test_direction_change_penalty_bound_is_parameterized():
+    with temporary_parameter_pack(
+        "custom_reversal_penalty_bound",
+        overrides={
+            "confirmation_filter.core.direction_change_penalty": 99.0,
+            "confirmation_filter.core.direction_change_penalty_max": 4.0,
+        },
+    ):
+        penalized = compute_confirmation_filters(**_BEARISH_KWARGS, previous_direction="CALL")
+
+    assert penalized["breakdown"]["direction_change_penalty"] == -4.0
+
+
+def test_continuous_open_alignment_scale_is_parameterized():
+    with temporary_parameter_pack(
+        "baseline_open_alignment_scale",
+        overrides={"confirmation_filter.core.confirmation_scoring_mode": "continuous"},
+    ):
+        baseline = compute_confirmation_filters(**_BEARISH_KWARGS)
+
+    with temporary_parameter_pack(
+        "wide_open_alignment_scale",
+        overrides={
+            "confirmation_filter.core.confirmation_scoring_mode": "continuous",
+            "confirmation_filter.core.open_alignment_scale": 0.05,
+        },
+    ):
+        adjusted = compute_confirmation_filters(**_BEARISH_KWARGS)
+
+    assert adjusted["breakdown"]["open_alignment_score"] < baseline["breakdown"]["open_alignment_score"]
+
+
 def test_post_reversal_decay_applies_at_step_1():
     """After a direction flip (reversal_age=1), a decayed penalty reduces the score."""
     with temporary_parameter_pack(

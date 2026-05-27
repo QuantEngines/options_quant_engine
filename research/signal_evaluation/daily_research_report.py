@@ -21,6 +21,7 @@ from typing import Any
 
 import pandas as pd
 
+from config.signal_evaluation_scoring import get_signal_evaluation_reporting_policy
 from utils.numerics import safe_float
 from research.signal_evaluation.confidence import outcome_confidence_fields
 from research.signal_evaluation.narrative_provider import generate_narrative as _ai_narrative
@@ -115,6 +116,76 @@ FEATURE_DIAGNOSTICS_COLS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _reporting_policy() -> dict[str, Any]:
+    return get_signal_evaluation_reporting_policy()
+
+
+def _policy_int(key: str, fallback: int, *, floor: int = 1) -> int:
+    try:
+        return max(int(_reporting_policy().get(key, fallback)), floor)
+    except Exception:
+        return max(int(fallback), floor)
+
+
+def _policy_float(key: str, fallback: float) -> float:
+    try:
+        return float(_reporting_policy().get(key, fallback))
+    except Exception:
+        return float(fallback)
+
+
+def _number_text(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return str(round(float(value), 4)).rstrip("0").rstrip(".")
+
+
+def _score_buckets() -> list[tuple[float, float, str]]:
+    cuts = sorted(
+        {
+            _policy_float("score_bucket_cut_1", 35.0),
+            _policy_float("score_bucket_cut_2", 50.0),
+            _policy_float("score_bucket_cut_3", 65.0),
+            _policy_float("score_bucket_cut_4", 80.0),
+        }
+    )
+    if cuts == [35.0, 50.0, 65.0, 80.0]:
+        return SCORE_BUCKETS
+
+    buckets: list[tuple[float, float, str]] = []
+    upper = 100.0
+    for cut in reversed(cuts):
+        label = f"{_number_text(cut)}\u2013{_number_text(upper)}"
+        buckets.append((cut, upper, label))
+        upper = cut - 1.0
+    buckets.append((0.0, upper, f"0\u2013{_number_text(upper)}"))
+    return buckets
+
+
+def _probability_bucket_bins_labels() -> tuple[list[float], list[str]]:
+    cuts = sorted(
+        {
+            _policy_float("probability_bucket_cut_1", 0.35),
+            _policy_float("probability_bucket_cut_2", 0.50),
+            _policy_float("probability_bucket_cut_3", 0.65),
+            _policy_float("probability_bucket_cut_4", 0.80),
+        }
+    )
+    high_cap = max(_policy_float("probability_bucket_high_cap", 1.01), cuts[-1] if cuts else 1.0)
+    if cuts and high_cap <= cuts[-1]:
+        high_cap = cuts[-1] + 1e-9
+    if cuts == [0.35, 0.50, 0.65, 0.80]:
+        return [0.0, *cuts, high_cap], ["0\u201334%", "35\u201349%", "50\u201364%", "65\u201379%", "80\u2013100%"]
+    labels = [f"0\u2013{_number_text(cuts[0] * 100)}%"] if cuts else ["all"]
+    labels.extend(
+        f"{_number_text(left * 100)}\u2013{_number_text(right * 100)}%"
+        for left, right in zip(cuts, cuts[1:])
+    )
+    if cuts:
+        labels.append(f"{_number_text(cuts[-1] * 100)}\u2013100%")
+    return [0.0, *cuts, high_cap], labels
 
 
 def _r(value: Any, digits: int = 4) -> str:
@@ -939,7 +1010,7 @@ def _section_decay_by_score_bucket(day_df: pd.DataFrame) -> list[str]:
     working = dir_rows.copy()
     working["composite_signal_score"] = _numeric(working["composite_signal_score"])
 
-    for lo, hi, label in SCORE_BUCKETS:
+    for lo, hi, label in _score_buckets():
         mask = (working["composite_signal_score"] >= lo) & (working["composite_signal_score"] <= hi)
         bucket = working.loc[mask]
         n = len(bucket)
@@ -1278,7 +1349,7 @@ def _section_score_calibration(day_df: pd.DataFrame) -> list[str]:
     working = dir_rows.copy()
     working["composite_signal_score"] = _numeric(working["composite_signal_score"])
 
-    for lo, hi, label in SCORE_BUCKETS:
+    for lo, hi, label in _score_buckets():
         mask = (working["composite_signal_score"] >= lo) & (working["composite_signal_score"] <= hi)
         bucket = working.loc[mask]
         n = len(bucket)
@@ -1316,10 +1387,10 @@ def _section_threshold_replay(day_df: pd.DataFrame) -> list[str]:
         "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
 
-    replay = build_threshold_replay_summary(day_df, top_n=8)
+    replay = build_threshold_replay_summary(day_df, top_n=_policy_int("daily_threshold_replay_rows", 8))
     threshold_rows = replay.get("threshold_replay_candidates", []) or []
     if threshold_rows:
-        for row in threshold_rows[:8]:
+        for row in threshold_rows[:_policy_int("daily_threshold_replay_rows", 8)]:
             lines.append(
                 f"| {row.get('candidate_rank')} | {row.get('threshold_field')} | "
                 f"{_threshold_value_text(row.get('threshold_value'))} | {row.get('signal_count')} | "
@@ -1340,7 +1411,7 @@ def _section_threshold_replay(day_df: pd.DataFrame) -> list[str]:
         "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
     ])
     if regime_rows:
-        for row in regime_rows[:8]:
+        for row in regime_rows[:_policy_int("daily_threshold_replay_rows", 8)]:
             lines.append(
                 f"| {row.get('candidate_rank')} | {row.get('regime_field')} | {row.get('regime_value')} | "
                 f"{row.get('threshold_field')} | {_threshold_value_text(row.get('threshold_value'))} | "
@@ -1377,7 +1448,7 @@ def _section_threshold_replay(day_df: pd.DataFrame) -> list[str]:
                 "| ---: | --- | ---: | --- | ---: | ---: | ---: | ---: |",
             ]
         )
-        for row in walk_rows[:8]:
+        for row in walk_rows[:_policy_int("daily_threshold_replay_rows", 8)]:
             lines.append(
                 f"| {row.get('split_id')} | {row.get('threshold_field')} | {_threshold_value_text(row.get('threshold_value'))} | "
                 f"{row.get('split_status')} | {row.get('train_label_count_60m')} | {row.get('holdout_label_count_60m')} | "
@@ -1449,7 +1520,7 @@ def _section_threshold_governance(governance_artifact: dict[str, Any] | None) ->
                 "| --- | --- | ---: | ---: | --- |",
             ]
         )
-        for row in candidate_reviews[:8]:
+        for row in candidate_reviews[:_policy_int("daily_table_preview_rows", 8)]:
             candidate = row.get("candidate", {}) or {}
             lines.append(
                 f"| `{row.get('candidate_key')}` | {row.get('governance_status')} | "
@@ -1541,7 +1612,7 @@ def _section_threshold_policy_experiment(experiment_artifact: dict[str, Any] | N
                 "| --- | --- | --- | ---: | ---: | ---: |",
             ]
         )
-        for row in regime_rows[:8]:
+        for row in regime_rows[:_policy_int("daily_table_preview_rows", 8)]:
             lines.append(
                 f"| {row.get('regime_field')} | {row.get('regime_value')} | {row.get('regime_status')} | "
                 f"{row.get('candidate_label_count_60m')} | {_r(row.get('avg_return_delta_bps'), 2)} bps | "
@@ -1631,7 +1702,7 @@ def _section_threshold_shadow_simulation(shadow_artifact: dict[str, Any] | None)
                 "| --- | --- | ---: | ---: | ---: | ---: |",
             ]
         )
-        for row in regime_rows[:8]:
+        for row in regime_rows[:_policy_int("daily_table_preview_rows", 8)]:
             lines.append(
                 f"| {row.get('segment_field')} | {row.get('segment_value')} | {row.get('suppressed_signal_count')} | "
                 f"{row.get('false_positive_removed_count')} | {row.get('true_positive_lost_count')} | "
@@ -1716,7 +1787,7 @@ def _section_threshold_shadow_review(review_artifact: dict[str, Any] | None) -> 
                 "| --- | --- | --- | ---: | ---: | ---: | --- |",
             ]
         )
-        for row in segment_failures[:8]:
+        for row in segment_failures[:_policy_int("daily_table_preview_rows", 8)]:
             reasons = "; ".join(str(item) for item in row.get("review_reasons", []) or [])
             lines.append(
                 f"| {row.get('segment_kind')} | {row.get('segment_field')} | {row.get('segment_value')} | "
@@ -1896,7 +1967,7 @@ def _section_threshold_post_promotion_monitor(monitor_artifact: dict[str, Any] |
                 "| --- | --- | --- | --- | ---: | ---: | ---: |",
             ]
         )
-        for row in segment_rows[:8]:
+        for row in segment_rows[:_policy_int("daily_table_preview_rows", 8)]:
             lines.append(
                 f"| {row.get('segment_kind')} | {row.get('segment_field')} | {row.get('segment_value')} | "
                 f"{row.get('segment_status')} | {row.get('retained_label_count_60m')} | "
@@ -2003,8 +2074,7 @@ def _section_probability_calibration(day_df: pd.DataFrame) -> list[str]:
         lines.append("")
         return lines
 
-    bins = [0.0, 0.35, 0.50, 0.65, 0.80, 1.01]
-    labels = ["0–34%", "35–49%", "50–64%", "65–79%", "80–100%"]
+    bins, labels = _probability_bucket_bins_labels()
     working["prob_bucket"] = pd.cut(working[prob_col], bins=bins, labels=labels)
 
     lines.append("| Probability Bucket | N | Predicted Avg P | Realized Hit Rate | Calibration Gap |")
@@ -2251,9 +2321,15 @@ def _section_research_actions(day_df: pd.DataFrame) -> list[str]:
     actions: list[str] = []
 
     # Sample size warning
-    if len(dir_rows) < 20:
+    min_directional = _policy_int("daily_research_action_min_directional_rows", 20)
+    regime_reliable = _policy_int("daily_research_action_regime_reliable_rows", 50)
+    miscalibration_gap = _policy_float("daily_probability_miscalibration_gap", 0.15)
+    if len(dir_rows) < min_directional:
         actions.append("**Increase data collection** — only {n} directional signals observed. "
-                       "Statistical reliability requires ≥50 signals per regime bucket.".format(n=len(dir_rows)))
+                       "Statistical reliability requires ≥{threshold} signals per regime bucket.".format(
+                           n=len(dir_rows),
+                           threshold=regime_reliable,
+                       ))
 
     # Calibration check
     prob_col = "hybrid_move_probability" if "hybrid_move_probability" in day_df.columns else "move_probability"
@@ -2262,9 +2338,9 @@ def _section_research_actions(day_df: pd.DataFrame) -> list[str]:
         real = _numeric(day_df["correct_60m"]).mean()
         if pd.notna(pred) and pd.notna(real):
             gap = abs(pred - real)
-            if gap > 0.15:
+            if gap > miscalibration_gap:
                 actions.append(f"**Recalibrate probability model** — calibration gap of {_r(gap, 2)} "
-                               f"exceeds 15% threshold.")
+                               f"exceeds {_pct(miscalibration_gap)} threshold.")
 
     # Suppression-governance KPI
     if not dir_rows.empty and "trade_status" in dir_rows.columns:
@@ -2767,7 +2843,7 @@ def _section_drift_monitor(drift_artifact: dict[str, Any] | None) -> list[str]:
     lines.append("### Drift Warnings")
     lines.append("")
     if warnings:
-        for item in warnings[:8]:
+        for item in warnings[:_policy_int("daily_table_preview_rows", 8)]:
             lines.append(f"- **{item.get('severity')}** `{item.get('category')}` — {item.get('message')}")
     else:
         lines.append("- None")
@@ -3034,15 +3110,18 @@ def _summarize_decay_by_score(day_df: pd.DataFrame) -> str:
         return "Insufficient scored signals for decay-by-bucket analysis."
     working = dir_rows.copy()
     working["composite_signal_score"] = _numeric(working["composite_signal_score"])
-    top = working.loc[working["composite_signal_score"] >= 80]
-    bottom = working.loc[working["composite_signal_score"] < 35]
+    buckets = _score_buckets()
+    top_lo, _, top_label = buckets[0]
+    _, bottom_hi, bottom_label = buckets[-1]
+    top = working.loc[working["composite_signal_score"] >= top_lo]
+    bottom = working.loc[working["composite_signal_score"] <= bottom_hi]
     top_ret = _numeric(top.get("signed_return_60m_bps", pd.Series())).mean() if not top.empty else None
     bot_ret = _numeric(bottom.get("signed_return_60m_bps", pd.Series())).mean() if not bottom.empty else None
     parts = []
     if pd.notna(top_ret):
-        parts.append(f"top-tier (80–100) averaged {_r(top_ret, 1)} bps at 60m")
+        parts.append(f"top-tier ({top_label}) averaged {_r(top_ret, 1)} bps at 60m")
     if pd.notna(bot_ret):
-        parts.append(f"low-tier (0–34) averaged {_r(bot_ret, 1)} bps")
+        parts.append(f"low-tier ({bottom_label}) averaged {_r(bot_ret, 1)} bps")
     monotonic = pd.notna(top_ret) and pd.notna(bot_ret) and top_ret > bot_ret
     if parts:
         sep = " vs " if len(parts) == 2 else ". "
@@ -3261,7 +3340,7 @@ def _summarize_score_calibration(day_df: pd.DataFrame) -> str:
     working = dir_rows.copy()
     working["composite_signal_score"] = _numeric(working["composite_signal_score"])
     bucket_hrs = []
-    for lo, hi, label in SCORE_BUCKETS:
+    for lo, hi, label in _score_buckets():
         mask = (working["composite_signal_score"] >= lo) & (working["composite_signal_score"] <= hi)
         bucket = working.loc[mask]
         if not bucket.empty and "correct_60m" in bucket.columns:
@@ -3288,7 +3367,7 @@ def _summarize_score_calibration(day_df: pd.DataFrame) -> str:
 
 
 def _summarize_threshold_replay(day_df: pd.DataFrame) -> str:
-    replay = build_threshold_replay_summary(day_df, top_n=5)
+    replay = build_threshold_replay_summary(day_df, top_n=_policy_int("daily_threshold_summary_rows", 5))
     walk_summary = (replay.get("walk_forward_validation", {}) or {}).get("summary", {}) or {}
     walk_note = ""
     if walk_summary:
@@ -3461,7 +3540,9 @@ def _summarize_probability_calibration(day_df: pd.DataFrame) -> str:
         return "Insufficient data for probability calibration."
     gap = pred - real
     direction = "overconfident" if gap > 0 else "underconfident"
-    severity = "significantly" if abs(gap) > 0.15 else "slightly" if abs(gap) > 0.05 else "well"
+    strong_gap = _policy_float("daily_probability_miscalibration_gap", 0.15)
+    mild_gap = _policy_float("daily_probability_miscalibration_mild_gap", 0.05)
+    severity = "significantly" if abs(gap) > strong_gap else "slightly" if abs(gap) > mild_gap else "well"
     if severity == "well":
         return (
             f"Probability well-calibrated: predicted {_pct(pred)} vs realized {_pct(real)} "
@@ -3623,11 +3704,13 @@ def _summarize_key_insights(day_df: pd.DataFrame) -> str:
 def _summarize_research_actions(day_df: pd.DataFrame) -> str:
     dir_rows = _directional_rows(day_df)
     actions = []
-    if len(dir_rows) < 20:
+    min_directional = _policy_int("daily_research_action_min_directional_rows", 20)
+    regime_reliable = _policy_int("daily_research_action_regime_reliable_rows", 50)
+    if len(dir_rows) < min_directional:
         actions.append(
-            "Sample size below reliable threshold (N<20) — all metrics reported in this session "
+            f"Sample size below reliable threshold (N<{min_directional}) — all metrics reported in this session "
             "have wide confidence intervals and should be interpreted with caution. Statistical "
-            "reliability for signal evaluation typically requires at least 50 directional signals "
+            f"reliability for signal evaluation typically requires at least {regime_reliable} directional signals "
             "per regime bucket. Continue collecting data before drawing firm conclusions."
         )
     if "macro_regime" in day_df.columns and day_df["macro_regime"].nunique() <= 1:
@@ -3641,7 +3724,8 @@ def _summarize_research_actions(day_df: pd.DataFrame) -> str:
     if prob_col in day_df.columns and "correct_60m" in day_df.columns:
         pred = _numeric(day_df[prob_col]).mean()
         real = _numeric(day_df["correct_60m"]).mean()
-        if pd.notna(pred) and pd.notna(real) and abs(pred - real) > 0.15:
+        miscalibration_gap = _policy_float("daily_probability_miscalibration_gap", 0.15)
+        if pd.notna(pred) and pd.notna(real) and abs(pred - real) > miscalibration_gap:
             actions.append(
                 f"Recalibrate probability model — predicted probability {_pct(pred)} diverges from "
                 f"realized hit rate {_pct(real)} by {_r(abs(pred - real), 3)}. This is large enough "
@@ -3692,11 +3776,14 @@ def _summarize_information_coefficient(df: pd.DataFrame, day_df: pd.DataFrame) -
     s = _numeric(dir_rows[score_col])
     r = _numeric(dir_rows[return_col])
     valid = pd.DataFrame({"s": s, "r": r}).dropna()
-    if len(valid) < 5:
+    min_rows = _policy_int("daily_information_coefficient_min_rows", 5)
+    if len(valid) < min_rows:
         return "Too few observations for reliable IC estimation."
     ic = valid["s"].corr(valid["r"])
     rank_ic = valid["s"].rank().corr(valid["r"].rank())
-    quality = "strong" if abs(ic) > 0.15 else "moderate" if abs(ic) > 0.05 else "weak"
+    strong_ic = _policy_float("daily_information_coefficient_strong_threshold", 0.15)
+    moderate_ic = _policy_float("daily_information_coefficient_moderate_threshold", 0.05)
+    quality = "strong" if abs(ic) > strong_ic else "moderate" if abs(ic) > moderate_ic else "weak"
     direction_note = (
         "Positive IC confirms higher scores associate with better outcomes."
         if ic > 0

@@ -8,6 +8,8 @@ import pytest
 from analytics.dealer_gamma_path import simulate_gamma_path
 from analytics.gamma_exposure import approximate_gamma, calculate_gamma_exposure, gamma_signal
 from analytics.greeks_engine import _bs_price_for_iv, compute_option_greeks, estimate_iv_from_price
+from analytics.market_gamma_map import largest_gamma_strikes
+from config.policy_resolver import temporary_parameter_pack
 from strategy.enhanced_strike_scoring import (
     compute_dealer_pressure,
     compute_enhanced_strike_scores,
@@ -97,6 +99,46 @@ def test_calculate_gamma_exposure_fallback_is_scale_invariant():
     e_large = calculate_gamma_exposure(chain_large, spot=10000.0)
 
     assert e_small == pytest.approx(e_large, rel=1e-12)
+
+
+def test_dealer_gamma_neutral_threshold_is_parameterized():
+    chain = pd.DataFrame(
+        {
+            "strikePrice": [100.0, 101.0],
+            "openInterest": [100.0, 100.0],
+            "GAMMA": [1.0, -0.94],
+            "OPTION_TYP": ["CE", "PE"],
+        }
+    )
+
+    assert gamma_signal(chain, spot=100.0) == "NEUTRAL_GAMMA"
+
+    with temporary_parameter_pack(
+        overrides={"analytics.dealer_gamma_proxy.neutral_gross_gamma_ratio": 0.01},
+    ):
+        assert gamma_signal(chain, spot=100.0) == "LONG_GAMMA"
+
+
+def test_dealer_gamma_fallback_decay_is_parameterized():
+    baseline = approximate_gamma(120.0, 100.0)
+
+    with temporary_parameter_pack(
+        overrides={"analytics.dealer_gamma_proxy.fallback_distance_power": 2.0},
+    ):
+        squared = approximate_gamma(120.0, 100.0)
+
+    assert squared < baseline
+
+
+def test_largest_gamma_distance_filter_is_parameterized():
+    gex = pd.Series({100.0: 1.0, 150.0: 100.0})
+
+    assert largest_gamma_strikes(gex, top_n=1, spot=100.0) == [100.0]
+
+    with temporary_parameter_pack(
+        overrides={"analytics.dealer_gamma_proxy.largest_gamma_max_distance_pct": 0.75},
+    ):
+        assert largest_gamma_strikes(gex, top_n=1, spot=100.0) == [150.0]
 
 
 def test_premium_efficiency_penalizes_zero_premium_rows():

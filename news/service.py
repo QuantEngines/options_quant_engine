@@ -211,8 +211,20 @@ class HeadlineIngestionService:
             provider_meta = {}
 
         fetched_at = _now_ts(as_of)
+        future_cutoff = fetched_at + pd.Timedelta(seconds=120)
+        future_records = [
+            record for record in records
+            if record.timestamp is not None and record.timestamp > future_cutoff
+        ]
+        if future_records:
+            records = [
+                record for record in records
+                if record.timestamp is not None and record.timestamp <= future_cutoff
+            ]
         if not records:
             warnings = ["headline_provider_returned_no_records"]
+            if future_records:
+                warnings = [f"future_headline_records_ignored:{len(future_records)}"]
             status = str(provider_meta.get("status", "")).upper()
             if status == "MISSING_FILE":
                 warnings.append("headline_mock_file_missing")
@@ -233,6 +245,8 @@ class HeadlineIngestionService:
         is_stale = age_minutes > self.stale_after_minutes
 
         warnings = []
+        if future_records:
+            warnings.append(f"future_headline_records_ignored:{len(future_records)}")
         if is_stale:
             warnings.append(f"headline_data_stale:{round(age_minutes, 2)}m")
 

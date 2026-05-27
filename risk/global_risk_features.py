@@ -392,7 +392,15 @@ def _volatility_compression_score(realized_vol_5d, realized_vol_30d, *, cfg):
     return 0.0
 
 
-def _market_snapshot_details(global_market_snapshot):
+def _market_snapshot_timestamp(snapshot: dict):
+    for key in ("latest_market_timestamp", "as_of", "timestamp"):
+        ts = _coerce_timestamp(snapshot.get(key))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _market_snapshot_details(global_market_snapshot, *, as_of=None):
     """
     Purpose:
         Process market snapshot details for downstream use.
@@ -409,11 +417,24 @@ def _market_snapshot_details(global_market_snapshot):
     Notes:
         Keeping this step explicit makes it easier to audit how the final feature, score, or trade decision was assembled.
     """
-    snapshot = global_market_snapshot if isinstance(global_market_snapshot, dict) else {}
+    snapshot = dict(global_market_snapshot) if isinstance(global_market_snapshot, dict) else {}
     market_inputs = snapshot.get("market_inputs", {}) if isinstance(snapshot.get("market_inputs", {}), dict) else {}
     data_available = bool(snapshot.get("data_available", False))
     stale = bool(snapshot.get("stale", False))
     neutral_fallback = bool(snapshot.get("neutral_fallback", not data_available))
+
+    as_of_ts = _coerce_timestamp(as_of)
+    snapshot_ts = _market_snapshot_timestamp(snapshot)
+    if as_of_ts is not None and snapshot_ts is not None:
+        if snapshot_ts > as_of_ts + pd.Timedelta(seconds=120):
+            warnings = list(snapshot.get("warnings", []))
+            warnings.append(f"global_market_snapshot_future:{snapshot_ts.isoformat()}")
+            snapshot["warnings"] = warnings
+            snapshot["stale"] = True
+            snapshot["neutral_fallback"] = True
+            data_available = False
+            stale = True
+            neutral_fallback = True
 
     return snapshot, market_inputs, data_available and not stale, stale, neutral_fallback
 
@@ -501,7 +522,7 @@ def build_global_risk_features(
     macro_event_state = macro_event_state if isinstance(macro_event_state, dict) else {}
     macro_news_state = macro_news_state if isinstance(macro_news_state, dict) else {}
     global_market_snapshot, market_inputs, market_data_available, market_data_stale, market_neutral_fallback = (
-        _market_snapshot_details(global_market_snapshot)
+        _market_snapshot_details(global_market_snapshot, as_of=as_of)
     )
     snapshot_warnings = list(global_market_snapshot.get("warnings", []))
     gift_nifty_proxy_in_use = bool(global_market_snapshot.get("gift_nifty_proxy_in_use", False)) or any(

@@ -94,6 +94,23 @@ def _as_upper(value):
     return str(value or "").upper().strip()
 
 
+def _truthy_flag(value):
+    return _as_upper(value) in {"1", "1.0", "TRUE", "YES", "Y", "ON"}
+
+
+def _boolish_flag(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = _as_upper(value)
+    if text in {"1", "1.0", "TRUE", "YES", "Y", "ON"}:
+        return True
+    if text in {"0", "0.0", "FALSE", "NO", "N", "OFF"}:
+        return False
+    return bool(value)
+
+
 def _is_directional_flow(flow_label):
     return _as_upper(flow_label) in {"BULLISH_FLOW", "BEARISH_FLOW"}
 
@@ -312,6 +329,126 @@ def _coerce_timestamp(value):
     except _TIMESTAMP_ERRORS as exc:
         _LOG.debug("signal_engine: unable to coerce valuation_time=%r into timestamp: %s", value, exc)
         return None
+
+
+def _history_timestamp_column(frame):
+    for candidate in ("signal_timestamp", "timestamp", "valuation_time", "as_of"):
+        if candidate in getattr(frame, "columns", []):
+            return candidate
+    return None
+
+
+def _coerce_timestamp_series_utc(values):
+    try:
+        import pandas as _pd
+
+        return _pd.to_datetime(values, errors="coerce", utc=True)
+    except Exception:
+        import pandas as _pd
+
+        return _pd.Series(dtype="datetime64[ns, UTC]")
+
+
+def _filter_history_point_in_time(
+    frame,
+    payload,
+    *,
+    runtime_thresholds=None,
+    min_maturity_minutes=None,
+    require_complete_outcome=False,
+):
+    """Return only history rows available before the current valuation time.
+
+    Outcome-enriched signal datasets are post-hoc research artifacts.  Runtime
+    guards may use them as historical priors, but only after the referenced
+    signal timestamp has matured.  This protects replay/live decisions from
+    seeing same-day future labels.
+    """
+    if frame is None or getattr(frame, "empty", True):
+        return frame
+
+    payload = payload if isinstance(payload, dict) else {}
+    valuation_time = _coerce_timestamp(payload.get("valuation_time") or payload.get("as_of"))
+    timestamp_col = _history_timestamp_column(frame)
+    if valuation_time is None or timestamp_col is None:
+        return frame.iloc[0:0].copy()
+
+    try:
+        import pandas as _pd
+
+        valuation_utc = _pd.to_datetime([valuation_time], errors="coerce", utc=True)[0]
+    except Exception:
+        return frame
+    if _pd.isna(valuation_utc):
+        return frame
+
+    timestamps = _coerce_timestamp_series_utc(frame[timestamp_col])
+    thresholds = runtime_thresholds if isinstance(runtime_thresholds, dict) else {}
+    if min_maturity_minutes is None:
+        min_maturity_minutes = _safe_float(
+            thresholds.get("outcome_history_point_in_time_maturity_minutes"),
+            390.0,
+        )
+    maturity = _pd.to_timedelta(max(0.0, _safe_float(min_maturity_minutes, 0.0)), unit="m")
+    availability_time = timestamps + maturity
+    mask = timestamps.notna() & availability_time.lt(valuation_utc)
+
+    if require_complete_outcome and "outcome_status" in frame.columns:
+        mask = mask & frame["outcome_status"].astype(str).str.upper().str.strip().eq("COMPLETE")
+
+    return frame.loc[mask.to_numpy()].copy()
+
+
+def _latest_frame_timestamp(frame):
+    if frame is None:
+        return None
+    try:
+        import pandas as _pd
+
+        timestamp_col = _history_timestamp_column(frame)
+        if timestamp_col is not None:
+            timestamps = _coerce_timestamp_series_utc(frame[timestamp_col]).dropna()
+            if not timestamps.empty:
+                return timestamps.max()
+        attrs = getattr(frame, "attrs", {}) or {}
+        for key in ("timestamp", "as_of", "valuation_time", "snapshot_timestamp"):
+            candidate = _pd.to_datetime([attrs.get(key)], errors="coerce", utc=True)[0]
+            if not _pd.isna(candidate):
+                return candidate
+    except Exception:
+        return None
+    return None
+
+
+def _filter_prior_snapshot_frame(frame, valuation_time):
+    """Accept a previous/baseline frame only when it is not future-dated."""
+    diagnostics = {
+        "status": "NOT_SUPPLIED" if frame is None else "ACCEPTED",
+        "latest_timestamp": None,
+        "valuation_time": None,
+    }
+    if frame is None:
+        return None, diagnostics
+
+    try:
+        import pandas as _pd
+
+        valuation_utc = _pd.to_datetime([valuation_time], errors="coerce", utc=True)[0]
+    except Exception:
+        return frame, diagnostics
+    if _pd.isna(valuation_utc):
+        diagnostics["status"] = "ACCEPTED_TIMESTAMP_UNAVAILABLE"
+        return frame, diagnostics
+
+    latest_ts = _latest_frame_timestamp(frame)
+    diagnostics["valuation_time"] = valuation_utc.isoformat()
+    diagnostics["latest_timestamp"] = latest_ts.isoformat() if latest_ts is not None else None
+    if latest_ts is not None and latest_ts > valuation_utc:
+        diagnostics["status"] = "IGNORED_FUTURE_SNAPSHOT"
+        return None, diagnostics
+    if latest_ts is None:
+        diagnostics["status"] = "ACCEPTED_TIMESTAMP_UNAVAILABLE"
+    return frame, diagnostics
 
 
 def _normalize_string_set(value, *, default: set[str] | None = None) -> set[str]:
@@ -748,7 +885,14 @@ def _evaluate_historical_outcome_guard(*, payload, history_frame, runtime_thresh
     if direction not in {"CALL", "PUT"}:
         return {"enabled": True, "verdict": "UNAVAILABLE", "reason": "direction_unavailable", "sample_size": 0}
 
-    frame = history_frame.copy()
+    frame = _filter_history_point_in_time(
+        history_frame,
+        payload,
+        runtime_thresholds=runtime_thresholds,
+        require_complete_outcome=True,
+    ).copy()
+    if frame.empty:
+        return {"enabled": True, "verdict": "UNAVAILABLE", "reason": "no_point_in_time_history", "sample_size": 0}
     for key in ["symbol", "direction", "gamma_regime", "macro_regime", "spot_vs_flip", "signal_regime"]:
         if key in frame.columns:
             frame[key] = frame[key].astype(str).str.upper().str.strip()
@@ -906,7 +1050,14 @@ def _evaluate_regime_segment_guard(*, payload, history_frame, runtime_thresholds
     if segment_key == "default":
         return {"enabled": True, "verdict": "UNAVAILABLE", "reason": "segment_context_missing", "sample_size": 0, "segment_key": segment_key}
 
-    frame = history_frame.copy()
+    frame = _filter_history_point_in_time(
+        history_frame,
+        payload,
+        runtime_thresholds=runtime_thresholds,
+        require_complete_outcome=True,
+    ).copy()
+    if frame.empty:
+        return {"enabled": True, "verdict": "UNAVAILABLE", "reason": "no_point_in_time_history", "sample_size": 0}
     if "symbol" in frame.columns:
         frame["symbol_norm"] = frame["symbol"].astype(str).str.upper().str.strip()
     else:
@@ -1016,7 +1167,14 @@ def _evaluate_session_risk_governor(*, payload, history_frame, runtime_threshold
     direction = _as_upper((payload or {}).get("direction"))
     valuation_time = _coerce_timestamp((payload or {}).get("valuation_time") or (payload or {}).get("as_of"))
 
-    frame = history_frame.copy()
+    frame = _filter_history_point_in_time(
+        history_frame,
+        payload,
+        runtime_thresholds=runtime_thresholds,
+        require_complete_outcome=True,
+    ).copy()
+    if frame.empty:
+        return {"enabled": True, "verdict": "UNAVAILABLE", "reason": "no_point_in_time_history", "recent_signal_count": 0}
     if "symbol" in frame.columns:
         frame["symbol_norm"] = frame["symbol"].astype(str).str.upper().str.strip()
     else:
@@ -1214,7 +1372,27 @@ def _evaluate_trade_slot_governor(*, payload, history_frame, runtime_thresholds)
     direction = _as_upper(payload.get("direction"))
     valuation_time = _coerce_timestamp(payload.get("valuation_time") or payload.get("as_of"))
 
-    frame = history_frame.copy()
+    frame = _filter_history_point_in_time(
+        history_frame,
+        payload,
+        runtime_thresholds=runtime_thresholds,
+        min_maturity_minutes=0,
+        require_complete_outcome=False,
+    ).copy()
+    if frame.empty:
+        return {
+            "enabled": True,
+            "verdict": "PASS",
+            "reason": "Trade slot capacity is available",
+            "active_signal_count": 0,
+            "same_direction_count": 0,
+            "max_total_signals": max_total_signals,
+            "max_same_direction_signals": max_same_direction_signals,
+            "size_cap": 1.0,
+            "hold_cap_minutes": hold_cap_minutes,
+            "intraday_only": False,
+            "operator_override_active": False,
+        }
     if "symbol" in frame.columns:
         frame["symbol_norm"] = frame["symbol"].astype(str).str.upper().str.strip()
     else:
@@ -1553,7 +1731,16 @@ def _compute_portfolio_concentration_context(*, payload, runtime_thresholds):
         context["reason"] = "history_unavailable"
         return context
 
-    frame = history_frame.copy()
+    frame = _filter_history_point_in_time(
+        history_frame,
+        payload,
+        runtime_thresholds=runtime_thresholds,
+        min_maturity_minutes=0,
+        require_complete_outcome=False,
+    ).copy()
+    if frame.empty:
+        context["reason"] = "no_prior_point_in_time_history"
+        return context
     if "direction" not in frame.columns:
         context["reason"] = "direction_history_unavailable"
         return context
@@ -1582,7 +1769,7 @@ def _compute_portfolio_concentration_context(*, payload, runtime_thresholds):
         if valuation_time is not None:
             day_subset = frame[frame[timestamp_col].dt.date == valuation_time.date()]
             if not day_subset.empty:
-                frame = day_subset
+                frame = day_subset.copy()
         else:
             valid_times = frame[timestamp_col].dropna()
             if not valid_times.empty:
@@ -1590,12 +1777,12 @@ def _compute_portfolio_concentration_context(*, payload, runtime_thresholds):
                 if latest_date is not None:
                     latest_subset = frame[frame[timestamp_col].dt.date == latest_date]
                     if not latest_subset.empty:
-                        frame = latest_subset
+                        frame = latest_subset.copy()
 
     if "trade_status" in frame.columns:
         active_statuses = {"TRADE", "EXECUTED", "FILLED", "OPEN", "DEGRADED_PROVIDER_TRADE"}
         frame["trade_status_norm"] = frame["trade_status"].astype(str).str.upper().str.strip()
-        frame = frame[frame["trade_status_norm"].isin(active_statuses)]
+        frame = frame[frame["trade_status_norm"].isin(active_statuses)].copy()
         if frame.empty:
             context["reason"] = "no_recent_executed_signals"
             return context
@@ -1612,8 +1799,18 @@ def _compute_portfolio_concentration_context(*, payload, runtime_thresholds):
     context["same_direction_count"] = same_count
     context["same_direction_share"] = round(float(same_count / len(recent)), 4) if len(recent) else 0.0
 
-    if "signed_return_session_close_bps" in same_direction.columns:
-        close_bps = _pd.to_numeric(same_direction["signed_return_session_close_bps"], errors="coerce")
+    outcome_recent = _filter_history_point_in_time(
+        recent,
+        payload,
+        runtime_thresholds=runtime_thresholds,
+        require_complete_outcome=True,
+    )
+    outcome_same_direction = outcome_recent
+    if direction in {"CALL", "PUT"} and "direction_norm" in outcome_recent.columns:
+        outcome_same_direction = outcome_recent[outcome_recent["direction_norm"] == context["direction"]]
+
+    if "signed_return_session_close_bps" in outcome_same_direction.columns:
+        close_bps = _pd.to_numeric(outcome_same_direction["signed_return_session_close_bps"], errors="coerce")
         if close_bps.notna().any():
             context["same_direction_avg_close_bps"] = round(float(close_bps.dropna().mean()), 2)
 
@@ -2590,6 +2787,139 @@ def _compute_runtime_composite_score(
         + w_gamma * gamma_stability_score
     )
     return int(_clip(round(composite), 0, 100))
+
+
+def _nearest_wall_bucket_from_payload(payload):
+    spot = _safe_float((payload or {}).get("spot"), None)
+    if spot in (None, 0.0):
+        return "UNKNOWN"
+
+    distances = []
+    for wall_key in ("support_wall", "resistance_wall"):
+        wall = _safe_float((payload or {}).get(wall_key), None)
+        if wall is not None:
+            distances.append(abs((wall - spot) / spot) * 100.0)
+
+    if not distances:
+        return "UNKNOWN"
+
+    nearest_pct = min(distances)
+    if nearest_pct <= 0.10:
+        return "AT_WALL"
+    if nearest_pct <= 0.30:
+        return "NEAR_WALL"
+    return "AWAY_FROM_WALL"
+
+
+def _compute_runtime_composite_live_supplement(payload, runtime_composite_score, runtime_thresholds):
+    """Apply a narrow live-time level/wall supplement to the runtime score."""
+    payload = payload if isinstance(payload, dict) else {}
+    thresholds = runtime_thresholds if isinstance(runtime_thresholds, dict) else {}
+    base_score = int(_clip(_safe_float(runtime_composite_score, 0.0), 0, 100))
+    points = int(_clip(round(_safe_float(thresholds.get("runtime_composite_level_wall_supplement_points"), 6.0)), 0, 20))
+    details = {
+        "enabled": False,
+        "applied": False,
+        "rule": None,
+        "score_adjustment": 0,
+        "base_score": base_score,
+        "adjusted_score": base_score,
+        "reason": "disabled",
+        "components": {},
+    }
+
+    enabled = bool(int(_safe_float(thresholds.get("enable_runtime_composite_live_supplement"), 0.0)))
+    if not enabled or points <= 0:
+        return details
+    details["enabled"] = True
+
+    min_base_score = int(_clip(round(_safe_float(thresholds.get("runtime_composite_supplement_min_base_score"), 35.0)), 0, 100))
+    max_base_score = int(_clip(round(_safe_float(thresholds.get("runtime_composite_supplement_max_base_score"), 59.0)), 0, 100))
+    if base_score < min_base_score or base_score > max_base_score:
+        details["reason"] = "base_score_outside_supplement_band"
+        details["components"] = {"min_base_score": min_base_score, "max_base_score": max_base_score}
+        return details
+
+    if bool(int(_safe_float(thresholds.get("runtime_composite_supplement_disable_event_lockdown"), 1.0))) and _boolish_flag(
+        payload.get("event_lockdown_flag")
+    ):
+        details["reason"] = "event_lockdown_guard"
+        return details
+
+    if bool(int(_safe_float(thresholds.get("runtime_composite_supplement_require_analytics_usable"), 1.0))) and not _boolish_flag(
+        payload.get("analytics_usable", True),
+        default=True,
+    ):
+        details["reason"] = "analytics_unusable_guard"
+        return details
+
+    confirmation = _as_upper(payload.get("confirmation_status") or payload.get("confirmation"))
+    if bool(int(_safe_float(thresholds.get("runtime_composite_supplement_require_confirmation"), 1.0))) and confirmation not in {
+        "CONFIRMED",
+        "STRONG_CONFIRMATION",
+    }:
+        details["reason"] = "confirmation_guard"
+        details["components"] = {"confirmation": confirmation or "UNKNOWN"}
+        return details
+
+    direction = _as_upper(payload.get("direction"))
+    if direction not in {"CALL", "PUT"}:
+        details["reason"] = "direction_guard"
+        details["components"] = {"direction": direction or "UNKNOWN"}
+        return details
+
+    if bool(int(_safe_float(thresholds.get("runtime_composite_supplement_block_late_chase"), 1.0))):
+        entry_state = _as_upper(payload.get("ta_entry_timing_state"))
+        if _truthy_flag(payload.get("ta_candle_late_chase")) or "LATE_CHASE" in entry_state:
+            details["reason"] = "late_chase_guard"
+            details["components"] = {"ta_entry_timing_state": entry_state or "UNKNOWN"}
+            return details
+
+    historical_context = payload.get("historical_context") if isinstance(payload.get("historical_context"), dict) else {}
+    wall_context = historical_context.get("wall_context") if isinstance(historical_context.get("wall_context"), dict) else {}
+    max_pain_context = (
+        historical_context.get("max_pain_context") if isinstance(historical_context.get("max_pain_context"), dict) else {}
+    )
+    wall_context_state = _as_upper(payload.get("wall_context_state") or wall_context.get("state"))
+    historical_wall_state = _as_upper(payload.get("historical_wall_state") or wall_context.get("state"))
+    nearest_wall_bucket = _as_upper(payload.get("nearest_wall_bucket") or _nearest_wall_bucket_from_payload(payload))
+    max_pain_zone = _as_upper(payload.get("max_pain_zone"))
+    historical_max_pain_state = _as_upper(payload.get("historical_max_pain_state") or max_pain_context.get("state"))
+    wall_text = f"{wall_context_state}|{historical_wall_state}"
+    max_pain_text = f"{max_pain_zone}|{historical_max_pain_state}"
+
+    away_from_walls = "AWAY_FROM_NEAREST_WALL" in wall_text or nearest_wall_bucket == "AWAY_FROM_WALL"
+    far_from_max_pain = "FAR_FROM_MAX_PAIN" in max_pain_text
+    directional_wall = (
+        (direction == "CALL" and "NEAR_RESISTANCE_WALL" in wall_text)
+        or (direction == "PUT" and "NEAR_SUPPORT_WALL" in wall_text)
+    )
+    details["components"] = {
+        "direction": direction,
+        "confirmation": confirmation or "UNKNOWN",
+        "wall_context_state": wall_context_state or "UNKNOWN",
+        "historical_wall_state": historical_wall_state or "UNKNOWN",
+        "nearest_wall_bucket": nearest_wall_bucket or "UNKNOWN",
+        "max_pain_zone": max_pain_zone or "UNKNOWN",
+        "historical_max_pain_state": historical_max_pain_state or "UNKNOWN",
+        "away_from_walls": bool(away_from_walls),
+        "far_from_max_pain": bool(far_from_max_pain),
+        "directional_wall": bool(directional_wall),
+    }
+
+    if not (away_from_walls or far_from_max_pain or directional_wall):
+        details["reason"] = "level_context_not_supportive"
+        return details
+
+    adjusted_score = int(_clip(base_score + points, 0, 100))
+    details.update({
+        "applied": True,
+        "rule": "level_wall_plus_6" if points == 6 else "level_wall_live_supplement",
+        "score_adjustment": adjusted_score - base_score,
+        "adjusted_score": adjusted_score,
+        "reason": "live_level_wall_context_supportive",
+    })
+    return details
 
 
 _HIGH_COMPOSITE_SOFT_OVERRIDE_BLOCKERS = {
@@ -3858,6 +4188,7 @@ def generate_trade(
     # Normalize provider-specific column names and enrich missing Greeks once so
     # every downstream model works off a consistent option-chain schema.
     df = normalize_option_chain(option_chain, spot=spot, valuation_time=valuation_time)
+    previous_chain, previous_chain_pit = _filter_prior_snapshot_frame(previous_chain, valuation_time)
     prev_df = (
         normalize_option_chain(previous_chain, spot=spot, valuation_time=valuation_time)
         if previous_chain is not None else None
@@ -4573,6 +4904,8 @@ def generate_trade(
         "liquidity_vacuum_state": market_state["vacuum_state"],
         "dealer_liquidity_map": market_state["dealer_liquidity_map"],
         "market_state_timings": market_state.get("market_state_timings"),
+        "previous_chain_point_in_time_status": previous_chain_pit.get("status"),
+        "previous_chain_latest_timestamp": previous_chain_pit.get("latest_timestamp"),
         "historical_context": historical_context,
         "historical_context_version": historical_context.get("version"),
         "historical_context_mode": historical_context.get("decision_mode"),
@@ -5851,6 +6184,44 @@ def generate_trade(
     elif enable_decay:
         base_payload["time_decay_factor"] = 1.0
     
+    runtime_composite_base_score = int(_clip(runtime_composite_score, 0, 100))
+    runtime_composite_supplement = _compute_runtime_composite_live_supplement(
+        base_payload,
+        runtime_composite_base_score,
+        runtime_thresholds,
+    )
+    runtime_composite_supplement_apply_to_score = bool(
+        int(_safe_float(runtime_thresholds.get("runtime_composite_live_supplement_apply_to_score"), 0.0))
+    )
+    runtime_composite_supplement_candidate_triggered = bool(runtime_composite_supplement.get("applied"))
+    if runtime_composite_supplement_candidate_triggered and runtime_composite_supplement_apply_to_score:
+        runtime_composite_score = int(_clip(runtime_composite_supplement.get("adjusted_score"), 0, 100))
+    base_payload["runtime_composite_base_score"] = runtime_composite_base_score
+    base_payload["runtime_composite_live_supplement"] = runtime_composite_supplement
+    base_payload["runtime_composite_supplement_apply_to_score"] = runtime_composite_supplement_apply_to_score
+    base_payload["runtime_composite_supplement_candidate_triggered"] = runtime_composite_supplement_candidate_triggered
+    base_payload["runtime_composite_supplement_applied"] = bool(
+        runtime_composite_supplement_candidate_triggered and runtime_composite_supplement_apply_to_score
+    )
+    base_payload["runtime_composite_supplement_rule"] = runtime_composite_supplement.get("rule")
+    base_payload["runtime_composite_supplement_candidate_adjustment"] = runtime_composite_supplement.get(
+        "score_adjustment",
+        0,
+    )
+    base_payload["runtime_composite_supplement_score_adjustment"] = (
+        runtime_composite_supplement.get("score_adjustment", 0)
+        if runtime_composite_supplement_apply_to_score
+        else 0
+    )
+    base_payload["runtime_composite_supplement_reason"] = (
+        runtime_composite_supplement.get("reason")
+        if runtime_composite_supplement_apply_to_score
+        else f"monitor_only:{runtime_composite_supplement.get('reason')}"
+    )
+    base_payload["runtime_composite_supplement_base_score"] = runtime_composite_base_score
+    base_payload["runtime_composite_supplement_adjusted_score"] = runtime_composite_score
+    base_payload["runtime_composite_supplement_components"] = runtime_composite_supplement.get("components") or {}
+
     base_payload["runtime_composite_score"] = runtime_composite_score
     runtime_composite_policy = _runtime_composite_observation_policy(runtime_composite_score, runtime_thresholds)
     base_payload.update(runtime_composite_policy)

@@ -13,6 +13,7 @@ from research.signal_evaluation.dataset import ensure_signals_dataset_exists, lo
 from research.signal_evaluation.dataset import upsert_signal_rows
 from research.signal_evaluation.dataset import write_signals_dataset
 from research.signal_evaluation.evaluator import (
+    apply_label_quality_fields,
     build_signal_evaluation_row,
     build_regime_fingerprint,
     evaluate_signal_outcomes,
@@ -27,6 +28,7 @@ from research.signal_evaluation.policy import (
     normalize_capture_policy,
     should_capture_signal,
 )
+from tuning.runtime import temporary_parameter_pack
 
 
 class SignalEvaluationDatasetTests(unittest.TestCase):
@@ -742,6 +744,48 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(enriched["calibration_label"], enriched["correct_60m"])
         self.assertEqual(enriched["calibration_label_horizon"], "60m")
         self.assertEqual(enriched["primary_outcome_return_bps"], enriched["signed_return_60m_bps"])
+
+    def test_label_quality_policy_caps_resolve_from_parameter_pack(self):
+        row = {
+            "direction": "",
+            "spot_at_signal": 22000.0,
+            "outcome_status": "COMPLETE",
+            "correct_60m": 1,
+            "signed_return_60m_bps": 14.5,
+        }
+
+        with temporary_parameter_pack(
+            overrides={"evaluation_thresholds.label_quality.direction_unresolved_score_cap": 22.0},
+        ):
+            enriched = apply_label_quality_fields(row)
+
+        self.assertEqual(enriched["label_quality_status"], "UNUSABLE")
+        self.assertEqual(enriched["label_quality_score"], 22.0)
+        self.assertEqual(enriched["calibration_label_available"], False)
+        self.assertIn("direction_unresolved", enriched["label_quality_reasons"])
+
+    def test_label_quality_primary_horizon_resolves_from_parameter_pack(self):
+        row = {
+            "direction": "CALL",
+            "spot_at_signal": 22000.0,
+            "outcome_status": "COMPLETE",
+            "observed_minutes": 30,
+            "correct_30m": 1,
+            "signed_return_30m_bps": 9.25,
+            "correct_60m": 0,
+            "signed_return_60m_bps": -6.0,
+        }
+
+        with temporary_parameter_pack(
+            overrides={"evaluation_thresholds.label_quality.primary_label_horizon_minutes": 30},
+        ):
+            enriched = apply_label_quality_fields(row)
+
+        self.assertEqual(enriched["label_quality_status"], "CLEAN")
+        self.assertEqual(enriched["calibration_label"], 1)
+        self.assertEqual(enriched["calibration_label_horizon"], "30m")
+        self.assertEqual(enriched["primary_outcome_horizon"], "30m")
+        self.assertEqual(enriched["primary_outcome_return_bps"], 9.25)
 
     def test_evaluate_signal_outcomes_labels_early_alpha_decay_and_exit_pressure(self):
         row = build_signal_evaluation_row(self._sample_result())

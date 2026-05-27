@@ -17,6 +17,15 @@ Downstream Usage:
 import numpy as np
 import pandas as pd
 
+from config.analytics_feature_policy import get_dealer_gamma_proxy_policy_config
+
+
+def _fallback_gamma_from_distance(distance):
+    cfg = get_dealer_gamma_proxy_policy_config()
+    scale = max(float(cfg.fallback_distance_scale), 0.0)
+    power = max(float(cfg.fallback_distance_power), 1e-6)
+    return 1.0 / np.power(1.0 + (scale * distance), power)
+
 
 def _infer_dealer_gamma_sign(df: pd.DataFrame, *, type_col: str, oi_col: str) -> float:
     """
@@ -52,7 +61,7 @@ def approximate_gamma(strike, spot):
     if spot <= 0:
         return 0.0
     moneyness_distance = abs(strike - spot) / spot
-    return 1.0 / (1.0 + moneyness_distance)
+    return float(_fallback_gamma_from_distance(moneyness_distance))
 
 
 def calculate_gamma_exposure(option_chain: pd.DataFrame, spot=None):
@@ -97,7 +106,7 @@ def calculate_gamma_exposure(option_chain: pd.DataFrame, spot=None):
         gamma = pd.to_numeric(df["GAMMA"], errors="coerce").fillna(0.0)
     else:
         distance = (strikes - float(spot)).abs() / max(float(spot), 1e-6)
-        gamma = 1.0 / (1.0 + distance)
+        gamma = _fallback_gamma_from_distance(distance)
 
     raw_exposure = gamma * oi
     finite_gamma = gamma.replace([np.inf, -np.inf], np.nan).dropna()
@@ -137,7 +146,7 @@ def gamma_signal(option_chain: pd.DataFrame, spot=None):
         gamma = pd.to_numeric(df["GAMMA"], errors="coerce").fillna(0.0)
     else:
         distance = (strikes - float(spot)).abs() / max(float(spot), 1e-6)
-        gamma = 1.0 / (1.0 + distance.fillna(np.inf))
+        gamma = _fallback_gamma_from_distance(distance.fillna(np.inf))
 
     raw_exposure = gamma * oi
     finite_gamma = gamma.replace([np.inf, -np.inf], np.nan).dropna()
@@ -150,7 +159,8 @@ def gamma_signal(option_chain: pd.DataFrame, spot=None):
         net_gamma = float(dealer_gamma_sign * np.nansum(np.abs(raw_exposure.values)))
     gross_gamma = float(np.nansum(np.abs(raw_exposure.values)))
 
-    if gross_gamma <= 0 or abs(net_gamma) <= gross_gamma * 0.05:
+    cfg = get_dealer_gamma_proxy_policy_config()
+    if gross_gamma <= 0 or abs(net_gamma) <= gross_gamma * float(cfg.neutral_gross_gamma_ratio):
         return "NEUTRAL_GAMMA"
     if net_gamma > 0:
         # Keep legacy output labels for gamma_signal() to preserve API
