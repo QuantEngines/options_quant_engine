@@ -46,6 +46,7 @@ def build_iv_validation_frame(
     spot: Any = None,
     valuation_time: Any = None,
     source_label: str = "MODEL_DERIVED_FROM_OPTION_PRICE",
+    allow_spot_proxy: bool = True,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Return a validation frame plus diagnostics for IV source provenance."""
     raw_positive_iv_rows = positive_iv_row_count(option_chain)
@@ -61,9 +62,12 @@ def build_iv_validation_frame(
 
     validation_spot = spot
     if validation_spot in (None, ""):
-        validation_spot = _median_strike(option_chain)
-        if validation_spot is not None:
-            diagnostics["iv_validation_spot_source"] = "MEDIAN_STRIKE_PROXY"
+        if allow_spot_proxy:
+            validation_spot = _median_strike(option_chain)
+            if validation_spot is not None:
+                diagnostics["iv_validation_spot_source"] = "MEDIAN_STRIKE_PROXY"
+        else:
+            diagnostics["iv_validation_spot_source"] = "UNAVAILABLE"
     else:
         diagnostics["iv_validation_spot_source"] = "SPOT"
 

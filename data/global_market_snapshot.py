@@ -40,6 +40,14 @@ from data.icici_gift_nifty import (
     fetch_icici_gift_nifty_snapshot,
     invalidate_icici_gift_nifty_cache,
 )
+from data.india_bond_yield_snapshot import (
+    BOND_YIELD_FIELDS as INDIA_BOND_YIELD_FIELDS,
+    build_india_bond_yield_snapshot,
+)
+from data.institutional_flow_snapshot import (
+    FLOW_FIELDS as INSTITUTIONAL_FLOW_FIELDS,
+    build_institutional_flow_snapshot,
+)
 
 
 def _coerce_timestamp(value):
@@ -310,6 +318,16 @@ def _daily_change_pct(history: pd.DataFrame):
     return ((latest / prev) - 1.0) * 100.0
 
 
+def _normalize_us10y_yield_pct(raw_value):
+    value = _safe_float(raw_value, None)
+    if value is None:
+        return None
+    # Yahoo's ^TNX has appeared in both "10x yield" and direct percent forms
+    # across environments. Normalize defensively so spreads and bp changes do
+    # not drift by a factor of ten.
+    return value / 10.0 if abs(value) > 20.0 else value
+
+
 def _us10y_change_bp(history: pd.DataFrame):
     """
     Purpose:
@@ -330,13 +348,18 @@ def _us10y_change_bp(history: pd.DataFrame):
     if history is None or history.empty or len(history) < 2:
         return None
 
-    latest = _safe_float(history.iloc[-1]["close"], None)
-    prev = _safe_float(history.iloc[-2]["close"], None)
+    latest = _normalize_us10y_yield_pct(history.iloc[-1]["close"])
+    prev = _normalize_us10y_yield_pct(history.iloc[-2]["close"])
     if latest is None or prev is None:
         return None
 
-    # Yahoo ^TNX is typically 10x the yield percentage, so 1.0 index point ~= 10 bp.
-    return (latest - prev) * 10.0
+    return (latest - prev) * 100.0
+
+
+def _us10y_yield_level(history: pd.DataFrame):
+    if history is None or history.empty:
+        return None
+    return _normalize_us10y_yield_pct(history.iloc[-1]["close"])
 
 
 def _realized_volatility(history: pd.DataFrame, window: int):
@@ -511,11 +534,37 @@ def build_global_market_snapshot(symbol: str, *, as_of=None) -> dict:
     market_inputs["sp500_change_24h"] = _daily_change_pct(histories.get("sp500"))
     market_inputs["nasdaq_change_24h"] = _daily_change_pct(histories.get("nasdaq"))
     market_inputs["us10y_change_bp"] = _us10y_change_bp(histories.get("us10y"))
+    market_inputs["us10y_yield"] = _us10y_yield_level(histories.get("us10y"))
     market_inputs["usdinr_change_24h"] = _daily_change_pct(histories.get("usdinr"))
     market_inputs["dxy_change_24h"] = _daily_change_pct(histories.get("dxy"))
     market_inputs["realized_vol_5d"] = _realized_volatility(histories.get("underlying"), 5)
     market_inputs["realized_vol_30d"] = _realized_volatility(histories.get("underlying"), 30)
     market_inputs["gift_nifty_change_24h"] = None
+
+    india_bond_yield_snapshot = build_india_bond_yield_snapshot(as_of=as_of_ts)
+    india_bond_yields = india_bond_yield_snapshot.get("yields") or {}
+    for field in INDIA_BOND_YIELD_FIELDS:
+        market_inputs[field] = _safe_float(india_bond_yields.get(field), None)
+    market_inputs["india_bond_yield_date"] = india_bond_yield_snapshot.get("bond_date")
+    market_inputs["india_bond_yield_source"] = india_bond_yield_snapshot.get("source")
+    market_inputs["india_bond_yield_source_timestamp"] = india_bond_yield_snapshot.get("source_timestamp")
+    market_inputs["india_bond_yield_staleness_days"] = india_bond_yield_snapshot.get("staleness_days")
+    india_10y = _safe_float(market_inputs.get("india_10y_yield"), None)
+    us_10y = _safe_float(market_inputs.get("us10y_yield"), None)
+    market_inputs["india_us_10y_spread_bp"] = (
+        ((india_10y - us_10y) * 100.0)
+        if india_10y is not None and us_10y is not None
+        else None
+    )
+
+    institutional_flow_snapshot = build_institutional_flow_snapshot(as_of=as_of_ts)
+    institutional_flows = institutional_flow_snapshot.get("flows") or {}
+    for field in INSTITUTIONAL_FLOW_FIELDS:
+        market_inputs[field] = _safe_float(institutional_flows.get(field), None)
+    market_inputs["institutional_flow_date"] = institutional_flow_snapshot.get("flow_date")
+    market_inputs["institutional_flow_source"] = institutional_flow_snapshot.get("source")
+    market_inputs["institutional_flow_source_timestamp"] = institutional_flow_snapshot.get("source_timestamp")
+    market_inputs["institutional_flow_staleness_days"] = institutional_flow_snapshot.get("staleness_days")
 
     gift_nifty_source = "UNAVAILABLE"
     gift_nifty_proxy_in_use = False
@@ -564,6 +613,8 @@ def build_global_market_snapshot(symbol: str, *, as_of=None) -> dict:
         "stale": stale,
         "gift_nifty_source": gift_nifty_source,
         "gift_nifty_proxy_in_use": gift_nifty_proxy_in_use,
+        "india_bond_yield_snapshot": india_bond_yield_snapshot,
+        "institutional_flow_snapshot": institutional_flow_snapshot,
         "latest_market_timestamp": latest_market_ts.isoformat(),
         "lookback_days": GLOBAL_MARKET_LOOKBACK_DAYS,
         "market_inputs": market_inputs,

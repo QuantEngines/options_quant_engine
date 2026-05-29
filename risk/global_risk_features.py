@@ -570,6 +570,19 @@ def build_global_risk_features(
     gift_nifty_change_24h = _safe_float(effective_market_inputs.get("gift_nifty_change_24h"), None)
     realized_vol_5d = _safe_float(effective_market_inputs.get("realized_vol_5d"), None)
     realized_vol_30d = _safe_float(effective_market_inputs.get("realized_vol_30d"), None)
+    institutional_flow_snapshot = (
+        global_market_snapshot.get("institutional_flow_snapshot")
+        if isinstance(global_market_snapshot.get("institutional_flow_snapshot"), dict)
+        else {}
+    )
+    fii_cash_net = _safe_float(market_inputs.get("fii_cash_net"), None)
+    dii_cash_net = _safe_float(market_inputs.get("dii_cash_net"), None)
+    fii_index_futures_net = _safe_float(market_inputs.get("fii_index_futures_net"), None)
+    fii_index_options_net = _safe_float(market_inputs.get("fii_index_options_net"), None)
+    institutional_flow_date = market_inputs.get("institutional_flow_date")
+    institutional_flow_source = market_inputs.get("institutional_flow_source")
+    institutional_flow_source_timestamp = market_inputs.get("institutional_flow_source_timestamp")
+    institutional_flow_staleness_days = _safe_float(market_inputs.get("institutional_flow_staleness_days"), None)
 
     # These components capture different ways global conditions can leak into
     # local option behavior: commodities, volatility, rates, FX, and events.
@@ -585,6 +598,24 @@ def build_global_risk_features(
     volatility_shock_score = _volatility_shock_score(vix_change_24h, cfg=cfg)
     us_equity_risk_score = _us_equity_risk_score(sp500_change_24h, nasdaq_change_24h, cfg=cfg)
     rates_shock_score = _rates_shock_score(us10y_change_bp, cfg=cfg)
+    us10y_yield = _safe_float(market_inputs.get("us10y_yield"), None)
+    india_2y_yield = _safe_float(market_inputs.get("india_2y_yield"), None)
+    india_5y_yield = _safe_float(market_inputs.get("india_5y_yield"), None)
+    india_10y_yield = _safe_float(market_inputs.get("india_10y_yield"), None)
+    india_30y_yield = _safe_float(market_inputs.get("india_30y_yield"), None)
+    india_10y_change_bp = _safe_float(market_inputs.get("india_10y_change_bp"), None)
+    india_2y10y_spread_bp = _safe_float(market_inputs.get("india_2y10y_spread_bp"), None)
+    india_5y10y_spread_bp = _safe_float(market_inputs.get("india_5y10y_spread_bp"), None)
+    india_us_10y_spread_bp = _safe_float(market_inputs.get("india_us_10y_spread_bp"), None)
+    india_bond_yield_snapshot = (
+        global_market_snapshot.get("india_bond_yield_snapshot")
+        if isinstance(global_market_snapshot.get("india_bond_yield_snapshot"), dict)
+        else {}
+    )
+    india_bond_yield_date = market_inputs.get("india_bond_yield_date")
+    india_bond_yield_source = market_inputs.get("india_bond_yield_source")
+    india_bond_yield_source_timestamp = market_inputs.get("india_bond_yield_source_timestamp")
+    india_bond_yield_staleness_days = _safe_float(market_inputs.get("india_bond_yield_staleness_days"), None)
     currency_shock_score = _currency_shock_score(usdinr_change_24h, cfg=cfg)
     dxy_shock_score = _dxy_shock_score(dxy_change_24h, cfg=cfg)
     gift_nifty_lead_score = (
@@ -693,10 +724,39 @@ def build_global_risk_features(
         "sp500_change_24h": sp500_change_24h,
         "nasdaq_change_24h": nasdaq_change_24h,
         "us10y_change_bp": us10y_change_bp,
+        "us10y_yield": us10y_yield,
+        "india_2y_yield": india_2y_yield,
+        "india_5y_yield": india_5y_yield,
+        "india_10y_yield": india_10y_yield,
+        "india_30y_yield": india_30y_yield,
+        "india_10y_change_bp": india_10y_change_bp,
+        "india_2y10y_spread_bp": india_2y10y_spread_bp,
+        "india_5y10y_spread_bp": india_5y10y_spread_bp,
+        "india_us_10y_spread_bp": india_us_10y_spread_bp,
+        "india_bond_yield_date": india_bond_yield_date,
+        "india_bond_yield_source": india_bond_yield_source,
+        "india_bond_yield_source_timestamp": india_bond_yield_source_timestamp,
+        "india_bond_yield_staleness_days": india_bond_yield_staleness_days,
+        "india_bond_yield_data_available": bool(india_bond_yield_snapshot.get("data_available", False)),
+        "india_bond_yield_stale": bool(india_bond_yield_snapshot.get("stale", True)),
+        "india_bond_yield_warnings": list(india_bond_yield_snapshot.get("warnings") or []),
+        "india_bond_yield_issues": list(india_bond_yield_snapshot.get("issues") or []),
         "usdinr_change_24h": usdinr_change_24h,
         "dxy_change_24h": dxy_change_24h,
         "gift_nifty_change_24h": gift_nifty_change_24h,
         "gift_nifty_proxy_in_use": gift_nifty_proxy_in_use,
+        "fii_cash_net": fii_cash_net,
+        "dii_cash_net": dii_cash_net,
+        "fii_index_futures_net": fii_index_futures_net,
+        "fii_index_options_net": fii_index_options_net,
+        "institutional_flow_date": institutional_flow_date,
+        "institutional_flow_source": institutional_flow_source,
+        "institutional_flow_source_timestamp": institutional_flow_source_timestamp,
+        "institutional_flow_staleness_days": institutional_flow_staleness_days,
+        "institutional_flow_data_available": bool(institutional_flow_snapshot.get("data_available", False)),
+        "institutional_flow_stale": bool(institutional_flow_snapshot.get("stale", True)),
+        "institutional_flow_warnings": list(institutional_flow_snapshot.get("warnings") or []),
+        "institutional_flow_issues": list(institutional_flow_snapshot.get("issues") or []),
         "realized_vol_5d": realized_vol_5d,
         "realized_vol_30d": realized_vol_30d,
         "oil_shock_score": oil_shock_score,

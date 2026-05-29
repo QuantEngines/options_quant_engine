@@ -14,6 +14,7 @@ from strategy.enhanced_strike_scoring import (
     compute_dealer_pressure,
     compute_enhanced_strike_scores,
     compute_premium_efficiency,
+    compute_tradeability_flags,
 )
 
 
@@ -205,6 +206,74 @@ def test_compute_dealer_pressure_uses_flip_context_and_gamma_intensity():
     )
 
     assert float(stressed.iloc[0]) > float(baseline.iloc[0])
+
+
+def test_enhanced_dealer_pressure_scores_are_policy_configurable():
+    strikes = pd.Series([23000.0, 23100.0])
+
+    baseline = compute_dealer_pressure(
+        strikes,
+        gamma_regime="NEGATIVE_GAMMA",
+        spot_vs_flip="AT_FLIP",
+        dealer_hedging_bias="DOWNSIDE_HEDGING_ACCELERATION",
+        gamma_flip_distance_pct=0.1,
+        dealer_gamma_exposure=2_000_000.0,
+    )
+
+    with temporary_parameter_pack(
+        overrides={
+            "strike_selection.core.dealer_gamma_regime_score_negative_gamma": 0.10,
+            "strike_selection.core.dealer_hedging_bias_score_downside_acceleration": 0.10,
+            "strike_selection.core.dealer_pressure_weight_gex": 0.0,
+        },
+    ):
+        reduced = compute_dealer_pressure(
+            strikes,
+            gamma_regime="NEGATIVE_GAMMA",
+            spot_vs_flip="AT_FLIP",
+            dealer_hedging_bias="DOWNSIDE_HEDGING_ACCELERATION",
+            gamma_flip_distance_pct=0.1,
+            dealer_gamma_exposure=2_000_000.0,
+        )
+
+    assert float(reduced.iloc[0]) < float(baseline.iloc[0])
+
+
+def test_enhanced_tradeability_thresholds_are_policy_configurable():
+    rows = pd.DataFrame(
+        {
+            "lastPrice": [50.0],
+            "openInterest": [15_000.0],
+            "totalTradedVolume": [600.0],
+        }
+    )
+
+    default_flags = compute_tradeability_flags(
+        rows,
+        spot=100.0,
+        atm_iv=20.0,
+        days_to_expiry=7.0,
+        expected_move=20.0,
+    )
+    assert bool(default_flags["tradable_intraday"].iloc[0]) is True
+    assert bool(default_flags["premium_reasonable"].iloc[0]) is True
+
+    with temporary_parameter_pack(
+        overrides={
+            "strike_selection.core.tradeability_min_intraday_volume": 700.0,
+            "strike_selection.core.tradeability_max_premium_ratio": 2.0,
+        },
+    ):
+        stricter_flags = compute_tradeability_flags(
+            rows,
+            spot=100.0,
+            atm_iv=20.0,
+            days_to_expiry=7.0,
+            expected_move=20.0,
+        )
+
+    assert bool(stricter_flags["tradable_intraday"].iloc[0]) is False
+    assert bool(stricter_flags["premium_reasonable"].iloc[0]) is False
 
 
 def test_greeks_monotonic_gamma_as_tte_shrinks():

@@ -333,6 +333,176 @@ def _format_provider_quality_market_summary(trade):
     return "; ".join(str(item) for item in parts[:4])
 
 
+def _format_pct_change(value):
+    if value in (None, ""):
+        return None
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_signed_number(value):
+    if value in (None, ""):
+        return None
+    try:
+        return f"{float(value):+,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_yield_level(value):
+    if value in (None, ""):
+        return None
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_bp_change(value):
+    if value in (None, ""):
+        return None
+    try:
+        return f"{float(value):+.1f}bp"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_yield_with_change(level, change_bp):
+    level_text = _format_yield_level(level)
+    change_text = _format_bp_change(change_bp)
+    if level_text and change_text:
+        return f"{level_text} ({change_text})"
+    return level_text or change_text
+
+
+def _format_level_with_change(level, change):
+    if level in (None, "") and change in (None, ""):
+        return None
+    level_text = None
+    if level not in (None, ""):
+        try:
+            level_text = f"{float(level):.2f}"
+        except (TypeError, ValueError):
+            level_text = str(level)
+    change_text = _format_pct_change(change)
+    if level_text and change_text:
+        return f"{level_text} ({change_text})"
+    return level_text or change_text
+
+
+def _build_global_macro_snapshot_fields(*, trade=None, global_market_snapshot=None):
+    """Resolve compact global macro fields without changing signal logic."""
+
+    trade = trade if isinstance(trade, dict) else {}
+    snapshot = global_market_snapshot if isinstance(global_market_snapshot, dict) else {}
+    market_inputs = snapshot.get("market_inputs") if isinstance(snapshot.get("market_inputs"), dict) else {}
+    global_features = trade.get("global_risk_features") if isinstance(trade.get("global_risk_features"), dict) else {}
+
+    def pick(*keys):
+        for key in keys:
+            for source in (trade, global_features, market_inputs):
+                value = source.get(key) if isinstance(source, dict) else None
+                if value not in (None, ""):
+                    return value
+        return None
+
+    flow_date = pick("institutional_flow_date")
+    flow_source = pick("institutional_flow_source")
+    flow_staleness = pick("institutional_flow_staleness_days")
+    flow_status = None
+    if flow_date:
+        flow_status = f"{flow_date}"
+        if flow_source:
+            flow_status += f" via {flow_source}"
+        if flow_staleness not in (None, ""):
+            try:
+                flow_status += f" ({int(float(flow_staleness))}d lag)"
+            except (TypeError, ValueError):
+                flow_status += f" ({flow_staleness} lag)"
+    elif any(
+        pick(field) is not None
+        for field in ("fii_cash_net", "dii_cash_net", "fii_index_futures_net", "fii_index_options_net")
+    ):
+        flow_status = "available"
+    else:
+        flow_status = "unavailable"
+
+    bond_date = pick("india_bond_yield_date")
+    bond_source = pick("india_bond_yield_source")
+    bond_staleness = pick("india_bond_yield_staleness_days")
+    bond_status = None
+    if bond_date:
+        bond_status = f"{bond_date}"
+        if bond_source:
+            bond_status += f" via {bond_source}"
+        if bond_staleness not in (None, ""):
+            try:
+                bond_status += f" ({int(float(bond_staleness))}d lag)"
+            except (TypeError, ValueError):
+                bond_status += f" ({bond_staleness} lag)"
+    elif pick("india_10y_yield") is not None:
+        bond_status = "available"
+    else:
+        bond_status = "unavailable"
+
+    fields = {
+        "india_vix": _format_level_with_change(
+            pick("india_vix_level"),
+            pick("india_vix_change_24h"),
+        ),
+        "crude_24h": _format_pct_change(pick("oil_change_24h")),
+        "us_vix_24h": _format_pct_change(pick("us_vix_change_24h", "vix_change_24h")),
+        "us_10y": _format_yield_with_change(pick("us10y_yield"), pick("us10y_change_bp")),
+        "india_10y": _format_yield_with_change(pick("india_10y_yield"), pick("india_10y_change_bp")),
+        "india_us_10y_spread": _format_bp_change(pick("india_us_10y_spread_bp")),
+        "india_2s10s": _format_bp_change(pick("india_2y10y_spread_bp")),
+        "india_bond_data": bond_status,
+        "dxy_24h": _format_pct_change(pick("dxy_change_24h")),
+        "usdinr_24h": _format_pct_change(pick("usdinr_change_24h")),
+        "gift_nifty_24h": _format_pct_change(pick("gift_nifty_change_24h")),
+        "fii_cash_net": _format_signed_number(pick("fii_cash_net")),
+        "dii_cash_net": _format_signed_number(pick("dii_cash_net")),
+        "fii_index_fut_net": _format_signed_number(pick("fii_index_futures_net")),
+        "fii_index_opt_net": _format_signed_number(pick("fii_index_options_net")),
+        "fii_dii_flow": flow_status,
+    }
+    macro_or_flow_values = [
+        value
+        for key, value in fields.items()
+        if key not in {"fii_dii_flow", "india_bond_data"}
+    ]
+    bond_available = bond_status not in (None, "unavailable")
+    flow_available = flow_status not in (None, "unavailable")
+    if not any(value is not None for value in macro_or_flow_values) and not bond_available and not flow_available:
+        return None
+    return fields
+
+
+def _format_historical_pcr_read(pcr_ctx):
+    if not isinstance(pcr_ctx, dict) or not pcr_ctx:
+        return None
+    interpretation = pcr_ctx.get("interpretation")
+    basis = pcr_ctx.get("basis")
+    value = pcr_ctx.get("value")
+    state = pcr_ctx.get("state")
+    prefix_parts = []
+    if basis and str(basis).upper() != "UNAVAILABLE":
+        prefix_parts.append(str(basis))
+    if value not in (None, ""):
+        try:
+            prefix_parts.append(f"{float(value):.2f}")
+        except (TypeError, ValueError):
+            prefix_parts.append(str(value))
+    if state and str(state).upper() not in {"UNAVAILABLE", "NONE"}:
+        prefix_parts.append(str(state))
+    prefix = " ".join(prefix_parts)
+    if prefix and interpretation:
+        return f"{prefix} -> {interpretation}"
+    return interpretation or prefix or None
+
+
 def _format_runtime_composite_for_decision(trade):
     """Format runtime composite even when no direction prevented calculation."""
     if not isinstance(trade, dict):
@@ -2157,17 +2327,53 @@ def _format_trigger_for_display(trigger, trade):
     return _annotate_trigger_with_distance(rewritten, spot)
 
 
+def _effective_min_strength_for_display(trade):
+    """Return the authoritative live trade-strength threshold for output."""
+    if not isinstance(trade, dict):
+        return None
+    for key in ("effective_min_trade_strength_threshold", "min_trade_strength_threshold"):
+        value = _coerce_score_int(trade.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _is_threshold_no_trade_reason(trade, reason_text):
+    """Return True when the reason is already shown by threshold blocks."""
+    reason_code = str((trade or {}).get("no_trade_reason_code") or "").upper().strip()
+    reason = str(reason_text or "").lower()
+    return (
+        reason_code in {"TRADE_STRENGTH_BELOW_THRESHOLD", "RUNTIME_COMPOSITE_THRESHOLD"}
+        or "below threshold" in reason
+    )
+
+
+def _append_threshold_state_blockers(trade, triggers):
+    """Surface failed score thresholds as state blockers in compact output."""
+    if not isinstance(trade, dict):
+        return
+
+    strength = _coerce_score_int(trade.get("trade_strength"))
+    min_strength = _effective_min_strength_for_display(trade)
+    if min_strength is not None and strength is not None and strength < min_strength:
+        triggers.append(f"Trade strength below threshold ({strength}/{min_strength})")
+
+    composite = _coerce_score_int(trade.get("runtime_composite_score"))
+    min_composite = _coerce_score_int(
+        trade.get("effective_min_composite_score_threshold")
+        or trade.get("min_composite_score_threshold")
+    )
+    if min_composite is not None and composite is not None and composite < min_composite:
+        triggers.append(f"Runtime composite below threshold ({composite}/{min_composite})")
+
+
 def _describe_effective_strength_gate(trade):
     """Build a human-readable threshold summary including confidence adjustment."""
     if not isinstance(trade, dict):
         return None
 
-    effective = trade.get("min_trade_strength_threshold")
-    if effective in (None, "", "N/A"):
-        return None
-    try:
-        effective = int(float(effective))
-    except (TypeError, ValueError):
+    effective = _effective_min_strength_for_display(trade)
+    if effective is None:
         return None
 
     from config.signal_policy import get_trade_runtime_thresholds
@@ -2181,12 +2387,15 @@ def _describe_effective_strength_gate(trade):
     low_conf = dq == "WEAK" or conf in {"CONFLICT", "NO_DIRECTION"}
 
     confidence_note = "none"
-    base_est = effective
+    base_floor = _coerce_score_int(trade.get("min_trade_strength_threshold"))
+    base_est = base_floor if base_floor is not None else effective
     if high_conf:
-        base_est = effective + relief
+        if base_floor is None:
+            base_est = effective + relief
         confidence_note = f"confidence_relief(-{relief})"
     elif low_conf:
-        base_est = max(0, effective - surcharge)
+        if base_floor is None:
+            base_est = max(0, effective - surcharge)
         confidence_note = f"confidence_surcharge(+{surcharge})"
 
     regime_adj = trade.get("regime_threshold_adjustments")
@@ -3340,7 +3549,7 @@ def _render_regime_rollout_status(result, *, compact=False):
 
 def render_compact(*, result, trade, spot_summary, macro_event_state,
                    global_risk_state, execution_trade, option_chain_frame=None,
-                   market_levels_sort_mode="GROUPED"):
+                   global_market_snapshot=None, market_levels_sort_mode="GROUPED"):
     """Render structured compact output following a logical trader workflow.
 
     Primary section order:
@@ -3438,6 +3647,13 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         put_oi=_top_put_oi_levels,
         sort_mode=market_levels_sort_mode,
     )
+
+    _global_macro_fields = _build_global_macro_snapshot_fields(
+        trade=trade,
+        global_market_snapshot=global_market_snapshot or (result or {}).get("global_market_snapshot"),
+    )
+    if _global_macro_fields:
+        _print_section("GLOBAL MACRO SNAPSHOT", _global_macro_fields)
 
     # ── 2. REGIME SUMMARY ────────────────────────────────────────────────
     if trade:
@@ -3570,7 +3786,7 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
                 ),
                 "vol_bucket": vol_bucket,
                 "global_prior": prior_text,
-                "pcr_read": pcr_ctx.get("interpretation"),
+                "pcr_read": _format_historical_pcr_read(pcr_ctx),
                 "max_pain_use": max_pain_ctx.get("interpretation"),
                 "wall_read": wall_ctx.get("state"),
             })
@@ -3730,12 +3946,11 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
 
         # ── Threshold status ─────────────────────────────────────────────
         if trade:
-            _raw_min_strength = trade.get("min_trade_strength_threshold")
-            if _raw_min_strength in (None, "", "N/A"):
+            _min_strength = _effective_min_strength_for_display(trade)
+            if _min_strength is None:
                 from config.signal_policy import get_trade_runtime_thresholds
                 _thresholds = get_trade_runtime_thresholds()
-                _raw_min_strength = _thresholds.get("min_trade_strength", 60)
-            _min_strength = _coerce_score_int(_raw_min_strength) or 60
+                _min_strength = _coerce_score_int(_thresholds.get("min_trade_strength", 60)) or 60
             _raw_strength = trade.get("trade_strength")
             _cur_strength = _coerce_score_int(_raw_strength) or 0
             _confirmation = str(
@@ -3849,8 +4064,9 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
                 triggers.append(_format_trigger_for_display("Direction confirmation pending", trade))
 
             ntr = trade.get("no_trade_reason")
-            if ntr:
+            if ntr and not _is_threshold_no_trade_reason(trade, ntr):
                 triggers.append(_format_trigger_for_display(ntr, trade))
+            _append_threshold_state_blockers(trade, triggers)
             for cond in (trade.get("setup_upgrade_conditions") or []):
                 triggers.append(_format_trigger_for_display(cond, trade))
             lt = trade.get("likely_next_trigger")
@@ -4067,6 +4283,12 @@ def render_standard(*, result, trade, spot_summary, spot_validation,
         "global_risk_overlay_score": trade.get("global_risk_overlay_score") if trade else None,
         "overnight_hold_allowed": global_risk_state.get("overnight_hold_allowed"),
     })
+    _global_macro_fields = _build_global_macro_snapshot_fields(
+        trade=trade,
+        global_market_snapshot=global_market_snapshot,
+    )
+    if _global_macro_fields:
+        _print_section("GLOBAL MACRO SNAPSHOT", _global_macro_fields)
 
     _print_validation("OPTION CHAIN VALIDATION", option_chain_validation)
     print(f"\n{'option_chain_rows':26}: {result.get('option_chain_rows')}")
@@ -4629,8 +4851,16 @@ def render_full_debug(*, result, trade, spot_summary, spot_validation,
         "global_risk_state_reasons": trade.get("global_risk_state_reasons") if trade else global_risk_state.get("global_risk_reasons"),
         "global_risk_overlay_reasons": trade.get("global_risk_overlay_reasons") if trade else None,
     })
+    _global_macro_fields = _build_global_macro_snapshot_fields(
+        trade=trade,
+        global_market_snapshot=global_market_snapshot,
+    )
+    if _global_macro_fields:
+        _print_section("GLOBAL MACRO SNAPSHOT", _global_macro_fields)
 
     market_inputs = global_market_snapshot.get("market_inputs", {})
+    institutional_flow = global_market_snapshot.get("institutional_flow_snapshot")
+    institutional_flow = institutional_flow if isinstance(institutional_flow, dict) else {}
     _print_section("GLOBAL MARKET SNAPSHOT", {
         "provider": global_market_snapshot.get("provider"),
         "data_available": global_market_snapshot.get("data_available"),
@@ -4639,9 +4869,33 @@ def render_full_debug(*, result, trade, spot_summary, spot_validation,
         "US VIX Change 24h": market_inputs.get("vix_change_24h"),
         "India VIX Level": market_inputs.get("india_vix_level"),
         "India VIX Change 24h": market_inputs.get("india_vix_change_24h"),
+        "dxy_change_24h": market_inputs.get("dxy_change_24h"),
+        "gift_nifty_change_24h": market_inputs.get("gift_nifty_change_24h"),
         "sp500_change_24h": market_inputs.get("sp500_change_24h"),
         "us10y_change_bp": market_inputs.get("us10y_change_bp"),
         "usdinr_change_24h": market_inputs.get("usdinr_change_24h"),
+        "fii_cash_net": market_inputs.get("fii_cash_net"),
+        "dii_cash_net": market_inputs.get("dii_cash_net"),
+        "fii_index_futures_net": market_inputs.get("fii_index_futures_net"),
+        "fii_index_options_net": market_inputs.get("fii_index_options_net"),
+        "india_2y_yield": market_inputs.get("india_2y_yield"),
+        "india_5y_yield": market_inputs.get("india_5y_yield"),
+        "india_10y_yield": market_inputs.get("india_10y_yield"),
+        "india_30y_yield": market_inputs.get("india_30y_yield"),
+        "india_10y_change_bp": market_inputs.get("india_10y_change_bp"),
+        "india_2y10y_spread_bp": market_inputs.get("india_2y10y_spread_bp"),
+        "india_5y10y_spread_bp": market_inputs.get("india_5y10y_spread_bp"),
+        "india_us_10y_spread_bp": market_inputs.get("india_us_10y_spread_bp"),
+        "india_bond_yield_date": market_inputs.get("india_bond_yield_date"),
+        "india_bond_yield_source": market_inputs.get("india_bond_yield_source"),
+        "india_bond_yield_source_timestamp": market_inputs.get("india_bond_yield_source_timestamp"),
+        "india_bond_yield_staleness_days": market_inputs.get("india_bond_yield_staleness_days"),
+        "institutional_flow_date": market_inputs.get("institutional_flow_date"),
+        "institutional_flow_source": market_inputs.get("institutional_flow_source"),
+        "institutional_flow_source_timestamp": market_inputs.get("institutional_flow_source_timestamp"),
+        "institutional_flow_staleness_days": market_inputs.get("institutional_flow_staleness_days"),
+        "institutional_flow_available": institutional_flow.get("data_available"),
+        "institutional_flow_warnings": institutional_flow.get("warnings"),
         "warnings": global_market_snapshot.get("warnings"),
     })
 
@@ -4824,6 +5078,7 @@ def render_snapshot(mode, *, result, spot_summary, spot_validation,
     if renderer is render_compact:
         kwargs["macro_event_state"] = macro_event_state
         kwargs["global_risk_state"] = global_risk_state
+        kwargs["global_market_snapshot"] = global_market_snapshot
         kwargs["market_levels_sort_mode"] = market_levels_sort_mode
     else:
         kwargs["spot_validation"] = spot_validation

@@ -2968,6 +2968,35 @@ def _runtime_composite_observation_policy(runtime_composite_score, runtime_thres
     }
 
 
+def _should_defer_global_risk_watchlist_to_engine_thresholds(global_risk):
+    """Return True when global-risk WATCHLIST only mirrors engine thresholding."""
+
+    if not isinstance(global_risk, dict):
+        return False
+    if _as_upper(global_risk.get("risk_trade_status")) != "WATCHLIST":
+        return False
+
+    reasons = {
+        _as_upper(reason)
+        for reason in (global_risk.get("global_risk_reasons") or [])
+        if str(reason).strip()
+    }
+    message = str(global_risk.get("risk_message") or "").lower()
+    low_strength_reason = (
+        "INSUFFICIENT_TRADE_STRENGTH" in reasons
+        or "low strength" in message
+        or "insufficient trade strength" in message
+    )
+    if not low_strength_reason:
+        return False
+
+    # Portfolio, event, data, and macro WATCHLIST states are independent risk
+    # decisions. Only the duplicated low-strength watchlist should be deferred
+    # to the later authoritative trade-strength/runtime-composite gates.
+    material_reasons = reasons - {"INSUFFICIENT_TRADE_STRENGTH"}
+    return not material_reasons
+
+
 def _evaluate_high_composite_soft_override_eligibility(*, payload, runtime_thresholds, blocker):
     payload = payload if isinstance(payload, dict) else {}
     thresholds = runtime_thresholds if isinstance(runtime_thresholds, dict) else {}
@@ -5104,12 +5133,43 @@ def generate_trade(
         "overnight_dealer_pressure_penalty": dealer_pressure_trade_modifiers["overnight_dealer_pressure_penalty"],
         "overnight_dealer_pressure_boost": dealer_pressure_trade_modifiers["overnight_dealer_pressure_boost"],
         "dealer_pressure_adjustment_score": dealer_pressure_adjustment_score,
+        "oil_change_24h": global_risk_features_snapshot.get("oil_change_24h"),
         "oil_shock_score": global_risk_trade_modifiers["oil_shock_score"],
+        "us_vix_change_24h": global_risk_features_snapshot.get(
+            "us_vix_change_24h",
+            global_risk_features_snapshot.get("vix_change_24h"),
+        ),
         "market_volatility_shock_score": global_risk_trade_modifiers["volatility_shock_score"],
         "commodity_risk_score": global_risk_trade_modifiers["commodity_risk_score"],
+        "us10y_yield": global_risk_features_snapshot.get("us10y_yield"),
+        "us10y_change_bp": global_risk_features_snapshot.get("us10y_change_bp"),
+        "india_2y_yield": global_risk_features_snapshot.get("india_2y_yield"),
+        "india_5y_yield": global_risk_features_snapshot.get("india_5y_yield"),
+        "india_10y_yield": global_risk_features_snapshot.get("india_10y_yield"),
+        "india_30y_yield": global_risk_features_snapshot.get("india_30y_yield"),
+        "india_10y_change_bp": global_risk_features_snapshot.get("india_10y_change_bp"),
+        "india_2y10y_spread_bp": global_risk_features_snapshot.get("india_2y10y_spread_bp"),
+        "india_5y10y_spread_bp": global_risk_features_snapshot.get("india_5y10y_spread_bp"),
+        "india_us_10y_spread_bp": global_risk_features_snapshot.get("india_us_10y_spread_bp"),
+        "india_bond_yield_date": global_risk_features_snapshot.get("india_bond_yield_date"),
+        "india_bond_yield_source": global_risk_features_snapshot.get("india_bond_yield_source"),
+        "india_bond_yield_source_timestamp": global_risk_features_snapshot.get("india_bond_yield_source_timestamp"),
+        "india_bond_yield_staleness_days": global_risk_features_snapshot.get("india_bond_yield_staleness_days"),
+        "india_bond_yield_data_available": global_risk_features_snapshot.get("india_bond_yield_data_available"),
+        "india_bond_yield_warnings": global_risk_features_snapshot.get("india_bond_yield_warnings"),
         "usdinr_change_24h": global_risk_features_snapshot.get("usdinr_change_24h"),
         "dxy_change_24h": global_risk_features_snapshot.get("dxy_change_24h"),
         "gift_nifty_change_24h": global_risk_features_snapshot.get("gift_nifty_change_24h"),
+        "fii_cash_net": global_risk_features_snapshot.get("fii_cash_net"),
+        "dii_cash_net": global_risk_features_snapshot.get("dii_cash_net"),
+        "fii_index_futures_net": global_risk_features_snapshot.get("fii_index_futures_net"),
+        "fii_index_options_net": global_risk_features_snapshot.get("fii_index_options_net"),
+        "institutional_flow_date": global_risk_features_snapshot.get("institutional_flow_date"),
+        "institutional_flow_source": global_risk_features_snapshot.get("institutional_flow_source"),
+        "institutional_flow_source_timestamp": global_risk_features_snapshot.get("institutional_flow_source_timestamp"),
+        "institutional_flow_staleness_days": global_risk_features_snapshot.get("institutional_flow_staleness_days"),
+        "institutional_flow_data_available": global_risk_features_snapshot.get("institutional_flow_data_available"),
+        "institutional_flow_warnings": global_risk_features_snapshot.get("institutional_flow_warnings"),
         "currency_shock_score": global_risk_features_snapshot.get("currency_shock_score"),
         "dxy_shock_score": global_risk_features_snapshot.get("dxy_shock_score"),
         "gift_nifty_lead_score": global_risk_features_snapshot.get("gift_nifty_lead_score"),
@@ -5288,11 +5348,45 @@ def generate_trade(
             "strike_moneyness_bucket": option_efficiency_trade_modifiers["strike_moneyness_bucket"],
             "strike_distance_from_spot": option_efficiency_trade_modifiers["strike_distance_from_spot"],
             "payoff_efficiency_hint": option_efficiency_trade_modifiers["payoff_efficiency_hint"],
+            "oil_change_24h": global_risk_features_snapshot.get("oil_change_24h"),
             "oil_shock_score": global_risk_trade_modifiers["oil_shock_score"],
+            "us_vix_change_24h": global_risk_features_snapshot.get(
+                "us_vix_change_24h",
+                global_risk_features_snapshot.get("vix_change_24h"),
+            ),
             "market_volatility_shock_score": global_risk_trade_modifiers["volatility_shock_score"],
             "india_vix_level": india_vix_level,
             "india_vix_change_24h": india_vix_change_24h,
             "commodity_risk_score": global_risk_trade_modifiers["commodity_risk_score"],
+            "us10y_yield": global_risk_features_snapshot.get("us10y_yield"),
+            "us10y_change_bp": global_risk_features_snapshot.get("us10y_change_bp"),
+            "india_2y_yield": global_risk_features_snapshot.get("india_2y_yield"),
+            "india_5y_yield": global_risk_features_snapshot.get("india_5y_yield"),
+            "india_10y_yield": global_risk_features_snapshot.get("india_10y_yield"),
+            "india_30y_yield": global_risk_features_snapshot.get("india_30y_yield"),
+            "india_10y_change_bp": global_risk_features_snapshot.get("india_10y_change_bp"),
+            "india_2y10y_spread_bp": global_risk_features_snapshot.get("india_2y10y_spread_bp"),
+            "india_5y10y_spread_bp": global_risk_features_snapshot.get("india_5y10y_spread_bp"),
+            "india_us_10y_spread_bp": global_risk_features_snapshot.get("india_us_10y_spread_bp"),
+            "india_bond_yield_date": global_risk_features_snapshot.get("india_bond_yield_date"),
+            "india_bond_yield_source": global_risk_features_snapshot.get("india_bond_yield_source"),
+            "india_bond_yield_source_timestamp": global_risk_features_snapshot.get("india_bond_yield_source_timestamp"),
+            "india_bond_yield_staleness_days": global_risk_features_snapshot.get("india_bond_yield_staleness_days"),
+            "india_bond_yield_data_available": global_risk_features_snapshot.get("india_bond_yield_data_available"),
+            "india_bond_yield_warnings": global_risk_features_snapshot.get("india_bond_yield_warnings"),
+            "usdinr_change_24h": global_risk_features_snapshot.get("usdinr_change_24h"),
+            "dxy_change_24h": global_risk_features_snapshot.get("dxy_change_24h"),
+            "gift_nifty_change_24h": global_risk_features_snapshot.get("gift_nifty_change_24h"),
+            "fii_cash_net": global_risk_features_snapshot.get("fii_cash_net"),
+            "dii_cash_net": global_risk_features_snapshot.get("dii_cash_net"),
+            "fii_index_futures_net": global_risk_features_snapshot.get("fii_index_futures_net"),
+            "fii_index_options_net": global_risk_features_snapshot.get("fii_index_options_net"),
+            "institutional_flow_date": global_risk_features_snapshot.get("institutional_flow_date"),
+            "institutional_flow_source": global_risk_features_snapshot.get("institutional_flow_source"),
+            "institutional_flow_source_timestamp": global_risk_features_snapshot.get("institutional_flow_source_timestamp"),
+            "institutional_flow_staleness_days": global_risk_features_snapshot.get("institutional_flow_staleness_days"),
+            "institutional_flow_data_available": global_risk_features_snapshot.get("institutional_flow_data_available"),
+            "institutional_flow_warnings": global_risk_features_snapshot.get("institutional_flow_warnings"),
             "risk_off_intensity": global_risk["global_risk_features"].get("risk_off_intensity", 0.0),
             "volatility_compression_score": global_risk["global_risk_features"].get("volatility_compression_score", 0.0),
             "volatility_explosion_probability": global_risk_trade_modifiers["volatility_explosion_probability"],
@@ -6299,7 +6393,16 @@ def generate_trade(
         base_payload["no_trade_reason"] = None
         return True
 
-    if global_risk["risk_trade_status"] == "WATCHLIST":
+    if (
+        global_risk["risk_trade_status"] == "WATCHLIST"
+        and _should_defer_global_risk_watchlist_to_engine_thresholds(global_risk)
+    ):
+        base_payload["global_risk_low_strength_watchlist_deferred"] = True
+        deferred_reasons = list(base_payload.get("global_risk_overlay_reasons") or [])
+        if "global_risk_low_strength_deferred_to_engine_thresholds" not in deferred_reasons:
+            deferred_reasons.append("global_risk_low_strength_deferred_to_engine_thresholds")
+        base_payload["global_risk_overlay_reasons"] = deferred_reasons
+    elif global_risk["risk_trade_status"] == "WATCHLIST":
         if not _apply_high_composite_soft_override(
             blocker="GLOBAL_RISK_WATCHLIST",
             original_status="WATCHLIST",
@@ -6325,6 +6428,8 @@ def generate_trade(
 
     if adjusted_trade_strength < effective_min_trade_strength:
         threshold_message = f"Trade strength {adjusted_trade_strength} below threshold {effective_min_trade_strength}"
+        base_payload["no_trade_reason_code"] = "TRADE_STRENGTH_BELOW_THRESHOLD"
+        base_payload["no_trade_reason"] = threshold_message
         if not _apply_high_composite_soft_override(
             blocker="TRADE_STRENGTH_THRESHOLD",
             original_status="WATCHLIST",
@@ -6339,6 +6444,8 @@ def generate_trade(
 
     if runtime_composite_score < effective_min_composite_score:
         threshold_message = f"Runtime composite score {runtime_composite_score} below threshold {effective_min_composite_score}"
+        base_payload["no_trade_reason_code"] = "RUNTIME_COMPOSITE_THRESHOLD"
+        base_payload["no_trade_reason"] = threshold_message
         if not _apply_high_composite_soft_override(
             blocker="RUNTIME_COMPOSITE_THRESHOLD",
             original_status="WATCHLIST",

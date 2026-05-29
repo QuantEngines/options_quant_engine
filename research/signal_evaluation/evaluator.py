@@ -562,6 +562,26 @@ def build_signal_evaluation_row(
     # Extract probability sub-components for ML feature extraction
     prob_components = trade.get("move_probability_components") or {}
     ta_features = trade.get("ta_features") if isinstance(trade.get("ta_features"), dict) else {}
+    mean_reversion_features = (
+        trade.get("mean_reversion_features")
+        if isinstance(trade.get("mean_reversion_features"), dict)
+        else {}
+    )
+    global_risk_features = (
+        trade.get("global_risk_features")
+        if isinstance(trade.get("global_risk_features"), dict)
+        else {}
+    )
+    global_market_snapshot = (
+        result.get("global_market_snapshot")
+        if isinstance(result.get("global_market_snapshot"), dict)
+        else {}
+    )
+    global_market_inputs = (
+        global_market_snapshot.get("market_inputs")
+        if isinstance(global_market_snapshot.get("market_inputs"), dict)
+        else {}
+    )
 
     # Compute weekday from signal timestamp (0=Mon .. 4=Fri)
     sig_dt = _coerce_ts(signal_timestamp)
@@ -963,8 +983,39 @@ def build_signal_evaluation_row(
         "event_explanations": "|".join(str(item) for item in (trade.get("event_explanations") or [])),
         "global_risk_state": trade.get("global_risk_state"),
         "global_risk_score": trade.get("global_risk_score"),
+        "oil_change_24h": _first_present(trade.get("oil_change_24h"), global_risk_features.get("oil_change_24h"), global_market_inputs.get("oil_change_24h")),
         "oil_shock_score": trade.get("oil_shock_score"),
         "commodity_risk_score": trade.get("commodity_risk_score"),
+        "us_vix_change_24h": _first_present(trade.get("us_vix_change_24h"), global_risk_features.get("us_vix_change_24h"), global_risk_features.get("vix_change_24h"), global_market_inputs.get("vix_change_24h")),
+        "us10y_yield": _first_present(trade.get("us10y_yield"), global_risk_features.get("us10y_yield"), global_market_inputs.get("us10y_yield")),
+        "us10y_change_bp": _first_present(trade.get("us10y_change_bp"), global_risk_features.get("us10y_change_bp"), global_market_inputs.get("us10y_change_bp")),
+        "india_2y_yield": _first_present(trade.get("india_2y_yield"), global_risk_features.get("india_2y_yield"), global_market_inputs.get("india_2y_yield")),
+        "india_5y_yield": _first_present(trade.get("india_5y_yield"), global_risk_features.get("india_5y_yield"), global_market_inputs.get("india_5y_yield")),
+        "india_10y_yield": _first_present(trade.get("india_10y_yield"), global_risk_features.get("india_10y_yield"), global_market_inputs.get("india_10y_yield")),
+        "india_30y_yield": _first_present(trade.get("india_30y_yield"), global_risk_features.get("india_30y_yield"), global_market_inputs.get("india_30y_yield")),
+        "india_10y_change_bp": _first_present(trade.get("india_10y_change_bp"), global_risk_features.get("india_10y_change_bp"), global_market_inputs.get("india_10y_change_bp")),
+        "india_2y10y_spread_bp": _first_present(trade.get("india_2y10y_spread_bp"), global_risk_features.get("india_2y10y_spread_bp"), global_market_inputs.get("india_2y10y_spread_bp")),
+        "india_5y10y_spread_bp": _first_present(trade.get("india_5y10y_spread_bp"), global_risk_features.get("india_5y10y_spread_bp"), global_market_inputs.get("india_5y10y_spread_bp")),
+        "india_us_10y_spread_bp": _first_present(trade.get("india_us_10y_spread_bp"), global_risk_features.get("india_us_10y_spread_bp"), global_market_inputs.get("india_us_10y_spread_bp")),
+        "india_bond_yield_date": _first_present(trade.get("india_bond_yield_date"), global_risk_features.get("india_bond_yield_date"), global_market_inputs.get("india_bond_yield_date")),
+        "india_bond_yield_source": _first_present(trade.get("india_bond_yield_source"), global_risk_features.get("india_bond_yield_source"), global_market_inputs.get("india_bond_yield_source")),
+        "india_bond_yield_source_timestamp": _first_present(trade.get("india_bond_yield_source_timestamp"), global_risk_features.get("india_bond_yield_source_timestamp"), global_market_inputs.get("india_bond_yield_source_timestamp")),
+        "india_bond_yield_staleness_days": _first_present(trade.get("india_bond_yield_staleness_days"), global_risk_features.get("india_bond_yield_staleness_days"), global_market_inputs.get("india_bond_yield_staleness_days")),
+        "india_bond_yield_data_available": _first_present(trade.get("india_bond_yield_data_available"), global_risk_features.get("india_bond_yield_data_available")),
+        "india_bond_yield_warnings": _join_list(_first_present(trade.get("india_bond_yield_warnings"), global_risk_features.get("india_bond_yield_warnings"))),
+        "dxy_change_24h": _first_present(trade.get("dxy_change_24h"), global_risk_features.get("dxy_change_24h"), global_market_inputs.get("dxy_change_24h")),
+        "usdinr_change_24h": _first_present(trade.get("usdinr_change_24h"), global_risk_features.get("usdinr_change_24h"), global_market_inputs.get("usdinr_change_24h")),
+        "gift_nifty_change_24h": _first_present(trade.get("gift_nifty_change_24h"), global_risk_features.get("gift_nifty_change_24h"), global_market_inputs.get("gift_nifty_change_24h")),
+        "fii_cash_net": _first_present(trade.get("fii_cash_net"), global_risk_features.get("fii_cash_net"), global_market_inputs.get("fii_cash_net")),
+        "dii_cash_net": _first_present(trade.get("dii_cash_net"), global_risk_features.get("dii_cash_net"), global_market_inputs.get("dii_cash_net")),
+        "fii_index_futures_net": _first_present(trade.get("fii_index_futures_net"), global_risk_features.get("fii_index_futures_net"), global_market_inputs.get("fii_index_futures_net")),
+        "fii_index_options_net": _first_present(trade.get("fii_index_options_net"), global_risk_features.get("fii_index_options_net"), global_market_inputs.get("fii_index_options_net")),
+        "institutional_flow_date": _first_present(trade.get("institutional_flow_date"), global_risk_features.get("institutional_flow_date"), global_market_inputs.get("institutional_flow_date")),
+        "institutional_flow_source": _first_present(trade.get("institutional_flow_source"), global_risk_features.get("institutional_flow_source"), global_market_inputs.get("institutional_flow_source")),
+        "institutional_flow_source_timestamp": _first_present(trade.get("institutional_flow_source_timestamp"), global_risk_features.get("institutional_flow_source_timestamp"), global_market_inputs.get("institutional_flow_source_timestamp")),
+        "institutional_flow_staleness_days": _first_present(trade.get("institutional_flow_staleness_days"), global_risk_features.get("institutional_flow_staleness_days"), global_market_inputs.get("institutional_flow_staleness_days")),
+        "institutional_flow_data_available": _first_present(trade.get("institutional_flow_data_available"), global_risk_features.get("institutional_flow_data_available")),
+        "institutional_flow_warnings": _join_list(_first_present(trade.get("institutional_flow_warnings"), global_risk_features.get("institutional_flow_warnings"))),
         "volatility_shock_score": trade.get("market_volatility_shock_score"),
         "macro_news_volatility_shock_score": trade.get("macro_news_volatility_shock_score"),
         "volatility_explosion_probability": trade.get("volatility_explosion_probability"),
@@ -1400,6 +1451,26 @@ def build_signal_evaluation_row(
         "ta_entry_timing_reasons": _first_present(
             trade.get("ta_entry_timing_reasons"),
             ta_features.get("ta_entry_timing_reasons"),
+        ),
+        "mean_reversion_signal": _first_present(
+            trade.get("mean_reversion_signal"),
+            mean_reversion_features.get("mean_reversion_signal"),
+        ),
+        "mean_reversion_zscore": _first_present(
+            trade.get("mean_reversion_zscore"),
+            mean_reversion_features.get("mean_reversion_zscore"),
+        ),
+        "mean_reversion_strength": _first_present(
+            trade.get("mean_reversion_strength"),
+            mean_reversion_features.get("mean_reversion_strength"),
+        ),
+        "mean_reversion_distance_pct": _first_present(
+            trade.get("mean_reversion_distance_pct"),
+            mean_reversion_features.get("mean_reversion_distance_pct"),
+        ),
+        "mean_reversion_reason": _first_present(
+            trade.get("mean_reversion_reason"),
+            mean_reversion_features.get("mean_reversion_reason"),
         ),
 
         "created_at": captured_ts,

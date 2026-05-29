@@ -121,8 +121,8 @@ def test_data_source_router_secondary_research_warning_is_not_user_selected(monk
     assert "Keeping the user-selected source" not in caplog.text
 
 
-def test_data_source_router_derives_missing_iv_before_early_quality_warning(monkeypatch, caplog):
-    """Router pre-validation should not treat zero provider-IV fields as weak if prices imply IV."""
+def test_data_source_router_derives_missing_iv_with_validation_context(monkeypatch, caplog):
+    """Router validation should use model IV when real spot context is supplied."""
 
     def _fake_loader_factories():
         return {
@@ -135,13 +135,38 @@ def test_data_source_router_derives_missing_iv_before_early_quality_warning(monk
 
     router = data_source_router.DataSourceRouter("ZERODHA")
     with caplog.at_level(logging.WARNING, logger=data_source_router.__name__):
-        result = router.get_option_chain("NIFTY")
+        result = router.get_option_chain(
+            "NIFTY",
+            validation_spot=24000.0,
+            valuation_time=pd.Timestamp.now(tz="UTC"),
+        )
 
     provider_health = router.last_validation["provider_health"]
     assert not result.empty
-    assert router.last_validation["iv_validation_source"] == "MODEL_DERIVED_FROM_OPTION_PRICE_PRE_SPOT"
+    assert router.last_validation["iv_validation_source"] == "MODEL_DERIVED_FROM_OPTION_PRICE_ROUTER_CONTEXT"
     assert router.last_validation["raw_positive_iv_rows"] == 0
     assert router.last_validation["validation_positive_iv_rows"] > 0
     assert "core_iv_weak" not in provider_health["trade_blocking_reasons"]
     assert "no_positive_iv_rows" not in router.last_validation["warnings"]
     assert "Selected data source ZERODHA returned option-chain quality WEAK" not in caplog.text
+
+
+def test_data_source_router_does_not_proxy_iv_without_spot_context(monkeypatch):
+    """Early provider checks should not synthesize IV from median-strike spot guesses."""
+
+    def _fake_loader_factories():
+        return {
+            "ICICI": lambda: _UnexpectedFallbackLoader([], "ICICI"),
+            "NSE": lambda: _UnexpectedFallbackLoader([], "NSE"),
+            "ZERODHA": _ZeroIvPricedLoader,
+        }
+
+    monkeypatch.setattr(data_source_router, "_build_loader_factories", _fake_loader_factories)
+
+    router = data_source_router.DataSourceRouter("ZERODHA")
+    result = router.get_option_chain("NIFTY")
+
+    assert not result.empty
+    assert router.last_validation["iv_validation_source"] == "RAW_PROVIDER_IV_MISSING_NO_SPOT"
+    assert router.last_validation["iv_validation_spot_source"] == "UNAVAILABLE"
+    assert router.last_validation["model_derived_iv_applied"] is False

@@ -124,7 +124,15 @@ class MultiSourceDataRouter:
         self.router_errors.pop(source, None)
         return router
 
-    def _fetch_one(self, source: str, symbol: str) -> dict[str, Any]:
+    def _fetch_one(
+        self,
+        source: str,
+        symbol: str,
+        *,
+        validation_spot=None,
+        valuation_time=None,
+        validation_india_vix_level=None,
+    ) -> dict[str, Any]:
         started = _now_ist()
         start_perf = time.perf_counter()
         try:
@@ -134,7 +142,14 @@ class MultiSourceDataRouter:
                 if source == self.primary_source
                 else "SECONDARY_RESEARCH_ONLY"
             )
-            frame = router.get_option_chain(symbol)
+            validation_kwargs = {}
+            if validation_spot not in (None, ""):
+                validation_kwargs["validation_spot"] = validation_spot
+            if valuation_time not in (None, ""):
+                validation_kwargs["valuation_time"] = valuation_time
+            if validation_india_vix_level not in (None, ""):
+                validation_kwargs["validation_india_vix_level"] = validation_india_vix_level
+            frame = router.get_option_chain(symbol, **validation_kwargs)
             validation = router.last_validation if isinstance(router.last_validation, dict) else {}
             finished = _now_ist()
             return {
@@ -162,7 +177,14 @@ class MultiSourceDataRouter:
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
-    def get_option_chain(self, symbol: str):
+    def get_option_chain(
+        self,
+        symbol: str,
+        *,
+        validation_spot=None,
+        valuation_time=None,
+        validation_india_vix_level=None,
+    ):
         """Fetch all configured providers and return the primary provider frame."""
         results: dict[str, dict[str, Any]] = {}
         fetch_sources: list[str] = []
@@ -189,7 +211,14 @@ class MultiSourceDataRouter:
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             futures = {
-                pool.submit(self._fetch_one, source, symbol): source
+                pool.submit(
+                    self._fetch_one,
+                    source,
+                    symbol,
+                    validation_spot=validation_spot,
+                    valuation_time=valuation_time,
+                    validation_india_vix_level=validation_india_vix_level,
+                ): source
                 for source in fetch_sources
             }
             for future in as_completed(futures):

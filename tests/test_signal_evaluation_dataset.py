@@ -338,6 +338,44 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                     "regime_match": "PARTIAL",
                 },
                 "signal_confidence_recalibration_guards": ["thin_calibration_history"],
+                "oil_change_24h": -0.8,
+                "us_vix_change_24h": 1.4,
+                "us10y_yield": 4.32,
+                "us10y_change_bp": 2.5,
+                "india_2y_yield": 6.15,
+                "india_5y_yield": 6.42,
+                "india_10y_yield": 6.78,
+                "india_30y_yield": 7.05,
+                "india_10y_change_bp": -3.2,
+                "india_2y10y_spread_bp": 63.0,
+                "india_5y10y_spread_bp": 36.0,
+                "india_us_10y_spread_bp": 246.0,
+                "india_bond_yield_date": "2026-05-28",
+                "india_bond_yield_source": "TEST_BOND",
+                "india_bond_yield_source_timestamp": "2026-05-28T18:10:00+05:30",
+                "india_bond_yield_staleness_days": 1,
+                "india_bond_yield_data_available": True,
+                "india_bond_yield_warnings": [],
+                "dxy_change_24h": 0.2,
+                "usdinr_change_24h": 0.1,
+                "gift_nifty_change_24h": -0.35,
+                "fii_cash_net": -1200.5,
+                "dii_cash_net": 980.25,
+                "fii_index_futures_net": -315.0,
+                "fii_index_options_net": 144.0,
+                "institutional_flow_date": "2026-05-28",
+                "institutional_flow_source": "TEST",
+                "institutional_flow_source_timestamp": "2026-05-28T18:15:00+05:30",
+                "institutional_flow_staleness_days": 1,
+                "institutional_flow_data_available": True,
+                "institutional_flow_warnings": [],
+                "mean_reversion_features": {
+                    "mean_reversion_signal": "MEAN_REVERSION",
+                    "mean_reversion_zscore": 1.92,
+                    "mean_reversion_strength": 24.0,
+                    "mean_reversion_distance_pct": 1.17,
+                    "mean_reversion_reason": "spot_stretched_vs_recent_history",
+                },
             },
         }
 
@@ -423,6 +461,40 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(row_a["signal_confidence_calibration_status"], "CAUTION")
         self.assertEqual(row_a["signal_confidence_calibration_guardrail_status"], "CAUTION")
         self.assertEqual(row_a["signal_confidence_recalibration_guards"], "thin_calibration_history")
+        self.assertAlmostEqual(row_a["oil_change_24h"], -0.8)
+        self.assertAlmostEqual(row_a["us_vix_change_24h"], 1.4)
+        self.assertAlmostEqual(row_a["us10y_yield"], 4.32)
+        self.assertAlmostEqual(row_a["us10y_change_bp"], 2.5)
+        self.assertAlmostEqual(row_a["india_2y_yield"], 6.15)
+        self.assertAlmostEqual(row_a["india_5y_yield"], 6.42)
+        self.assertAlmostEqual(row_a["india_10y_yield"], 6.78)
+        self.assertAlmostEqual(row_a["india_30y_yield"], 7.05)
+        self.assertAlmostEqual(row_a["india_10y_change_bp"], -3.2)
+        self.assertAlmostEqual(row_a["india_2y10y_spread_bp"], 63.0)
+        self.assertAlmostEqual(row_a["india_5y10y_spread_bp"], 36.0)
+        self.assertAlmostEqual(row_a["india_us_10y_spread_bp"], 246.0)
+        self.assertEqual(row_a["india_bond_yield_date"], "2026-05-28")
+        self.assertEqual(row_a["india_bond_yield_source"], "TEST_BOND")
+        self.assertEqual(row_a["india_bond_yield_source_timestamp"], "2026-05-28T18:10:00+05:30")
+        self.assertAlmostEqual(row_a["india_bond_yield_staleness_days"], 1)
+        self.assertEqual(row_a["india_bond_yield_data_available"], True)
+        self.assertAlmostEqual(row_a["dxy_change_24h"], 0.2)
+        self.assertAlmostEqual(row_a["usdinr_change_24h"], 0.1)
+        self.assertAlmostEqual(row_a["gift_nifty_change_24h"], -0.35)
+        self.assertAlmostEqual(row_a["fii_cash_net"], -1200.5)
+        self.assertAlmostEqual(row_a["dii_cash_net"], 980.25)
+        self.assertAlmostEqual(row_a["fii_index_futures_net"], -315.0)
+        self.assertAlmostEqual(row_a["fii_index_options_net"], 144.0)
+        self.assertEqual(row_a["institutional_flow_date"], "2026-05-28")
+        self.assertEqual(row_a["institutional_flow_source"], "TEST")
+        self.assertEqual(row_a["institutional_flow_source_timestamp"], "2026-05-28T18:15:00+05:30")
+        self.assertAlmostEqual(row_a["institutional_flow_staleness_days"], 1)
+        self.assertEqual(row_a["institutional_flow_data_available"], True)
+        self.assertEqual(row_a["mean_reversion_signal"], "MEAN_REVERSION")
+        self.assertAlmostEqual(row_a["mean_reversion_zscore"], 1.92)
+        self.assertAlmostEqual(row_a["mean_reversion_strength"], 24.0)
+        self.assertAlmostEqual(row_a["mean_reversion_distance_pct"], 1.17)
+        self.assertEqual(row_a["mean_reversion_reason"], "spot_stretched_vs_recent_history")
         self.assertEqual(row_a["hybrid_move_probability"], 0.72)
         self.assertEqual(row_a["rule_move_probability"], 0.61)
         self.assertEqual(row_a["label_quality_status"], "PENDING")

@@ -524,9 +524,22 @@ def run_regime_threshold_replay(
 
     if not rows:
         return pd.DataFrame()
-    result = pd.concat(rows, ignore_index=True)
+    sort_columns = ["is_advisory_candidate", "objective_score", "label_count_60m", "signal_count"]
+    concat_rows = []
+    for row in rows:
+        if row.empty:
+            continue
+        all_na_columns = {column for column in row.columns if row[column].isna().all()}
+        drop_columns = all_na_columns.difference(sort_columns)
+        concat_rows.append(row.drop(columns=list(drop_columns), errors="ignore"))
+    if not concat_rows:
+        return pd.DataFrame()
+    result = pd.concat(concat_rows, ignore_index=True, sort=False)
+    for column in sort_columns:
+        if column not in result.columns:
+            result[column] = pd.NA
     result = result.sort_values(
-        ["is_advisory_candidate", "objective_score", "label_count_60m", "signal_count"],
+        sort_columns,
         ascending=[False, False, False, False],
         na_position="last",
     ).reset_index(drop=True)

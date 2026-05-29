@@ -141,19 +141,29 @@ def _existing_file(path: str | Path | None) -> Path | None:
 
 
 def _load_bundle_for_report(ev_shadow_report: dict[str, Any], candidate_bundle_path: str | Path | None) -> tuple[dict[str, Any], Path | None]:
-    path = _existing_file(candidate_bundle_path or ev_shadow_report.get("candidate_bundle_path"))
-    if path is None:
-        path = _existing_file(DEFAULT_SEGMENTED_PROBABILITY_CANDIDATE_BUNDLE_PATH)
+    requested_path = candidate_bundle_path or ev_shadow_report.get("candidate_bundle_path")
+    if requested_path:
+        path = _existing_file(requested_path)
+        if path is None:
+            return {"candidate_count": 0, "candidates": []}, None
+        return _load_candidate_bundle(path), path
+
+    path = _existing_file(DEFAULT_SEGMENTED_PROBABILITY_CANDIDATE_BUNDLE_PATH)
     if path is None:
         return {"candidate_count": 0, "candidates": []}, None
     return _load_candidate_bundle(path), path
 
 
 def _load_dataset_for_report(ev_shadow_report: dict[str, Any], dataset_path: str | Path | None) -> tuple[pd.DataFrame | None, Path | None]:
-    path = _existing_file(dataset_path or ev_shadow_report.get("dataset_path"))
-    if path is None:
-        fallback = default_signal_quality_dataset_path()
-        path = fallback if fallback.exists() else None
+    requested_path = dataset_path or ev_shadow_report.get("dataset_path")
+    if requested_path:
+        path = _existing_file(requested_path)
+        if path is None:
+            return None, None
+        return pd.read_csv(path, low_memory=False), path
+
+    fallback = default_signal_quality_dataset_path()
+    path = fallback if fallback.exists() else None
     if path is None:
         return None, None
     return pd.read_csv(path, low_memory=False), path
@@ -427,12 +437,21 @@ def _best_guarded_variant(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         GUARDED_EV_EXPERIMENT_REJECTED: 2,
         GUARDED_EV_EXPERIMENT_NEEDS_MORE_DATA: 3,
     }
+    # When two guarded variants are statistically tied, prefer the one that
+    # applies both protections. This avoids dropping an EV-negative-route
+    # quarantine only because the pure rank guard appeared earlier in the list.
+    variant_preference = {
+        VARIANT_QUARANTINE_PLUS_RANK_GUARD: 0,
+        VARIANT_RANK_GUARD: 1,
+        VARIANT_QUARANTINE: 2,
+    }
     return sorted(
         candidates,
         key=lambda row: (
             severity.get(str(row.get("variant_status")), 9),
             -float(row.get("policy_score") or -1e9),
             -float(row.get("variant_top_vs_bottom_risk_adjusted_return_spread_bps") or -1e9),
+            variant_preference.get(str(row.get("variant_name")), 9),
         ),
     )[0]
 

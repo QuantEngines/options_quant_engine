@@ -114,7 +114,14 @@ class DataSourceRouter:
             )
         self.loader = loader_factories[self.source]()
 
-    def get_option_chain(self, symbol: str):
+    def get_option_chain(
+        self,
+        symbol: str,
+        *,
+        validation_spot=None,
+        valuation_time=None,
+        validation_india_vix_level=None,
+    ):
         """
         Fetch option-chain data for the selected source.
         """
@@ -123,12 +130,25 @@ class DataSourceRouter:
         fetch_method_name = _build_fetch_method_names()[self.source]
         raw_chain = getattr(self.loader, fetch_method_name)(symbol)
         normalized_chain = normalize_live_option_chain(raw_chain, source=self.source, symbol=symbol)
+        has_validation_spot = validation_spot not in (None, "")
 
         validation_chain, iv_validation_diagnostics = build_iv_validation_frame(
             normalized_chain,
-            source_label="MODEL_DERIVED_FROM_OPTION_PRICE_PRE_SPOT",
+            source_label=(
+                "MODEL_DERIVED_FROM_OPTION_PRICE_ROUTER_CONTEXT"
+                if has_validation_spot
+                else "MODEL_DERIVED_FROM_OPTION_PRICE_PRE_SPOT"
+            ),
+            spot=validation_spot,
+            valuation_time=valuation_time,
+            allow_spot_proxy=has_validation_spot,
         )
-        validation = validate_option_chain(validation_chain)
+        validation = validate_option_chain(
+            validation_chain,
+            spot=validation_spot,
+            india_vix_level=validation_india_vix_level,
+            as_of=valuation_time,
+        )
         validation = attach_iv_validation_diagnostics(validation, iv_validation_diagnostics)
         self.last_validation = validation
         provider_health = validation.get("provider_health", {})

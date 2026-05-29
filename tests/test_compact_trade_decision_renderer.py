@@ -374,6 +374,93 @@ class TestCompactTradeDecisionBlockRendering:
             assert "52/58" in output
             assert "Trade Strength Threshold" in output
 
+    def test_compact_watchlist_lists_runtime_composite_shortfall_as_state_blocker(self):
+        """GIVEN a watchlist setup blocked by risk and runtime composite,
+        WHEN render_compact is called,
+        THEN compact output lists the runtime composite shortfall as a blocker."""
+
+        trade = self._create_mock_trade(
+            hybrid_move_probability=0.42,
+            trade_status="WATCHLIST",
+        )
+        trade["decision_classification"] = "BLOCKED_SETUP"
+        trade["no_trade_reason"] = "Trade downgraded to watchlist due to global risk reduction"
+        trade["runtime_composite_score"] = 51
+        trade["effective_min_composite_score_threshold"] = 55
+        trade["trade_strength"] = 64
+        trade["min_trade_strength_threshold"] = 60
+
+        with patch("app.terminal_output.compute_signal_confidence") as mock_conf:
+            mock_conf.return_value = {
+                "confidence_score": 52,
+                "confidence_level": "LOW",
+                "confidence_recalibration_guards": [],
+            }
+
+            output_buffer = io.StringIO()
+            with redirect_stdout(output_buffer):
+                render_compact(
+                    result={},
+                    trade=trade,
+                    spot_summary={},
+                    macro_event_state={},
+                    global_risk_state={},
+                    execution_trade=None,
+                )
+
+            output = output_buffer.getvalue()
+
+            assert "Trade downgraded to watchlist due to global risk reduction" in output
+            assert "Runtime composite below threshold (51/55)" in output
+            assert "Trade strength below threshold" not in output
+
+    def test_compact_watchlist_uses_effective_strength_threshold_and_keeps_threshold_reason_as_state(self):
+        """GIVEN effective strength is tighter than the base threshold,
+        WHEN render_compact is called,
+        THEN the threshold block and blockers use the effective threshold."""
+
+        trade = self._create_mock_trade(
+            hybrid_move_probability=0.50,
+            trade_status="WATCHLIST",
+        )
+        trade["decision_classification"] = "BLOCKED_SETUP"
+        trade["no_trade_reason_code"] = "TRADE_STRENGTH_BELOW_THRESHOLD"
+        trade["no_trade_reason"] = "Trade strength 58 below threshold 62"
+        trade["trade_strength"] = 58
+        trade["min_trade_strength_threshold"] = 60
+        trade["effective_min_trade_strength_threshold"] = 62
+        trade["runtime_composite_score"] = 52
+        trade["effective_min_composite_score_threshold"] = 58
+        trade["setup_upgrade_conditions"] = ["decisive move below support wall 23500.0"]
+        trade["spot"] = 23757.25
+
+        with patch("app.terminal_output.compute_signal_confidence") as mock_conf:
+            mock_conf.return_value = {
+                "confidence_score": 52,
+                "confidence_level": "LOW",
+                "confidence_recalibration_guards": [],
+            }
+
+            output_buffer = io.StringIO()
+            with redirect_stdout(output_buffer):
+                render_compact(
+                    result={},
+                    trade=trade,
+                    spot_summary={},
+                    macro_event_state={},
+                    global_risk_state={},
+                    execution_trade=None,
+                )
+
+            output = output_buffer.getvalue()
+
+            assert "required : 62" in output
+            assert "progress : [██████████████████░░] 58/62" in output
+            assert "effective: 62 (base~60;" in output
+            assert "Trade strength below threshold (58/62)" in output
+            assert "Runtime composite below threshold (52/58)" in output
+            assert "Trade strength 58 below threshold 62 [" not in output
+
     def test_compact_trade_decision_effective_threshold_uses_comma_separator(self):
         """GIVEN a trade with multiple regime adjustments,
         WHEN render_compact is called,

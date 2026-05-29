@@ -18,9 +18,8 @@ def coerce_timestamp_series(values, *, utc: bool | None = None) -> pd.Series:
     ``NaT``; this helper keeps report/evaluation timestamp handling consistent.
     """
     index = getattr(values, "index", None)
-    kwargs = {"errors": "coerce", "format": "mixed"}
-    if utc is not None:
-        kwargs["utc"] = utc
+    effective_utc = True if utc is None else utc
+    kwargs = {"errors": "coerce", "format": "mixed", "utc": effective_utc}
 
     try:
         parsed = pd.to_datetime(values, **kwargs)

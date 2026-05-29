@@ -15,6 +15,7 @@ Downstream Usage:
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import traceback
@@ -816,6 +817,19 @@ def _resolve_regime_shadow_pack(
     return str(suggested_pack), diagnostics
 
 
+def _router_accepts_validation_kwargs(callable_obj, kwargs: dict) -> bool:
+    if not kwargs:
+        return False
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return True
+    parameters = signature.parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return True
+    return all(key in parameters for key in kwargs)
+
+
 def _load_market_inputs(
     *,
     replay_mode: bool,
@@ -896,7 +910,19 @@ def _load_market_inputs(
         source=source,
         data_router=data_router,
     )
-    option_chain = data_router.get_option_chain(symbol)
+    validation_kwargs = {
+        "validation_spot": spot_snapshot.get("spot"),
+        "valuation_time": spot_snapshot.get("timestamp"),
+    }
+    validation_kwargs = {
+        key: value
+        for key, value in validation_kwargs.items()
+        if value not in (None, "")
+    }
+    if _router_accepts_validation_kwargs(data_router.get_option_chain, validation_kwargs):
+        option_chain = data_router.get_option_chain(symbol, **validation_kwargs)
+    else:
+        option_chain = data_router.get_option_chain(symbol)
     return spot_snapshot, option_chain, None, managed_data_router, None
 
 

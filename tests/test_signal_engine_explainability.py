@@ -11,6 +11,7 @@ from engine.signal_engine import (
     _evaluate_session_risk_governor,
     _evaluate_trade_slot_governor,
     _evaluate_trade_promotion_governor,
+    _should_defer_global_risk_watchlist_to_engine_thresholds,
 )
 
 
@@ -75,6 +76,32 @@ def test_runtime_composite_live_supplement_blocks_late_chase_and_unconfirmed_row
     assert late["reason"] == "late_chase_guard"
     assert unconfirmed["applied"] is False
     assert unconfirmed["reason"] == "confirmation_guard"
+
+
+def test_low_strength_global_risk_watchlist_defers_to_engine_thresholds():
+    assert _should_defer_global_risk_watchlist_to_engine_thresholds(
+        {
+            "risk_trade_status": "WATCHLIST",
+            "risk_message": "Trade filtered out due to low strength",
+            "global_risk_reasons": ["insufficient_trade_strength"],
+        }
+    ) is True
+
+    assert _should_defer_global_risk_watchlist_to_engine_thresholds(
+        {
+            "risk_trade_status": "WATCHLIST",
+            "risk_message": "Trade downgraded due to weak data quality",
+            "global_risk_reasons": ["weak_data_quality"],
+        }
+    ) is False
+
+    assert _should_defer_global_risk_watchlist_to_engine_thresholds(
+        {
+            "risk_trade_status": "WATCHLIST",
+            "risk_message": "Trade filtered out due to low strength",
+            "global_risk_reasons": ["insufficient_trade_strength", "portfolio_same_way_concentration"],
+        }
+    ) is False
 
 
 def test_directionless_two_sided_setup_is_explicitly_ambiguous_watchlist():

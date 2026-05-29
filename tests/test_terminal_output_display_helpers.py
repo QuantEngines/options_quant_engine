@@ -1,4 +1,5 @@
 from app.terminal_output import (
+    _build_global_macro_snapshot_fields,
     _describe_effective_strength_gate,
     _format_atm_iv_market_summary,
     _format_multi_source_ingestion,
@@ -45,6 +46,10 @@ def test_format_multi_source_ingestion_labels_primary_and_secondary_roles() -> N
         "primary_decision=ZERODHA; secondary_research=ICICI; "
         "requested=ZERODHA,ICICI; ok=ZERODHA,ICICI"
     )
+
+
+def test_global_macro_snapshot_fields_suppresses_empty_unavailable_block() -> None:
+    assert _build_global_macro_snapshot_fields(trade={}, global_market_snapshot={}) is None
 
 
 def test_format_atm_iv_market_summary_exposes_weak_iv_context() -> None:
@@ -200,6 +205,26 @@ def test_describe_effective_strength_gate_uses_readable_regime_separator() -> No
     assert description == (
         "60 (base~60; conf:none; regime:Configured NEGATIVE_GAMMA threshold and sizing adjustment, "
         "Adjusted for VOL_EXPANSION: composite +2, size 0.85x)"
+    )
+
+
+def test_describe_effective_strength_gate_prefers_effective_threshold() -> None:
+    trade = {
+        "min_trade_strength_threshold": 60,
+        "effective_min_trade_strength_threshold": 62,
+        "data_quality_status": "STRONG",
+        "confirmation_status": "STRONG_CONFIRMATION",
+        "regime_threshold_adjustments": [
+            "Configured POSITIVE_GAMMA threshold and sizing adjustment",
+            "AT_FLIP: Tightened thresholds (squeeze risk)",
+        ],
+    }
+
+    description = _describe_effective_strength_gate(trade)
+
+    assert description == (
+        "62 (base~60; conf:none; regime:Configured POSITIVE_GAMMA threshold and sizing adjustment, "
+        "AT_FLIP: Tightened thresholds (squeeze risk))"
     )
 
 

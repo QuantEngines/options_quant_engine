@@ -213,6 +213,58 @@ python scripts/refresh_cumulative_signal_dataset.py
 
 Generated signal datasets, SQLite mirrors, audit outputs, research reports, plan documents, and saved snapshots are intentionally ignored by git.
 
+### Lagged Institutional Flow Update
+
+FII/DII cash-flow data is treated as lagged research context, not a live
+intraday signal input. To update the local institutional-flow store from
+official exchange sources, run after publication:
+
+```bash
+../.venv/bin/python scripts/data_prep/fetch_institutional_flows.py
+```
+
+The fetcher tries NSE first and BSE as fallback/cross-check, then writes
+`data_store/macro/institutional_flows.csv`. The live snapshot reader only uses
+rows that are point-in-time eligible, so same-day rows require a
+`source_timestamp` that is not later than the engine snapshot time. Values are
+stored in INR crores and remain research-only until evaluated.
+
+### Lagged India Bond Market Context
+
+India G-Sec yields are captured as local macro context, not as live scoring
+inputs. Add EOD rows to:
+
+```bash
+data_store/macro/india_bond_yields.csv
+```
+
+or use the helper:
+
+```bash
+../.venv/bin/python scripts/data_prep/update_india_bond_yields.py \
+  --date YYYY-MM-DD \
+  --india-10y-yield 6.78 \
+  --india-10y-change-bp -3.2 \
+  --source CCIL_DAILY_MARKET_ANALYTICS
+```
+
+Supported columns:
+
+```text
+date,india_10y_yield,india_10y_change_bp,source,source_timestamp
+```
+
+Optional columns:
+
+```text
+india_2y_yield,india_5y_yield,india_30y_yield,india_2y10y_spread_bp,india_5y10y_spread_bp
+```
+
+The engine applies the same point-in-time rule as FII/DII: same-day rows need a
+`source_timestamp <= snapshot_time`, while rows without a timestamp become
+eligible from the next date onward. These fields feed the Global Macro Snapshot
+and signal evaluation dataset first; they do not alter live trade decisions.
+
 ### Research Reporting
 
 ```bash

@@ -5,12 +5,39 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from data.global_market_snapshot import build_global_market_snapshot, invalidate_download_cache
+from data.global_market_snapshot import (
+    _us10y_change_bp,
+    _us10y_yield_level,
+    build_global_market_snapshot,
+    invalidate_download_cache,
+)
 from risk import build_global_risk_state
 from risk.global_risk_features import build_global_risk_features
 
 
 class GlobalRiskFeatureModelTests(unittest.TestCase):
+    def test_us10y_normalization_handles_direct_percent_yfinance_feed(self):
+        history = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2026-05-28", "2026-05-29"], utc=True),
+                "close": [4.42, 4.445],
+            }
+        )
+
+        self.assertAlmostEqual(_us10y_yield_level(history), 4.445)
+        self.assertAlmostEqual(_us10y_change_bp(history), 2.5)
+
+    def test_us10y_normalization_handles_legacy_tnx_scaled_feed(self):
+        history = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2026-05-28", "2026-05-29"], utc=True),
+                "close": [44.2, 44.45],
+            }
+        )
+
+        self.assertAlmostEqual(_us10y_yield_level(history), 4.445)
+        self.assertAlmostEqual(_us10y_change_bp(history), 2.5)
+
     def test_build_global_market_snapshot_returns_neutral_when_disabled(self):
         with patch("data.global_market_snapshot.GLOBAL_MARKET_DATA_ENABLED", False):
             snapshot = build_global_market_snapshot("NIFTY", as_of="2026-03-14T10:00:00+05:30")
@@ -163,12 +190,45 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
                     "india_vix_level": 15.5,
                     "sp500_change_24h": -1.5,
                     "nasdaq_change_24h": -0.8,
+                    "us10y_yield": 4.32,
                     "us10y_change_bp": 12.0,
+                    "india_2y_yield": 6.15,
+                    "india_5y_yield": 6.42,
+                    "india_10y_yield": 6.78,
+                    "india_30y_yield": 7.05,
+                    "india_10y_change_bp": -3.2,
+                    "india_2y10y_spread_bp": 63.0,
+                    "india_5y10y_spread_bp": 36.0,
+                    "india_us_10y_spread_bp": 246.0,
+                    "india_bond_yield_date": "2026-03-13",
+                    "india_bond_yield_source": "TEST_BOND",
+                    "india_bond_yield_source_timestamp": "2026-03-13T18:10:00+05:30",
+                    "india_bond_yield_staleness_days": 1,
                     "usdinr_change_24h": 0.9,
                     "dxy_change_24h": 0.6,
                     "gift_nifty_change_24h": -0.7,
+                    "fii_cash_net": -1200.5,
+                    "dii_cash_net": 980.25,
+                    "fii_index_futures_net": -315.0,
+                    "fii_index_options_net": 144.0,
+                    "institutional_flow_date": "2026-03-13",
+                    "institutional_flow_source": "TEST",
+                    "institutional_flow_source_timestamp": "2026-03-13T18:00:00+05:30",
+                    "institutional_flow_staleness_days": 1,
                     "realized_vol_5d": 0.12,
                     "realized_vol_30d": 0.25,
+                },
+                "institutional_flow_snapshot": {
+                    "data_available": True,
+                    "stale": False,
+                    "warnings": [],
+                    "issues": [],
+                },
+                "india_bond_yield_snapshot": {
+                    "data_available": True,
+                    "stale": False,
+                    "warnings": [],
+                    "issues": [],
                 },
             },
             holding_profile="AUTO",
@@ -182,6 +242,13 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
         self.assertEqual(features["volatility_shock_score"], 0.7)
         self.assertEqual(features["us_equity_risk_score"], 0.4)
         self.assertEqual(features["rates_shock_score"], 0.6)
+        self.assertEqual(features["us10y_yield"], 4.32)
+        self.assertEqual(features["india_10y_yield"], 6.78)
+        self.assertEqual(features["india_10y_change_bp"], -3.2)
+        self.assertEqual(features["india_2y10y_spread_bp"], 63.0)
+        self.assertEqual(features["india_us_10y_spread_bp"], 246.0)
+        self.assertEqual(features["india_bond_yield_source"], "TEST_BOND")
+        self.assertTrue(features["india_bond_yield_data_available"])
         self.assertEqual(features["currency_shock_score"], 0.5)
         self.assertEqual(features["dxy_shock_score"], 0.45)
         self.assertEqual(features["gift_nifty_lead_score"], -0.35)
@@ -193,6 +260,12 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
         self.assertEqual(features["india_vix_level"], 15.5)
         self.assertEqual(features["dxy_change_24h"], 0.6)
         self.assertEqual(features["gift_nifty_change_24h"], -0.7)
+        self.assertEqual(features["fii_cash_net"], -1200.5)
+        self.assertEqual(features["dii_cash_net"], 980.25)
+        self.assertEqual(features["fii_index_futures_net"], -315.0)
+        self.assertEqual(features["fii_index_options_net"], 144.0)
+        self.assertEqual(features["institutional_flow_date"], "2026-03-13")
+        self.assertTrue(features["institutional_flow_data_available"])
         self.assertFalse(features["gift_nifty_proxy_in_use"])
         self.assertTrue(features["market_data_available"])
         self.assertFalse(features["neutral_fallback"])

@@ -192,9 +192,24 @@ def _base_payloads():
             "vix_change_24h": 0.0,
             "india_vix_level": 0.0,
             "india_vix_change_24h": 0.0,
+            "dxy_change_24h": 0.1,
+            "gift_nifty_change_24h": -0.2,
             "sp500_change_24h": 0.0,
             "us10y_change_bp": 0.0,
             "usdinr_change_24h": 0.0,
+            "fii_cash_net": -1200.5,
+            "dii_cash_net": 980.25,
+            "fii_index_futures_net": -315.0,
+            "fii_index_options_net": 144.0,
+            "institutional_flow_date": "2026-04-07",
+            "institutional_flow_source": "TEST",
+            "institutional_flow_source_timestamp": "2026-04-07T18:15:00+05:30",
+            "institutional_flow_staleness_days": 1,
+        },
+        "institutional_flow_snapshot": {
+            "data_available": True,
+            "stale": False,
+            "warnings": [],
         },
     }
     headline_state = {
@@ -261,6 +276,8 @@ def test_standard_mode_renders_confidence_note_and_consistency_check() -> None:
     assert "CONSISTENCY CHECK" in output
     assert "FLOW_MACRO_REGIME_CONTRADICTION" not in output
     assert "bullish flow signal (BULLISH_FLOW) conflicts with RISK_OFF macro/global regime" in output
+    assert "GLOBAL MACRO SNAPSHOT" in output
+    assert "fii_cash_net" in output
 
 
 def test_full_debug_mode_renders_confidence_note_and_consistency_check() -> None:
@@ -300,6 +317,7 @@ def test_full_debug_mode_renders_confidence_note_and_consistency_check() -> None
     assert "confidence_note" in output
     assert "CONSISTENCY CHECK" in output
     assert "bullish flow signal (BULLISH_FLOW) conflicts with RISK_OFF macro/global regime" in output
+    assert "institutional_flow_date" in output
 
 
 def test_compact_mode_uses_bias_and_execution_suggestion_wording() -> None:
@@ -339,4 +357,6 @@ def test_compact_mode_uses_bias_and_execution_suggestion_wording() -> None:
     assert "source_consistency" in output
     assert "execution_suggestion_usable" in output
     assert "iv_hv_regime" in output
+    assert "GLOBAL MACRO SNAPSHOT" in output
+    assert "crude_24h" in output
     assert "MICROSTRUCTURE_FRICTION" not in output

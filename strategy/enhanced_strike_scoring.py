@@ -28,20 +28,67 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config.strike_selection_policy import (
+    STRIKE_SELECTION_SCORE_CONFIG,
+    get_strike_selection_score_config,
+)
 from utils.numerics import clip, safe_float
 from utils.regime_normalization import normalize_iv_decimal
 
 
 # ---------------------------------------------------------------------------
-# Default weights for the composite enhanced score
+# Policy helpers
 # ---------------------------------------------------------------------------
 
+def _policy_config(policy_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    return policy_config if isinstance(policy_config, dict) else get_strike_selection_score_config()
+
+
+def _cfg_float(policy_config: dict[str, Any], key: str) -> float:
+    return safe_float(policy_config.get(key), STRIKE_SELECTION_SCORE_CONFIG[key])
+
+
+def _enhanced_score_weights(policy_config: dict[str, Any]) -> dict[str, float]:
+    return {
+        "liquidity": _cfg_float(policy_config, "enhanced_weight_liquidity"),
+        "gamma_magnetism": _cfg_float(policy_config, "enhanced_weight_gamma_magnetism"),
+        "dealer_pressure": _cfg_float(policy_config, "enhanced_weight_dealer_pressure"),
+        "volatility_convexity": _cfg_float(policy_config, "enhanced_weight_volatility_convexity"),
+        "premium_efficiency": _cfg_float(policy_config, "enhanced_weight_premium_efficiency"),
+    }
+
+
+def _payoff_weights(policy_config: dict[str, Any]) -> dict[str, float]:
+    return {
+        "premium_efficiency": _cfg_float(policy_config, "payoff_weight_premium_efficiency"),
+        "delta_alignment": _cfg_float(policy_config, "payoff_weight_delta_alignment"),
+        "liquidity_score": _cfg_float(policy_config, "payoff_weight_liquidity_score"),
+        "distance_to_target": _cfg_float(policy_config, "payoff_weight_distance_to_target"),
+        "iv_efficiency": _cfg_float(policy_config, "payoff_weight_iv_efficiency"),
+    }
+
+
+def _expected_move_from_policy(
+    *,
+    spot: float,
+    atm_iv: float | None,
+    days_to_expiry: float | None,
+    policy_config: dict[str, Any],
+) -> float:
+    iv = normalize_iv_decimal(atm_iv, default=_cfg_float(policy_config, "expected_move_default_iv"))
+    dte = max(
+        safe_float(days_to_expiry, _cfg_float(policy_config, "expected_move_default_dte")),
+        _cfg_float(policy_config, "expected_move_min_dte"),
+    )
+    return float(spot) * iv * math.sqrt(dte / 365.0)
+
+
 ENHANCED_SCORE_WEIGHTS = {
-    "liquidity": 0.30,
-    "gamma_magnetism": 0.25,
-    "dealer_pressure": 0.20,
-    "volatility_convexity": 0.15,
-    "premium_efficiency": 0.10,
+    "liquidity": STRIKE_SELECTION_SCORE_CONFIG["enhanced_weight_liquidity"],
+    "gamma_magnetism": STRIKE_SELECTION_SCORE_CONFIG["enhanced_weight_gamma_magnetism"],
+    "dealer_pressure": STRIKE_SELECTION_SCORE_CONFIG["enhanced_weight_dealer_pressure"],
+    "volatility_convexity": STRIKE_SELECTION_SCORE_CONFIG["enhanced_weight_volatility_convexity"],
+    "premium_efficiency": STRIKE_SELECTION_SCORE_CONFIG["enhanced_weight_premium_efficiency"],
 }
 
 
@@ -92,7 +139,12 @@ def _safe_series(rows: pd.DataFrame, *col_names) -> pd.Series:
     return pd.Series(0.0, index=rows.index)
 
 
-def compute_liquidity_gravity(rows: pd.DataFrame) -> pd.Series:
+def compute_liquidity_gravity(
+    rows: pd.DataFrame,
+    *,
+    policy_config: dict[str, Any] | None = None,
+) -> pd.Series:
+    policy_config = _policy_config(policy_config)
     volume = _safe_series(rows, "_normalized_volume", "totalTradedVolume", "VOLUME")
     oi = _safe_series(rows, "_normalized_open_interest", "openInterest", "OPEN_INT")
     oi_change = _safe_series(rows, "changeinOI", "CHANGE_IN_OI").abs()
@@ -101,7 +153,11 @@ def compute_liquidity_gravity(rows: pd.DataFrame) -> pd.Series:
     oi_rank = _rank_normalize(oi)
     oi_change_rank = _rank_normalize(oi_change)
 
-    return (0.4 * vol_rank + 0.4 * oi_rank + 0.2 * oi_change_rank).round(4)
+    return (
+        _cfg_float(policy_config, "enhanced_liquidity_weight_volume") * vol_rank
+        + _cfg_float(policy_config, "enhanced_liquidity_weight_open_interest") * oi_rank
+        + _cfg_float(policy_config, "enhanced_liquidity_weight_oi_change") * oi_change_rank
+    ).round(4)
 
 
 # ---------------------------------------------------------------------------
@@ -136,23 +192,36 @@ def compute_gamma_magnetism(
 # 3. Dealer Hedging Pressure
 # ---------------------------------------------------------------------------
 
-_GAMMA_REGIME_SCORES = {
-    "SHORT_GAMMA_ZONE": 0.9,
-    "NEGATIVE_GAMMA": 0.85,
-    "NEUTRAL_GAMMA": 0.5,
-    "LONG_GAMMA_ZONE": 0.2,
-    "POSITIVE_GAMMA": 0.15,
-}
+def _gamma_regime_scores(policy_config: dict[str, Any]) -> dict[str, float]:
+    return {
+        "SHORT_GAMMA_ZONE": _cfg_float(policy_config, "dealer_gamma_regime_score_short_gamma_zone"),
+        "NEGATIVE_GAMMA": _cfg_float(policy_config, "dealer_gamma_regime_score_negative_gamma"),
+        "NEUTRAL_GAMMA": _cfg_float(policy_config, "dealer_gamma_regime_score_neutral_gamma"),
+        "LONG_GAMMA_ZONE": _cfg_float(policy_config, "dealer_gamma_regime_score_long_gamma_zone"),
+        "POSITIVE_GAMMA": _cfg_float(policy_config, "dealer_gamma_regime_score_positive_gamma"),
+    }
 
-_HEDGING_BIAS_SCORES = {
-    "DOWNSIDE_HEDGING_ACCELERATION": 0.9,
-    "UPSIDE_HEDGING_ACCELERATION": 0.85,
-    "TWO_SIDED_INSTABILITY": 0.8,
-    "PINNING_DOMINANT": 0.3,
-    "DOWNSIDE_PINNING": 0.35,
-    "UPSIDE_PINNING": 0.35,
-    "NEUTRAL": 0.5,
-}
+
+def _hedging_bias_scores(policy_config: dict[str, Any]) -> dict[str, float]:
+    return {
+        "DOWNSIDE_HEDGING_ACCELERATION": _cfg_float(
+            policy_config, "dealer_hedging_bias_score_downside_acceleration"
+        ),
+        "UPSIDE_HEDGING_ACCELERATION": _cfg_float(policy_config, "dealer_hedging_bias_score_upside_acceleration"),
+        "TWO_SIDED_INSTABILITY": _cfg_float(policy_config, "dealer_hedging_bias_score_two_sided_instability"),
+        "PINNING_DOMINANT": _cfg_float(policy_config, "dealer_hedging_bias_score_pinning_dominant"),
+        "DOWNSIDE_PINNING": _cfg_float(policy_config, "dealer_hedging_bias_score_downside_pinning"),
+        "UPSIDE_PINNING": _cfg_float(policy_config, "dealer_hedging_bias_score_upside_pinning"),
+        "NEUTRAL": _cfg_float(policy_config, "dealer_hedging_bias_score_neutral"),
+    }
+
+
+def _flip_context_scores(policy_config: dict[str, Any]) -> dict[str, float]:
+    return {
+        "AT_FLIP": _cfg_float(policy_config, "dealer_flip_context_score_at_flip"),
+        "ABOVE_FLIP": _cfg_float(policy_config, "dealer_flip_context_score_above_flip"),
+        "BELOW_FLIP": _cfg_float(policy_config, "dealer_flip_context_score_below_flip"),
+    }
 
 
 def compute_dealer_pressure(
@@ -163,38 +232,41 @@ def compute_dealer_pressure(
     dealer_hedging_bias: str | None = None,
     gamma_flip_distance_pct: float | None = None,
     dealer_gamma_exposure: float | None = None,
+    policy_config: dict[str, Any] | None = None,
 ) -> pd.Series:
-    regime_score = _GAMMA_REGIME_SCORES.get(
+    policy_config = _policy_config(policy_config)
+    regime_score = _gamma_regime_scores(policy_config).get(
         str(gamma_regime or "").upper().strip(), 0.5
     )
 
     # Flip proximity: higher when closer to flip level.
-    flip_dist = abs(safe_float(gamma_flip_distance_pct, 5.0))
-    flip_proximity = clip(1.0 - min(flip_dist, 10.0) / 10.0, 0.0, 1.0)
+    flip_dist = abs(safe_float(gamma_flip_distance_pct, _cfg_float(policy_config, "dealer_flip_proximity_default_pct")))
+    flip_cap = max(_cfg_float(policy_config, "dealer_flip_proximity_cap_pct"), 1e-6)
+    flip_proximity = clip(1.0 - min(flip_dist, flip_cap) / flip_cap, 0.0, 1.0)
 
     # Spot-vs-flip context is directional instability information.
-    flip_context = {
-        "AT_FLIP": 1.0,
-        "ABOVE_FLIP": 0.65,
-        "BELOW_FLIP": 0.65,
-    }.get(str(spot_vs_flip or "").upper().strip(), 0.5)
+    flip_context = _flip_context_scores(policy_config).get(
+        str(spot_vs_flip or "").upper().strip(),
+        _cfg_float(policy_config, "dealer_flip_context_score_default"),
+    )
 
     # Hedging bias amplification
-    bias_score = _HEDGING_BIAS_SCORES.get(
+    bias_score = _hedging_bias_scores(policy_config).get(
         str(dealer_hedging_bias or "").upper().strip(), 0.5
     )
 
     # Convert raw gamma exposure to bounded intensity; only magnitude matters.
     gex_value = abs(safe_float(dealer_gamma_exposure, 0.0))
-    gex_intensity = clip(math.log1p(gex_value) / 12.0, 0.0, 1.0)
+    gex_scale = max(_cfg_float(policy_config, "dealer_gex_log_scale"), 1e-6)
+    gex_intensity = clip(math.log1p(gex_value) / gex_scale, 0.0, 1.0)
 
     # Combine components
     base_pressure = (
-        0.30 * regime_score
-        + 0.25 * flip_proximity
-        + 0.25 * bias_score
-        + 0.10 * flip_context
-        + 0.10 * gex_intensity
+        _cfg_float(policy_config, "dealer_pressure_weight_regime") * regime_score
+        + _cfg_float(policy_config, "dealer_pressure_weight_flip_proximity") * flip_proximity
+        + _cfg_float(policy_config, "dealer_pressure_weight_bias") * bias_score
+        + _cfg_float(policy_config, "dealer_pressure_weight_flip_context") * flip_context
+        + _cfg_float(policy_config, "dealer_pressure_weight_gex") * gex_intensity
     )
 
     return pd.Series(round(clip(base_pressure, 0.0, 1.0), 4), index=strikes.index)
@@ -228,7 +300,9 @@ def compute_premium_efficiency(
     atm_iv: float | None,
     days_to_expiry: float | None,
     expected_move: float | None = None,
+    policy_config: dict[str, Any] | None = None,
 ) -> pd.Series:
+    policy_config = _policy_config(policy_config)
     # Guard: validate spot is numeric and positive
     spot = safe_float(spot, None)
     if spot is None or spot <= 0:
@@ -236,12 +310,16 @@ def compute_premium_efficiency(
         return pd.Series(0.5, index=rows.index)
     
     if expected_move is None:
-        iv = normalize_iv_decimal(atm_iv, default=0.15)
-        dte = max(safe_float(days_to_expiry, 1.0), 0.1)
-        expected_move = float(spot) * iv * math.sqrt(dte / 365.0)
+        expected_move = _expected_move_from_policy(
+            spot=float(spot),
+            atm_iv=atm_iv,
+            days_to_expiry=days_to_expiry,
+            policy_config=policy_config,
+        )
 
     premium = _safe_series(rows, "_normalized_last_price", "lastPrice", "LAST_PRICE")
-    safe_premium = premium.where(premium > 0.01, np.nan)
+    min_premium = _cfg_float(policy_config, "premium_efficiency_min_premium")
+    safe_premium = premium.where(premium > min_premium, np.nan)
     raw = expected_move / safe_premium
 
     valid = raw.dropna()
@@ -261,15 +339,6 @@ def compute_premium_efficiency(
 # 6. Payoff Efficiency — composite strike efficiency for execution quality
 # ---------------------------------------------------------------------------
 
-_PAYOFF_WEIGHTS = {
-    "premium_efficiency": 0.35,
-    "delta_alignment": 0.25,
-    "liquidity_score": 0.20,
-    "distance_to_target": 0.10,
-    "iv_efficiency": 0.10,
-}
-
-
 def compute_payoff_efficiency(
     rows: pd.DataFrame,
     *,
@@ -280,6 +349,7 @@ def compute_payoff_efficiency(
     support_wall: float | None = None,
     resistance_wall: float | None = None,
     expected_move: float | None = None,
+    policy_config: dict[str, Any] | None = None,
 ) -> tuple[pd.Series, dict[str, pd.Series]]:
     """Compute per-strike payoff efficiency and sub-component scores.
 
@@ -291,10 +361,14 @@ def compute_payoff_efficiency(
         Keys: pe_premium_eff, pe_delta_align, pe_liquidity,
         pe_dist_target, pe_iv_eff (each 0–100).
     """
+    policy_config = _policy_config(policy_config)
     if expected_move is None:
-        iv_val = normalize_iv_decimal(atm_iv, default=0.15)
-        dte = max(safe_float(days_to_expiry, 1.0), 0.1)
-        expected_move = float(spot) * iv_val * math.sqrt(dte / 365.0)
+        expected_move = _expected_move_from_policy(
+            spot=float(spot),
+            atm_iv=atm_iv,
+            days_to_expiry=days_to_expiry,
+            policy_config=policy_config,
+        )
 
     premium = _safe_series(rows, "_normalized_last_price", "lastPrice", "LAST_PRICE")
     strikes = pd.to_numeric(
@@ -307,19 +381,22 @@ def compute_payoff_efficiency(
     iv_col = _safe_series(rows, "_normalized_iv", "impliedVolatility", "IV")
 
     # 1. Premium efficiency: expected_move / premium
-    pe_raw = expected_move / premium.clip(lower=0.01)
+    pe_raw = expected_move / premium.clip(lower=_cfg_float(policy_config, "premium_efficiency_min_premium"))
     pe_norm = _rank_normalize(pe_raw) * 100
 
     # 2. Delta alignment: prefer |delta| in [0.35, 0.55]
     delta_abs = delta.abs()
     # Score peaks at 0.45 centre, falls off outside [0.35, 0.55]
-    delta_ideal = 0.45
-    delta_band = 0.10
+    delta_ideal = _cfg_float(policy_config, "payoff_delta_ideal")
+    delta_norm = max(_cfg_float(policy_config, "payoff_delta_normalization"), 1e-6)
     delta_dist = (delta_abs - delta_ideal).abs()
-    pe_delta = (1.0 - (delta_dist / max(delta_ideal, 1e-6)).clip(upper=1.0)) * 100
+    pe_delta = (1.0 - (delta_dist / delta_norm).clip(upper=1.0)) * 100
 
     # 3. Liquidity: rank-normalised blend of volume + OI
-    liq_blend = 0.5 * _rank_normalize(volume) + 0.5 * _rank_normalize(oi)
+    liq_blend = (
+        _cfg_float(policy_config, "payoff_liquidity_weight_volume") * _rank_normalize(volume)
+        + _cfg_float(policy_config, "payoff_liquidity_weight_open_interest") * _rank_normalize(oi)
+    )
     pe_liq = liq_blend * 100
 
     # 4. Distance to target: penalise strikes far from expected move endpoint
@@ -333,7 +410,7 @@ def compute_payoff_efficiency(
     # 5. IV efficiency: penalise excessively high IV; rank-invert
     pe_iv = (1.0 - _rank_normalize(iv_col)) * 100
 
-    w = _PAYOFF_WEIGHTS
+    w = _payoff_weights(policy_config)
     composite = (
         w["premium_efficiency"] * pe_norm
         + w["delta_alignment"] * pe_delta
@@ -353,16 +430,6 @@ def compute_payoff_efficiency(
     return composite, components
 
 
-# ---------------------------------------------------------------------------
-# Tradeability flags
-# ---------------------------------------------------------------------------
-
-_MIN_INTRADAY_VOLUME = 500
-_MIN_OVERNIGHT_VOLUME = 2000
-_MIN_LIQUIDITY_OI = 10000
-_MAX_PREMIUM_RATIO = 5.0  # premium / expected_move
-
-
 def compute_tradeability_flags(
     rows: pd.DataFrame,
     *,
@@ -370,7 +437,9 @@ def compute_tradeability_flags(
     atm_iv: float | None,
     days_to_expiry: float | None,
     expected_move: float | None = None,
+    policy_config: dict[str, Any] | None = None,
 ) -> dict[str, pd.Series]:
+    policy_config = _policy_config(policy_config)
     spot_safe = safe_float(spot, None)
     if spot_safe is None or spot_safe <= 0:
         return {
@@ -385,15 +454,21 @@ def compute_tradeability_flags(
     premium = _safe_series(rows, "_normalized_last_price", "lastPrice", "LAST_PRICE")
 
     if expected_move is None:
-        iv_val = normalize_iv_decimal(atm_iv, default=0.15)
-        dte = max(safe_float(days_to_expiry, 1.0), 0.1)
-        expected_move = float(spot_safe) * iv_val * math.sqrt(dte / 365.0)
+        expected_move = _expected_move_from_policy(
+            spot=float(spot_safe),
+            atm_iv=atm_iv,
+            days_to_expiry=days_to_expiry,
+            policy_config=policy_config,
+        )
 
     flags = {
-        "tradable_intraday": volume >= _MIN_INTRADAY_VOLUME,
-        "tradable_overnight": volume >= _MIN_OVERNIGHT_VOLUME,
-        "liquidity_ok": oi >= _MIN_LIQUIDITY_OI,
-        "premium_reasonable": premium <= max(expected_move * _MAX_PREMIUM_RATIO, 1.0),
+        "tradable_intraday": volume >= _cfg_float(policy_config, "tradeability_min_intraday_volume"),
+        "tradable_overnight": volume >= _cfg_float(policy_config, "tradeability_min_overnight_volume"),
+        "liquidity_ok": oi >= _cfg_float(policy_config, "tradeability_min_liquidity_oi"),
+        "premium_reasonable": premium <= max(
+            expected_move * _cfg_float(policy_config, "tradeability_max_premium_ratio"),
+            _cfg_float(policy_config, "tradeability_min_premium_cap"),
+        ),
     }
 
     return flags
@@ -430,6 +505,7 @@ def compute_enhanced_strike_scores(
     if rows.empty:
         return pd.DataFrame()
 
+    policy_config = get_strike_selection_score_config()
     spot_safe = safe_float(spot, None)
     if spot_safe is None or spot_safe <= 0:
         inferred_spot = safe_float(
@@ -440,14 +516,14 @@ def compute_enhanced_strike_scores(
     if spot_safe is None or spot_safe <= 0:
         return pd.DataFrame(index=rows.index)
 
-    w = weights or ENHANCED_SCORE_WEIGHTS
+    w = weights or _enhanced_score_weights(policy_config)
     strikes = pd.to_numeric(
         rows.get("_normalized_strike", rows.get("strikePrice")),
         errors="coerce",
     ).fillna(0.0)
 
     # Factor scores
-    liquidity = compute_liquidity_gravity(rows)
+    liquidity = compute_liquidity_gravity(rows, policy_config=policy_config)
     gamma_mag = compute_gamma_magnetism(strikes, gamma_clusters)
     dealer = compute_dealer_pressure(
         strikes,
@@ -456,16 +532,20 @@ def compute_enhanced_strike_scores(
         dealer_hedging_bias=dealer_hedging_bias,
         gamma_flip_distance_pct=gamma_flip_distance_pct,
         dealer_gamma_exposure=dealer_gamma_exposure,
+        policy_config=policy_config,
     )
     convexity = compute_volatility_convexity(rows)
     # Compute expected_move once for all sub-functions
-    _iv = normalize_iv_decimal(atm_iv, default=0.15)
-    _dte = max(safe_float(days_to_expiry, 1.0), 0.1)
-    _expected_move = float(spot_safe) * _iv * math.sqrt(_dte / 365.0)
+    _expected_move = _expected_move_from_policy(
+        spot=float(spot_safe),
+        atm_iv=atm_iv,
+        days_to_expiry=days_to_expiry,
+        policy_config=policy_config,
+    )
 
     prem_eff = compute_premium_efficiency(
         rows, spot=spot_safe, atm_iv=atm_iv, days_to_expiry=days_to_expiry,
-        expected_move=_expected_move,
+        expected_move=_expected_move, policy_config=policy_config,
     )
 
     # Composite
@@ -482,7 +562,7 @@ def compute_enhanced_strike_scores(
     # Tradeability
     flags = compute_tradeability_flags(
         rows, spot=spot_safe, atm_iv=atm_iv, days_to_expiry=days_to_expiry,
-        expected_move=_expected_move,
+        expected_move=_expected_move, policy_config=policy_config,
     )
 
     # Distance from spot
@@ -500,6 +580,7 @@ def compute_enhanced_strike_scores(
         support_wall=support_wall,
         resistance_wall=resistance_wall,
         expected_move=_expected_move,
+        policy_config=policy_config,
     )
 
     result_data = {
