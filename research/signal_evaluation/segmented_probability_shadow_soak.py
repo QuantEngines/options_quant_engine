@@ -383,7 +383,17 @@ def append_segmented_probability_shadow_soak_history(
                 existing = pd.DataFrame()
         else:
             existing = pd.DataFrame()
-        history = pd.concat([existing, incoming], ignore_index=True, sort=False) if not existing.empty else incoming
+        if existing.empty:
+            history = incoming
+        else:
+            history = existing.copy()
+            for column in incoming.columns:
+                if column not in history.columns:
+                    history[column] = pd.NA
+            for column in history.columns:
+                if column not in incoming.columns:
+                    incoming[column] = pd.NA
+            history.loc[len(history)] = incoming.iloc[0].reindex(history.columns)
         _atomic_write_csv(history, path)
     return history
 

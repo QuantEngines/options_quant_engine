@@ -30,6 +30,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=CUMULATIVE_DATASET_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_ENTRY_TIMING_REPORT_DIR)
+    parser.add_argument("--date", default=None, help="Optional exact YYYY-MM-DD Asia/Kolkata session date.")
+    parser.add_argument("--start-date", default=None, help="Optional inclusive YYYY-MM-DD session-date lower bound.")
+    parser.add_argument("--end-date", default=None, help="Optional inclusive YYYY-MM-DD session-date upper bound.")
     parser.add_argument("--prior-stretch-bps", type=float, default=DEFAULT_PRIOR_STRETCH_BPS)
     parser.add_argument("--future-edge-bps", type=float, default=DEFAULT_FUTURE_EDGE_BPS)
     parser.add_argument("--classification-horizon-minutes", type=int, default=60)
@@ -45,6 +48,9 @@ def main() -> int:
     result = write_entry_timing_report(
         dataset_path=args.dataset,
         output_dir=args.output_dir,
+        report_date=args.date,
+        start_date=args.start_date,
+        end_date=args.end_date,
         prior_stretch_bps=args.prior_stretch_bps,
         future_edge_bps=args.future_edge_bps,
         classification_horizon_minutes=args.classification_horizon_minutes,
@@ -57,6 +63,7 @@ def main() -> int:
     payload = {
         "report_type": report.get("report_type"),
         "runtime_rows": (report.get("coverage") or {}).get("runtime_rows"),
+        "rows_after_date_filter": (report.get("coverage") or {}).get("rows_after_date_filter"),
         "mature_60m_rows": (report.get("coverage") or {}).get("mature_60m_rows"),
         "max_runtime_composite_score": (report.get("coverage") or {}).get("max_runtime_composite_score"),
         "late_chase_thesis_supported": (report.get("diagnostic_read") or {}).get("late_chase_thesis_supported"),

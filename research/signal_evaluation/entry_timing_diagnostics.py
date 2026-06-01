@@ -181,6 +181,30 @@ def load_entry_timing_dataset(path: str | Path = CUMULATIVE_DATASET_PATH) -> pd.
     )
 
 
+def _filter_signal_date_range(
+    frame: pd.DataFrame,
+    *,
+    report_date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    if frame.empty or not any((report_date, start_date, end_date)):
+        return frame.copy()
+    working = frame.copy()
+    if "signal_timestamp" not in working.columns:
+        return working.iloc[0:0].copy() if report_date else working.copy()
+    signal_ts = coerce_timestamp_series(working["signal_timestamp"], utc=True)
+    local_date = signal_ts.dt.tz_convert("Asia/Kolkata").dt.strftime("%Y-%m-%d")
+    mask = pd.Series(True, index=working.index, dtype=bool)
+    if report_date:
+        mask &= local_date == str(report_date)
+    if start_date:
+        mask &= local_date >= str(start_date)
+    if end_date:
+        mask &= local_date <= str(end_date)
+    return working.loc[mask.fillna(False)].copy()
+
+
 def add_prior_signed_moves(
     frame: pd.DataFrame,
     *,
@@ -816,6 +840,9 @@ def _top_late_chase_regimes(frame: pd.DataFrame, *, min_rows: int = 5) -> list[d
 def build_entry_timing_report(
     frame: pd.DataFrame,
     *,
+    report_date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     prior_lags_minutes: tuple[int, ...] = PRIOR_LAGS_MINUTES,
     score_thresholds: tuple[int, ...] = DEFAULT_SCORE_THRESHOLDS,
     delay_lags_minutes: tuple[int, ...] = DEFAULT_DELAY_LAGS_MINUTES,
@@ -827,8 +854,14 @@ def build_entry_timing_report(
     candle_confirmation_window_minutes: int = DEFAULT_CANDLE_CONFIRMATION_WINDOW_MINUTES,
     pullback_bps: float = DEFAULT_PULLBACK_BPS,
 ) -> dict[str, Any]:
-    prepared = prepare_entry_timing_frame(
+    filtered_frame = _filter_signal_date_range(
         frame,
+        report_date=report_date,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    prepared = prepare_entry_timing_frame(
+        filtered_frame,
         prior_lags_minutes=prior_lags_minutes,
         classification_horizon_minutes=classification_horizon_minutes,
         prior_stretch_bps=prior_stretch_bps,
@@ -879,6 +912,9 @@ def build_entry_timing_report(
         "schema_version": 1,
         "generated_at": generated_at,
         "methodology": {
+            "report_date": report_date,
+            "start_date": start_date,
+            "end_date": end_date,
             "live_score_field": "runtime_composite_score",
             "excluded_hindsight_score_field": "composite_signal_score",
             "classification_horizon_minutes": int(classification_horizon_minutes),
@@ -909,6 +945,7 @@ def build_entry_timing_report(
         },
         "coverage": {
             "input_rows": int(len(frame)),
+            "rows_after_date_filter": int(len(filtered_frame)),
             "runtime_rows": int(len(runtime)),
             "mature_60m_rows": int(len(mature_60m)),
             "pending_outcome_rows": int((runtime["timing_class"] == "PENDING_OUTCOME").sum()),
@@ -1266,6 +1303,9 @@ def write_entry_timing_report(
     *,
     dataset_path: str | Path = CUMULATIVE_DATASET_PATH,
     output_dir: str | Path = DEFAULT_ENTRY_TIMING_REPORT_DIR,
+    report_date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     prior_stretch_bps: float = DEFAULT_PRIOR_STRETCH_BPS,
     future_edge_bps: float = DEFAULT_FUTURE_EDGE_BPS,
     classification_horizon_minutes: int = 60,
@@ -1281,6 +1321,9 @@ def write_entry_timing_report(
     frame = load_entry_timing_dataset(dataset)
     report = build_entry_timing_report(
         frame,
+        report_date=report_date,
+        start_date=start_date,
+        end_date=end_date,
         prior_stretch_bps=prior_stretch_bps,
         future_edge_bps=future_edge_bps,
         classification_horizon_minutes=classification_horizon_minutes,
@@ -1306,6 +1349,7 @@ def write_entry_timing_report(
         dataset_path=dataset,
         frame=frame,
         report_kind="entry_timing_diagnostics",
+        report_date=report_date,
         mode="research",
         run_evaluation=False,
         narrative=False,

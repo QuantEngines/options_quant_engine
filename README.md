@@ -302,6 +302,49 @@ quality-approved labels. It writes review artifacts under
 `research/signal_evaluation/reports/probability_calibration_experiment/` and
 does not apply the selected mapping to runtime config or parameter packs.
 
+### Probability Calibration Forward Monitor
+
+```bash
+python scripts/ops/run_probability_calibration_forward_monitor.py
+python scripts/ops/run_probability_calibration_forward_monitor.py --date YYYY-MM-DD --min-session-count 1
+```
+
+This research-only monitor checks runtime move-probability calibration after
+outcomes mature. Use the default run for cumulative evidence and the
+date-filtered run for a single session. It writes JSON, Markdown, and CSV
+artifacts under
+`research/signal_evaluation/reports/probability_calibration_forward_monitor/`.
+It does not change live probabilities, runtime config, parameter packs, data
+sources, or execution behavior.
+
+### Decision Quality Convergence Diagnostic
+
+```bash
+python scripts/ops/run_decision_quality_convergence.py
+python scripts/ops/run_decision_quality_convergence.py --date YYYY-MM-DD
+```
+
+This research-only diagnostic studies whether existing live-safe ingredients
+can eventually converge into one operator-facing decision-quality metric. It
+compares trade strength, runtime composite, move probability, option
+efficiency, TA timing, candidate blends, effective gate states, and
+trade-strength/runtime score grids against matured labels. Candidate blends in
+this report are diagnostics only and must not be wired into live scoring
+without fresh-forward validation.
+
+### Entry Timing Diagnostic
+
+```bash
+python scripts/ops/run_entry_timing_diagnostics.py
+python scripts/ops/run_entry_timing_diagnostics.py --date YYYY-MM-DD
+```
+
+This research-only diagnostic studies first runtime-threshold crossings,
+delayed entry, pullback/retest, second confirmation, and candle-confirmed entry
+paths using live-time `runtime_composite_score` only. Use the date-filtered
+run for a single session and the default run for cumulative evidence. It does
+not change live timing rules or trade decisions.
+
 ### Segmented Probability Calibration Experiment
 
 ```bash
@@ -461,6 +504,22 @@ packs, data sources, candidate bundles, or execution behavior. Use
 `--outcome-refresh-source skip` to inspect the existing dataset without
 refreshing labels, or `--outcome-refresh-source default_provider` when an
 external research backfill provider is explicitly desired.
+
+### Segmented Probability Daily Guarded Refresh
+
+```bash
+python scripts/ops/run_daily_guarded_refresh.py
+```
+
+Use this after a data-rich session when the regular soak reports
+`SOAK_GUARDED_BUNDLE_STALENESS_BLOCKED`. The helper runs the ordinary soak,
+refreshes the segmented calibration, EV shadow, rejection attribution, guarded
+EV, guarded bundle, and guard-aware validation research artifacts when the
+bundle is stale, then runs a final soak against the refreshed guarded bundle.
+It is still research-only: it does not change runtime config, parameter packs,
+data sources, or execution behavior. Use `--force-refresh` to rebuild the
+research artifacts even when the initial soak is not stale-blocked, and
+`--skip-initial-soak` when outcomes have already been refreshed separately.
 
 ### Segmented Probability Guarded Candidate Staleness
 

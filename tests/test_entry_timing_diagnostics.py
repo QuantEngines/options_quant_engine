@@ -78,6 +78,34 @@ def test_build_entry_timing_report_uses_runtime_score_and_reports_diagnostic_rea
     assert "late_chase_thesis_supported" in report["diagnostic_read"]
 
 
+def test_build_entry_timing_report_filters_session_date():
+    frame = pd.concat(
+        [
+            _base_rows(),
+            pd.DataFrame(
+                [
+                    {
+                        "signal_timestamp": "2026-05-21T09:30:00+05:30",
+                        "direction": "CALL",
+                        "runtime_composite_score": 65,
+                        "spot_at_signal": 10100,
+                        "signed_return_60m_bps": 15,
+                        "correct_60m": 1,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    report = build_entry_timing_report(frame, report_date="2026-05-21")
+
+    assert report["methodology"]["report_date"] == "2026-05-21"
+    assert report["coverage"]["input_rows"] == 4
+    assert report["coverage"]["rows_after_date_filter"] == 1
+    assert report["coverage"]["runtime_rows"] == 1
+
+
 def test_build_entry_timing_report_compares_entry_strategies_and_candle_states():
     frame = pd.DataFrame(
         [
