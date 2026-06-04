@@ -55,6 +55,7 @@ from research.signal_evaluation.signal_quality_model_audit import (
     _sanitize_value,
     _utc_now,
 )
+from utils.timestamp_helpers import coerce_timestamp
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -155,11 +156,11 @@ def _is_false(value: Any) -> bool:
 def _candidate_age_days(candidate_generated_at: Any, *, as_of: Any = None) -> float | None:
     if not candidate_generated_at:
         return None
-    candidate_ts = pd.to_datetime(candidate_generated_at, errors="coerce", utc=True)
-    if pd.isna(candidate_ts):
+    candidate_ts = coerce_timestamp(candidate_generated_at, fallback=None)
+    if candidate_ts is None or pd.isna(candidate_ts):
         return None
-    as_of_ts = pd.to_datetime(as_of, errors="coerce", utc=True) if as_of is not None else pd.Timestamp.now(tz="UTC")
-    if pd.isna(as_of_ts):
+    as_of_ts = coerce_timestamp(as_of, fallback=None) if as_of is not None else pd.Timestamp.now(tz="UTC")
+    if as_of_ts is None or pd.isna(as_of_ts):
         as_of_ts = pd.Timestamp.now(tz="UTC")
     return max(float((as_of_ts - candidate_ts).total_seconds()) / 86400.0, 0.0)
 

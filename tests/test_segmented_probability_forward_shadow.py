@@ -132,6 +132,27 @@ def test_forward_shadow_respects_sample_guardrails():
     assert "Collect more quality-approved forward rows" in report["recommended_next_actions"][0]
 
 
+def test_forward_shadow_parses_mixed_signal_timestamp_formats_for_forward_window():
+    frame = _shadow_frame(12)
+    frame.loc[0, "signal_timestamp"] = "2026-04-01 09:20:00+05:30"
+    frame.loc[1, "signal_timestamp"] = "2026-04-01T09:35:00+05:30"
+    frame.loc[2, "signal_timestamp"] = "2026-04-01T09:50:00.123456+05:30"
+    bundle = _candidate_bundle()
+    bundle["generated_at"] = "2026-04-01T04:05:00+00:00"
+
+    report = build_segmented_probability_forward_shadow_report(
+        frame,
+        candidate_bundle=bundle,
+        dataset_path="unit.csv",
+        validation_mode="after_candidate_generated",
+        min_shadow_sample=2,
+        min_candidate_sample=1,
+    )
+
+    assert report["validation_window"]["validation_mode_used"] == "after_candidate_generated"
+    assert report["validation_window"]["strict_forward_row_count"] == 10
+
+
 def test_forward_shadow_writer_outputs_artifacts(tmp_path: Path):
     artifact = write_segmented_probability_forward_shadow_report(
         _shadow_frame(),

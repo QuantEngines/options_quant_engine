@@ -896,6 +896,11 @@ def build_signal_evaluation_row(
         "trade_strength": trade.get("trade_strength"),
         "runtime_composite_base_score": trade.get("runtime_composite_base_score"),
         "runtime_composite_score": trade.get("runtime_composite_score"),
+        "runtime_composite_components": json.dumps(
+            trade.get("runtime_composite_components") or {},
+            sort_keys=True,
+            default=str,
+        ),
         "runtime_composite_supplement_apply_to_score": trade.get("runtime_composite_supplement_apply_to_score"),
         "runtime_composite_supplement_candidate_triggered": trade.get(
             "runtime_composite_supplement_candidate_triggered"

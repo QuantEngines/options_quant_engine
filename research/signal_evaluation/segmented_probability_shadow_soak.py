@@ -81,6 +81,7 @@ from research.signal_evaluation.signal_quality_model_audit import (
     default_signal_quality_dataset_path,
 )
 from data.spot_history import load_spot_history
+from utils.timestamp_helpers import coerce_timestamp, coerce_timestamp_series
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -206,7 +207,7 @@ def _dataset_summary(path: str | Path, *, label_field: str) -> dict[str, Any]:
         labels = pd.to_numeric(frame.get(label_field, pd.Series(dtype=float)), errors="coerce")
         summary["quality_labeled_row_count"] = int(labels.notna().sum())
     if "signal_timestamp" in frame.columns and not frame.empty:
-        timestamps = pd.to_datetime(frame["signal_timestamp"], errors="coerce", utc=True)
+        timestamps = coerce_timestamp_series(frame["signal_timestamp"], utc=True)
         if timestamps.notna().any():
             summary["latest_signal_timestamp"] = timestamps.max().isoformat()
     return _sanitize_value(summary)
@@ -219,10 +220,7 @@ def _candidate_generated_at(candidate_bundle_path: str | Path | None) -> pd.Time
         payload = json.loads(Path(candidate_bundle_path).read_text(encoding="utf-8"))
     except Exception:
         return None
-    timestamp = pd.to_datetime(payload.get("generated_at"), errors="coerce", utc=True)
-    if pd.isna(timestamp):
-        return None
-    return timestamp
+    return coerce_timestamp(payload.get("generated_at"), fallback=None)
 
 
 def _post_candidate_label_summary(
@@ -255,12 +253,12 @@ def _post_candidate_label_summary(
         return summary
     if frame.empty or "signal_timestamp" not in frame.columns:
         return summary
-    timestamps = pd.to_datetime(frame["signal_timestamp"], errors="coerce", utc=True)
+    timestamps = coerce_timestamp_series(frame["signal_timestamp"], utc=True)
     post = frame.loc[timestamps > candidate_ts].copy()
     summary["rows_after_candidate"] = int(len(post))
     if post.empty:
         return _sanitize_value(summary)
-    latest_ts = pd.to_datetime(post["signal_timestamp"], errors="coerce", utc=True)
+    latest_ts = coerce_timestamp_series(post["signal_timestamp"], utc=True)
     if latest_ts.notna().any():
         summary["latest_post_candidate_signal_timestamp"] = latest_ts.max().isoformat()
     statuses = post.get("outcome_status", pd.Series(index=post.index, dtype=object)).fillna("UNKNOWN").astype(str).str.upper()

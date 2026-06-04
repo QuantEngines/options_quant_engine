@@ -160,6 +160,15 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                 },
                 "trade_strength": 81,
                 "runtime_composite_score": 86,
+                "runtime_composite_components": {
+                    "method": "runtime_composite_v1",
+                    "pre_adjust_score": 88,
+                    "components": {
+                        "trade_strength": {"score": 81, "weight": 0.55, "weighted_contribution": 44.55},
+                        "move_probability": {"score": 72, "weight": 0.15, "weighted_contribution": 10.8},
+                    },
+                    "final_score": 86,
+                },
                 "runtime_composite_observation_tier": "OVERRIDE_85_PLUS",
                 "runtime_composite_observation_threshold": 80,
                 "runtime_composite_soft_override_threshold": 85,
@@ -428,6 +437,7 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertAlmostEqual(row_a["stop_loss_premium_return_pct"], -14.9955, places=4)
         self.assertEqual(row_a["provider_health_status"], "GOOD")
         self.assertEqual(row_a["requested_option_source"], "ICICI")
+        self.assertIn('"pre_adjust_score": 88', row_a["runtime_composite_components"])
         self.assertEqual(row_a["option_source"], "ICICI")
         self.assertEqual(row_a["spot_source"], "YFINANCE_INTRADAY")
         self.assertEqual(row_a["market_data_source_consistency"], "MIXED_SPOT_OPTION_SOURCE")

@@ -36,6 +36,7 @@ from research.signal_evaluation.signal_quality_model_audit import (
     _utc_now,
     default_signal_quality_dataset_path,
 )
+from utils.timestamp_helpers import coerce_timestamp, coerce_timestamp_series
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -173,10 +174,7 @@ def _candidate_generated_at(bundle: dict[str, Any]) -> pd.Timestamp | None:
     raw = bundle.get("generated_at")
     if not raw:
         return None
-    timestamp = pd.to_datetime(raw, errors="coerce", utc=True)
-    if pd.isna(timestamp):
-        return None
-    return timestamp
+    return coerce_timestamp(raw, fallback=None)
 
 
 def _evaluation_frame(
@@ -191,7 +189,7 @@ def _evaluation_frame(
     generated_at = _candidate_generated_at(bundle)
     future = working.iloc[0:0].copy()
     if generated_at is not None and "signal_timestamp" in working.columns:
-        timestamps = pd.to_datetime(working["signal_timestamp"], errors="coerce", utc=True)
+        timestamps = coerce_timestamp_series(working["signal_timestamp"], utc=True)
         future = working.loc[timestamps > generated_at].copy()
 
     requested = str(validation_mode or "auto").strip().lower()

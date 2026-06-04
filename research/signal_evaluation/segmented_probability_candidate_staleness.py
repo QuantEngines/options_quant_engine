@@ -33,7 +33,7 @@ from research.signal_evaluation.signal_quality_model_audit import (
     _utc_now,
     default_signal_quality_dataset_path,
 )
-from utils.timestamp_helpers import coerce_timestamp_series
+from utils.timestamp_helpers import coerce_timestamp, coerce_timestamp_series
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -99,15 +99,7 @@ def _read_dataset(path: str | Path | None) -> pd.DataFrame:
 
 
 def _parse_timestamp(value: Any) -> pd.Timestamp | None:
-    if value is None:
-        return None
-    try:
-        timestamp = pd.to_datetime(value, errors="coerce", utc=True)
-    except Exception:
-        return None
-    if pd.isna(timestamp):
-        return None
-    return timestamp
+    return coerce_timestamp(value, fallback=None)
 
 
 def _timestamp_series(frame: pd.DataFrame, column: str = "signal_timestamp") -> pd.Series:

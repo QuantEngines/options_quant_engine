@@ -2738,6 +2738,37 @@ def _compute_runtime_composite_score(
     weight_data_quality=0.10,
     weight_gamma_stability=0.05,
 ):
+    return int(
+        _runtime_composite_component_breakdown(
+            trade_strength=trade_strength,
+            hybrid_move_probability=hybrid_move_probability,
+            move_probability_score_cap=move_probability_score_cap,
+            confirmation_status=confirmation_status,
+            data_quality_status=data_quality_status,
+            gamma_vol_acceleration_score_normalized=gamma_vol_acceleration_score_normalized,
+            weight_trade_strength=weight_trade_strength,
+            weight_move_probability=weight_move_probability,
+            weight_confirmation=weight_confirmation,
+            weight_data_quality=weight_data_quality,
+            weight_gamma_stability=weight_gamma_stability,
+        )["pre_adjust_score"]
+    )
+
+
+def _runtime_composite_component_breakdown(
+    *,
+    trade_strength,
+    hybrid_move_probability,
+    move_probability_score_cap,
+    confirmation_status,
+    data_quality_status,
+    gamma_vol_acceleration_score_normalized,
+    weight_trade_strength=0.50,
+    weight_move_probability=0.20,
+    weight_confirmation=0.15,
+    weight_data_quality=0.10,
+    weight_gamma_stability=0.05,
+):
     confirmation_map = {
         "STRONG_CONFIRMATION": 100,
         "CONFIRMED": 85,
@@ -2779,14 +2810,37 @@ def _compute_runtime_composite_score(
     w_data /= w_sum
     w_gamma /= w_sum
 
-    composite = (
-        w_trade * trade_strength_score
-        + w_prob * move_probability_score
-        + w_conf * confirmation_score
-        + w_data * data_quality_score
-        + w_gamma * gamma_stability_score
-    )
-    return int(_clip(round(composite), 0, 100))
+    component_rows = [
+        ("trade_strength", trade_strength_score, w_trade),
+        ("move_probability", move_probability_score, w_prob),
+        ("confirmation", confirmation_score, w_conf),
+        ("data_quality", data_quality_score, w_data),
+        ("gamma_stability", gamma_stability_score, w_gamma),
+    ]
+    component_contributions = {
+        name: {
+            "score": round(float(score), 4),
+            "weight": round(float(weight), 6),
+            "weighted_contribution": round(float(score) * float(weight), 4),
+            "weighted_deficit_to_100": round((100.0 - float(score)) * float(weight), 4),
+        }
+        for name, score, weight in component_rows
+    }
+    composite = sum(item["weighted_contribution"] for item in component_contributions.values())
+    pre_adjust_score = int(_clip(round(composite), 0, 100))
+    return {
+        "method": "runtime_composite_v1",
+        "score_units": "0_100",
+        "pre_adjust_score": pre_adjust_score,
+        "raw_weighted_score": round(float(composite), 4),
+        "move_probability_score_cap": _safe_float(move_probability_score_cap, 75.0),
+        "confirmation_status": _as_upper(confirmation_status),
+        "data_quality_status": _as_upper(data_quality_status),
+        "gamma_vol_acceleration_score_normalized": int(
+            _clip(_safe_float(gamma_vol_acceleration_score_normalized, 0.0), 0, 100)
+        ),
+        "components": component_contributions,
+    }
 
 
 def _nearest_wall_bucket_from_payload(payload):
@@ -6107,7 +6161,7 @@ def generate_trade(
             )
     base_payload["runtime_probability_input"] = composite_probability_input
 
-    runtime_composite_score = _compute_runtime_composite_score(
+    runtime_composite_components = _runtime_composite_component_breakdown(
         trade_strength=adjusted_trade_strength,
         hybrid_move_probability=composite_probability_input,
         move_probability_score_cap=runtime_thresholds.get("move_probability_score_cap"),
@@ -6120,8 +6174,11 @@ def generate_trade(
         weight_data_quality=runtime_thresholds.get("composite_weight_data_quality", 0.10),
         weight_gamma_stability=runtime_thresholds.get("composite_weight_gamma_stability", 0.05),
     )
+    runtime_composite_score = int(runtime_composite_components["pre_adjust_score"])
+    runtime_composite_components["feature_reliability_composite_penalty"] = int(feature_reliability_composite_penalty)
     if feature_reliability_composite_penalty > 0:
         runtime_composite_score = int(_clip(runtime_composite_score - feature_reliability_composite_penalty, 0, 100))
+    runtime_composite_components["after_feature_reliability_score"] = int(runtime_composite_score)
 
     regime_adjusted_composite_score = _apply_regime_composite_score_adjustment(
         runtime_composite_score,
@@ -6130,7 +6187,11 @@ def generate_trade(
         runtime_thresholds,
     )
     base_payload["regime_composite_adjustment_delta"] = regime_adjusted_composite_score - runtime_composite_score
+    runtime_composite_components["regime_composite_adjustment_delta"] = int(
+        regime_adjusted_composite_score - runtime_composite_score
+    )
     runtime_composite_score = regime_adjusted_composite_score
+    runtime_composite_components["after_regime_adjustment_score"] = int(runtime_composite_score)
 
     # Apply score calibration if enabled
     enable_calibration = bool(int(_safe_float(runtime_thresholds.get("enable_score_calibration"), 1.0)))
@@ -6145,12 +6206,15 @@ def generate_trade(
     base_payload["score_calibration_backend"] = calibration_backend if enable_calibration else None
     base_payload["score_calibration_artifact_path"] = calibrator_path if enable_calibration else None
     if enable_calibration:
+        calibration_input_score = int(runtime_composite_score)
         runtime_composite_score = apply_score_calibration(
             raw_composite_score=runtime_composite_score,
             calibration_backend=calibration_backend,
             calibrator_path=calibrator_path,
             calibration_context=calibration_context,
         )
+        runtime_composite_components["score_calibration_input_score"] = calibration_input_score
+        runtime_composite_components["score_calibration_output_score"] = int(runtime_composite_score)
         calibration_metadata = get_calibrator_runtime_metadata(
             calibrator_path,
             calibration_context=calibration_context,
@@ -6161,6 +6225,10 @@ def generate_trade(
             base_payload["score_calibration_artifact_path"] = loaded_artifact_path
         base_payload["score_calibration_segment_key"] = calibration_metadata.get("selected_segment_key")
         base_payload["score_calibration_segment_context"] = calibration_metadata.get("selected_segment_context") or {}
+        runtime_composite_components["score_calibration_applied"] = bool(calibration_metadata.get("calibrator_loaded"))
+        runtime_composite_components["score_calibration_segment_key"] = calibration_metadata.get("selected_segment_key")
+    else:
+        runtime_composite_components["score_calibration_applied"] = False
 
     regime_segment_guard = _compute_regime_segment_guard(
         payload={**base_payload, "direction": direction, "vol_regime": calibration_context.get("vol_regime")},
@@ -6275,8 +6343,12 @@ def generate_trade(
         base_payload["time_decay_factor"] = round(_safe_float(decay_factor, 1.0), 6)
         base_payload["time_decay_applied"] = True
         runtime_composite_score = int(runtime_composite_score * decay_factor)
+        runtime_composite_components["time_decay_factor"] = round(_safe_float(decay_factor, 1.0), 6)
+        runtime_composite_components["after_time_decay_score"] = int(runtime_composite_score)
     elif enable_decay:
         base_payload["time_decay_factor"] = 1.0
+        runtime_composite_components["time_decay_factor"] = 1.0
+        runtime_composite_components["after_time_decay_score"] = int(runtime_composite_score)
     
     runtime_composite_base_score = int(_clip(runtime_composite_score, 0, 100))
     runtime_composite_supplement = _compute_runtime_composite_live_supplement(
@@ -6290,7 +6362,19 @@ def generate_trade(
     runtime_composite_supplement_candidate_triggered = bool(runtime_composite_supplement.get("applied"))
     if runtime_composite_supplement_candidate_triggered and runtime_composite_supplement_apply_to_score:
         runtime_composite_score = int(_clip(runtime_composite_supplement.get("adjusted_score"), 0, 100))
+    runtime_composite_components["supplement_candidate_triggered"] = runtime_composite_supplement_candidate_triggered
+    runtime_composite_components["supplement_apply_to_score"] = runtime_composite_supplement_apply_to_score
+    runtime_composite_components["supplement_candidate_adjustment"] = int(
+        _safe_float(runtime_composite_supplement.get("score_adjustment"), 0.0)
+    )
+    runtime_composite_components["supplement_score_adjustment"] = (
+        int(_safe_float(runtime_composite_supplement.get("score_adjustment"), 0.0))
+        if runtime_composite_supplement_apply_to_score
+        else 0
+    )
+    runtime_composite_components["final_score"] = int(runtime_composite_score)
     base_payload["runtime_composite_base_score"] = runtime_composite_base_score
+    base_payload["runtime_composite_components"] = runtime_composite_components
     base_payload["runtime_composite_live_supplement"] = runtime_composite_supplement
     base_payload["runtime_composite_supplement_apply_to_score"] = runtime_composite_supplement_apply_to_score
     base_payload["runtime_composite_supplement_candidate_triggered"] = runtime_composite_supplement_candidate_triggered

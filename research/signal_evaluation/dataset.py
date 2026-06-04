@@ -158,6 +158,7 @@ SIGNAL_DATASET_COLUMNS = [
     "trade_strength",
     "runtime_composite_base_score",
     "runtime_composite_score",
+    "runtime_composite_components",
     "runtime_composite_supplement_apply_to_score",
     "runtime_composite_supplement_candidate_triggered",
     "runtime_composite_supplement_applied",

@@ -64,7 +64,10 @@ def coerce_timestamp(value, *, tz: str | None = None, fallback=None):
     if value is None:
         return fallback
     try:
-        ts = pd.to_datetime(value, errors="coerce", utc=True)
+        try:
+            ts = pd.to_datetime(value, errors="coerce", format="mixed", utc=True)
+        except (TypeError, ValueError):
+            ts = pd.to_datetime(value, errors="coerce", utc=True)
         if ts is pd.NaT:
             return fallback
         if tz:
