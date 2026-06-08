@@ -41,6 +41,7 @@ from config.direction_probability_policy import (
 from config.event_window_policy import EventWindowPolicyConfig
 from config.gamma_vol_acceleration_policy import GammaVolAccelerationPolicyConfig
 from config.global_risk_policy import GlobalRiskPolicyConfig
+from config.historical_context_policy import HISTORICAL_CONTEXT_POLICY
 from config.large_move_policy import LARGE_MOVE_PROBABILITY_CONFIG
 from config.news_keyword_policy import HEADLINE_RULES
 from config.news_category_policy import (
@@ -131,6 +132,12 @@ GROUP_TUNING_METADATA = {
         "validation_mode": "walk_forward_regime_aware",
         "overfit_risk": "high",
         "tuning_priority": 28,
+    },
+    "historical_context": {
+        "search_strategy": "latin_hypercube",
+        "validation_mode": "walk_forward_regime_aware",
+        "overfit_risk": "high",
+        "tuning_priority": 29,
     },
     "option_efficiency": {
         "search_strategy": "coordinate_descent",
@@ -1405,6 +1412,23 @@ def build_default_parameter_registry() -> ParameterRegistry:
             category="core",
             config_obj=GlobalRiskPolicyConfig(),
             description_prefix="Global risk policy parameter",
+        )
+    )
+    historical_context_numeric_policy = {
+        name: value
+        for name, value in HISTORICAL_CONTEXT_POLICY.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    definitions.extend(
+        _from_mapping(
+            prefix="historical_context.core",
+            module="config.historical_context_policy",
+            group="historical_context",
+            category="core",
+            mapping=historical_context_numeric_policy,
+            description_prefix="Historical-context fallback prior parameter",
+            min_value=-1000000.0,
+            max_value=1000000.0,
         )
     )
     definitions.extend(

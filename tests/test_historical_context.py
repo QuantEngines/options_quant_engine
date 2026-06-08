@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from config.historical_context_policy import HISTORICAL_CONTEXT_POLICY_VERSION
+from config.policy_resolver import temporary_parameter_pack
 from engine.trading_support.historical_context import build_historical_context
+from tuning.registry import get_parameter_registry
 
 
 def _test_interaction_artifact():
@@ -68,6 +71,8 @@ def test_historical_context_builds_live_priors_and_direction_fallback():
     )
 
     assert context["version"] == "historical_context_v1"
+    assert context["policy_version"] == HISTORICAL_CONTEXT_POLICY_VERSION
+    assert context["policy_source"] == "config.historical_context_policy"
     assert context["decision_mode"] == "LIVE_APPLIED"
     assert context["apply_to_live_decision"] is True
     assert context["volatility_context"]["bucket"] == "HIGH"
@@ -81,6 +86,34 @@ def test_historical_context_builds_live_priors_and_direction_fallback():
     assert context["size_multiplier"] < 1.0
     assert context["pcr_context"]["interpretation"] == "support_or_pinning_context_not_automatic_bearish_signal"
     assert "high_pcr_as_pinning_not_bearish" in context["primary_notes"]
+
+
+def test_historical_context_policy_pack_override_changes_runtime_prior_without_code_change():
+    with temporary_parameter_pack(
+        overrides={"historical_context.core.us_vix_drop_quintile_pct": -7.0},
+    ):
+        context = build_historical_context(
+            spot=23400.0,
+            market_state={"atm_iv": 16.0},
+            global_risk_state={
+                "global_risk_features": {
+                    "india_vix_level": 16.0,
+                    "us_vix_change_24h": -6.0,
+                }
+            },
+        )
+
+    assert context["global_directional_prior"]["prior_direction"] == "NEUTRAL"
+    assert context["global_directional_prior"]["evidence_count"] == 0
+
+
+def test_historical_context_policy_parameters_are_registered():
+    registry = get_parameter_registry()
+
+    definition = registry.get("historical_context.core.us_vix_drop_quintile_pct")
+    assert definition.module == "config.historical_context_policy"
+    assert definition.group == "historical_context"
+    assert definition.default_value == -5.189
 
 
 def test_historical_context_uses_vix_drop_as_call_evidence_only_when_drop_is_extreme():

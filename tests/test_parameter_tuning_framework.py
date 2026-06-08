@@ -125,6 +125,8 @@ def test_parameter_registry_exposes_key_groups():
     assert "headline_rules.geopolitics.vol_weight" in registry.keys()
     assert "macro_news.adjustment.lockdown_adjustment_score" in registry.keys()
     assert "global_risk.core.risk_adjustment_extreme" in registry.keys()
+    assert "historical_context.core.us_vix_drop_quintile_pct" in registry.keys()
+    assert "historical_context.core.prior_conflict_threshold_adjustment" in registry.keys()
     assert "strike_selection.core.strike_window_steps" in registry.keys()
     assert "strike_selection.core.enhanced_weight_liquidity" in registry.keys()
     assert "strike_selection.core.payoff_weight_delta_alignment" in registry.keys()
