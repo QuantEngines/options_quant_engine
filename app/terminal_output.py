@@ -27,7 +27,13 @@ from datetime import date
 from pathlib import Path
 
 from analytics.greeks_engine import compute_option_greeks, _parse_expiry_years
+from analytics.price_structure import (
+    add_price_structure_research_overlays,
+    build_price_structure_state,
+    resolve_session_anchor_levels as _resolve_session_anchor_levels,
+)
 from analytics.signal_confidence import compute_signal_confidence
+from config.global_risk_policy import get_global_risk_policy_config
 from engine.runtime_metadata import TRADER_VIEW_KEYS, build_trader_view
 from utils.consistency_checks import collect_trade_consistency_findings
 from utils.regime_normalization import canonical_gamma_regime
@@ -333,6 +339,121 @@ def _format_provider_quality_market_summary(trade):
     return "; ".join(str(item) for item in parts[:4])
 
 
+def _as_float_or_none(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_bool_or_none(value):
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return None
+    token = str(value).strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _is_lagged_context_stale(*, staleness_days=None, data_available=None, stale_flag=None):
+    explicit_stale = _as_bool_or_none(stale_flag)
+    if explicit_stale is not None:
+        return explicit_stale
+    available = _as_bool_or_none(data_available)
+    if available is False and staleness_days not in (None, ""):
+        return True
+    return False
+
+
+def _format_lagged_context_status(*, date_value, source, staleness_days, data_available=None, stale_flag=None):
+    if not date_value:
+        return "available" if data_available is True else "unavailable"
+    stale = _is_lagged_context_stale(
+        staleness_days=staleness_days,
+        data_available=data_available,
+        stale_flag=stale_flag,
+    )
+    status = f"{'STALE ' if stale else ''}{date_value}"
+    if source:
+        status += f" via {source}"
+    if staleness_days not in (None, ""):
+        try:
+            lag_text = f"{int(float(staleness_days))}d lag"
+        except (TypeError, ValueError):
+            lag_text = f"{staleness_days} lag"
+        if stale:
+            lag_text += "; research only"
+        status += f" ({lag_text})"
+    elif stale:
+        status += " (stale; research only)"
+    return status
+
+
+def _mark_stale_value(value, *, stale=False):
+    if value in (None, ""):
+        return value
+    return f"{value} [STALE]" if stale else value
+
+
+def _format_global_risk_state_score(global_risk_state):
+    """Format the raw macro/global state score without conflating it with overlay gating."""
+    if not isinstance(global_risk_state, dict):
+        return None
+    score = _as_float_or_none(global_risk_state.get("global_risk_score"))
+    if score is None:
+        return global_risk_state.get("global_risk_score")
+    state = str(global_risk_state.get("global_risk_state") or "").upper().strip()
+    try:
+        risk_off_threshold = float(get_global_risk_policy_config().risk_off_threshold)
+    except Exception:
+        risk_off_threshold = 55.0
+    score_text = f"{score:.0f}" if score.is_integer() else f"{score:.2f}"
+    if state == "RISK_OFF" and score < risk_off_threshold:
+        return f"{score_text} (macro-driven)"
+    return score_text
+
+
+def _format_global_risk_overlay_score(trade, raw_state_score=None):
+    """Format the later tradeability/risk-gate score when it differs from the raw state score."""
+    if not isinstance(trade, dict):
+        return None
+    overlay = _as_float_or_none(trade.get("global_risk_overlay_score"))
+    if overlay is None:
+        return None
+    raw = _as_float_or_none(raw_state_score)
+    overlay_text = f"{overlay:.0f}" if overlay.is_integer() else f"{overlay:.2f}"
+    if raw is not None and abs(overlay - raw) > 1e-9:
+        return f"{overlay_text} (gate/overlay)"
+    return overlay_text
+
+
+def _format_global_risk_drivers(global_risk_state, max_items=3):
+    """Summarize the largest raw global-risk score contributors for compact output."""
+    if not isinstance(global_risk_state, dict):
+        return None
+    diagnostics = global_risk_state.get("global_risk_diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    contributions = diagnostics.get("component_contributions")
+    if not isinstance(contributions, dict) or not contributions:
+        return None
+    parsed = []
+    for key, value in contributions.items():
+        numeric = _as_float_or_none(value)
+        if numeric is None or abs(numeric) < 1e-9:
+            continue
+        parsed.append((str(key), numeric))
+    if not parsed:
+        return None
+    parsed.sort(key=lambda item: abs(item[1]), reverse=True)
+    return "; ".join(f"{key} {value:+.2f}" for key, value in parsed[:max_items])
+
+
 def _format_pct_change(value):
     if value in (None, ""):
         return None
@@ -399,6 +520,10 @@ def _build_global_macro_snapshot_fields(*, trade=None, global_market_snapshot=No
     snapshot = global_market_snapshot if isinstance(global_market_snapshot, dict) else {}
     market_inputs = snapshot.get("market_inputs") if isinstance(snapshot.get("market_inputs"), dict) else {}
     global_features = trade.get("global_risk_features") if isinstance(trade.get("global_risk_features"), dict) else {}
+    flow_snapshot = snapshot.get("institutional_flow_snapshot")
+    flow_snapshot = flow_snapshot if isinstance(flow_snapshot, dict) else {}
+    bond_snapshot = snapshot.get("india_bond_yield_snapshot")
+    bond_snapshot = bond_snapshot if isinstance(bond_snapshot, dict) else {}
 
     def pick(*keys):
         for key in keys:
@@ -411,20 +536,23 @@ def _build_global_macro_snapshot_fields(*, trade=None, global_market_snapshot=No
     flow_date = pick("institutional_flow_date")
     flow_source = pick("institutional_flow_source")
     flow_staleness = pick("institutional_flow_staleness_days")
-    flow_status = None
+    flow_data_available = pick("institutional_flow_data_available")
+    if flow_data_available is None:
+        flow_data_available = flow_snapshot.get("data_available")
+    flow_stale = _is_lagged_context_stale(
+        staleness_days=flow_staleness,
+        data_available=flow_data_available,
+        stale_flag=flow_snapshot.get("stale"),
+    )
     if flow_date:
-        flow_status = f"{flow_date}"
-        if flow_source:
-            flow_status += f" via {flow_source}"
-        if flow_staleness not in (None, ""):
-            try:
-                flow_status += f" ({int(float(flow_staleness))}d lag)"
-            except (TypeError, ValueError):
-                flow_status += f" ({flow_staleness} lag)"
-    elif any(
-        pick(field) is not None
-        for field in ("fii_cash_net", "dii_cash_net", "fii_index_futures_net", "fii_index_options_net")
-    ):
+        flow_status = _format_lagged_context_status(
+            date_value=flow_date,
+            source=flow_source,
+            staleness_days=flow_staleness,
+            data_available=flow_data_available,
+            stale_flag=flow_snapshot.get("stale"),
+        )
+    elif any(pick(field) is not None for field in ("fii_cash_net", "dii_cash_net", "fii_index_futures_net", "fii_index_options_net")):
         flow_status = "available"
     else:
         flow_status = "unavailable"
@@ -432,16 +560,22 @@ def _build_global_macro_snapshot_fields(*, trade=None, global_market_snapshot=No
     bond_date = pick("india_bond_yield_date")
     bond_source = pick("india_bond_yield_source")
     bond_staleness = pick("india_bond_yield_staleness_days")
-    bond_status = None
+    bond_data_available = pick("india_bond_yield_data_available")
+    if bond_data_available is None:
+        bond_data_available = bond_snapshot.get("data_available")
+    bond_stale = _is_lagged_context_stale(
+        staleness_days=bond_staleness,
+        data_available=bond_data_available,
+        stale_flag=bond_snapshot.get("stale"),
+    )
     if bond_date:
-        bond_status = f"{bond_date}"
-        if bond_source:
-            bond_status += f" via {bond_source}"
-        if bond_staleness not in (None, ""):
-            try:
-                bond_status += f" ({int(float(bond_staleness))}d lag)"
-            except (TypeError, ValueError):
-                bond_status += f" ({bond_staleness} lag)"
+        bond_status = _format_lagged_context_status(
+            date_value=bond_date,
+            source=bond_source,
+            staleness_days=bond_staleness,
+            data_available=bond_data_available,
+            stale_flag=bond_snapshot.get("stale"),
+        )
     elif pick("india_10y_yield") is not None:
         bond_status = "available"
     else:
@@ -455,17 +589,20 @@ def _build_global_macro_snapshot_fields(*, trade=None, global_market_snapshot=No
         "crude_24h": _format_pct_change(pick("oil_change_24h")),
         "us_vix_24h": _format_pct_change(pick("us_vix_change_24h", "vix_change_24h")),
         "us_10y": _format_yield_with_change(pick("us10y_yield"), pick("us10y_change_bp")),
-        "india_10y": _format_yield_with_change(pick("india_10y_yield"), pick("india_10y_change_bp")),
-        "india_us_10y_spread": _format_bp_change(pick("india_us_10y_spread_bp")),
-        "india_2s10s": _format_bp_change(pick("india_2y10y_spread_bp")),
+        "india_10y": _mark_stale_value(
+            _format_yield_with_change(pick("india_10y_yield"), pick("india_10y_change_bp")),
+            stale=bond_stale,
+        ),
+        "india_us_10y_spread": _mark_stale_value(_format_bp_change(pick("india_us_10y_spread_bp")), stale=bond_stale),
+        "india_2s10s": _mark_stale_value(_format_bp_change(pick("india_2y10y_spread_bp")), stale=bond_stale),
         "india_bond_data": bond_status,
         "dxy_24h": _format_pct_change(pick("dxy_change_24h")),
         "usdinr_24h": _format_pct_change(pick("usdinr_change_24h")),
         "gift_nifty_24h": _format_pct_change(pick("gift_nifty_change_24h")),
-        "fii_cash_net": _format_signed_number(pick("fii_cash_net")),
-        "dii_cash_net": _format_signed_number(pick("dii_cash_net")),
-        "fii_index_fut_net": _format_signed_number(pick("fii_index_futures_net")),
-        "fii_index_opt_net": _format_signed_number(pick("fii_index_options_net")),
+        "fii_cash_net": _mark_stale_value(_format_signed_number(pick("fii_cash_net")), stale=flow_stale),
+        "dii_cash_net": _mark_stale_value(_format_signed_number(pick("dii_cash_net")), stale=flow_stale),
+        "fii_index_fut_net": _mark_stale_value(_format_signed_number(pick("fii_index_futures_net")), stale=flow_stale),
+        "fii_index_opt_net": _mark_stale_value(_format_signed_number(pick("fii_index_options_net")), stale=flow_stale),
         "fii_dii_flow": flow_status,
     }
     macro_or_flow_values = [
@@ -1835,9 +1972,102 @@ def _resolve_top_oi_strikes(trade, option_chain_frame, *, top_n=5, formatted=Tru
     return _format(top_calls), _format(top_puts)
 
 
-def _render_market_summary_levels_table(*, spot, resistances, supports, call_oi, put_oi, sort_mode="GROUPED"):
+def _format_market_level(level):
+    try:
+        level_f = float(level)
+    except (TypeError, ValueError):
+        return str(level)
+    if abs(level_f - round(level_f)) < 1e-6:
+        return f"{level_f:.0f}"
+    return f"{level_f:.1f}"
+
+
+def _resolve_fibonacci_retracement_levels(*, spot, day_high, day_low, top_n=3):
+    """Resolve nearest intraday Fibonacci retracement supports/resistances."""
+    try:
+        spot_f = float(spot)
+        high_f = float(day_high)
+        low_f = float(day_low)
+    except (TypeError, ValueError):
+        return []
+    if not all(math.isfinite(value) for value in (spot_f, high_f, low_f)):
+        return []
+    if high_f <= low_f:
+        return []
+
+    range_points = high_f - low_f
+    ratios = (
+        (0.000, "0.0%"),
+        (0.236, "23.6%"),
+        (0.382, "38.2%"),
+        (0.500, "50.0%"),
+        (0.618, "61.8%"),
+        (0.786, "78.6%"),
+        (1.000, "100.0%"),
+    )
+    levels = []
+    seen = set()
+    for ratio, label in ratios:
+        level = high_f - (range_points * ratio)
+        level_key = round(level, 6)
+        if level_key in seen:
+            continue
+        seen.add(level_key)
+        levels.append((level, label))
+
+    supports = sorted(
+        [(level, label) for level, label in levels if level <= spot_f],
+        key=lambda item: item[0],
+        reverse=True,
+    )[:top_n]
+    resistances = sorted(
+        [(level, label) for level, label in levels if level >= spot_f],
+        key=lambda item: item[0],
+    )[:top_n]
+
+    rows = []
+    for rank, (level, label) in enumerate(resistances, start=1):
+        rows.append(("resistance", rank, level, label))
+    for rank, (level, label) in enumerate(supports, start=1):
+        rows.append(("support", rank, level, label))
+    return rows
+
+
+def _resolve_price_structure_levels(
+    *,
+    spot,
+    day_open=None,
+    day_high=None,
+    day_low=None,
+    prev_close=None,
+    top_n=3,
+):
+    """Resolve nearest display-only session anchors around spot."""
+    return _resolve_session_anchor_levels(
+        spot=spot,
+        day_open=day_open,
+        day_high=day_high,
+        day_low=day_low,
+        prev_close=prev_close,
+        top_n=top_n,
+    )
+
+
+def _render_market_summary_levels_table(
+    *,
+    spot,
+    resistances,
+    supports,
+    call_oi,
+    put_oi,
+    fib_rows=None,
+    price_structure_rows=None,
+    sort_mode="GROUPED",
+):
     """Render support/resistance and high-OI strikes as separate compact tables."""
     structural_rows = []
+    fib_rows = list(fib_rows or [])
+    price_structure_rows = list(price_structure_rows or [])
     oi_rows = []
 
     def _dist(level):
@@ -1904,7 +2134,7 @@ def _render_market_summary_levels_table(*, spot, resistances, supports, call_oi,
             )
         )
 
-    if not structural_rows and not oi_rows:
+    if not structural_rows and not fib_rows and not price_structure_rows and not oi_rows:
         return
 
     mode = str(sort_mode or "GROUPED").upper().strip()
@@ -1931,6 +2161,27 @@ def _render_market_summary_levels_table(*, spot, resistances, supports, call_oi,
         print("  kind       rank strike   dist_pts dist_%")
         for kind, rank, strike, dist_pts, dist_pct, _oi_str, _oi_num in structural_rows:
             print(f"  {kind:<10} {rank:>4} {strike:>7} {dist_pts:>9} {dist_pct:>8}")
+
+    if fib_rows:
+        print("\n  FIBONACCI RETRACEMENT")
+        print("  kind       rank level    ratio   dist_pts dist_%")
+        for kind, rank, level, ratio_label in fib_rows:
+            d_pts, d_pct = _dist(level)
+            print(
+                f"  {kind:<10} {rank:>4} "
+                f"{_format_market_level(level):>7} {ratio_label:>7} {d_pts:>9} {d_pct:>8}"
+            )
+
+    if price_structure_rows:
+        anchor_width = max(len("anchor"), *(len(str(row[3])) for row in price_structure_rows))
+        print("\n  PRICE STRUCTURE LEVELS")
+        print(f"  kind       rank level    {'anchor':<{anchor_width}} dist_pts dist_%")
+        for kind, rank, level, anchor in price_structure_rows:
+            d_pts, d_pct = _dist(level)
+            print(
+                f"  {kind:<10} {rank:>4} "
+                f"{_format_market_level(level):>7} {str(anchor):<{anchor_width}} {d_pts:>9} {d_pct:>8}"
+            )
 
     if oi_rows:
         print("\n  HIGHEST OI STRIKES")
@@ -1972,6 +2223,191 @@ def _render_market_summary_levels_table(*, spot, resistances, supports, call_oi,
                 print("  note: * indicates live snapshot OI delta proxy (5m rolling baseline when available, prior snapshot otherwise); inference confidence decomposes 1m/3m/5m premium baselines with previous-snapshot and underlying-proxy fallback")
         else:
             print("  note: inference confidence decomposes 1m/3m/5m premium baselines, then falls back to previous-snapshot premium delta and underlying move vs prev_close proxy")
+
+
+def _resolve_price_structure_context(result, spot_summary, trade=None):
+    existing = None
+    if isinstance(spot_summary, dict):
+        existing = spot_summary.get("price_structure_state")
+    if not isinstance(existing, dict) and isinstance(result, dict):
+        existing = result.get("price_structure_state")
+    symbol = None
+    if isinstance(result, dict):
+        symbol = result.get("symbol")
+    if not symbol and isinstance(spot_summary, dict):
+        symbol = spot_summary.get("symbol") or spot_summary.get("ticker")
+    state = existing if isinstance(existing, dict) else build_price_structure_state(str(symbol or "NIFTY"), spot_summary or {})
+    return add_price_structure_research_overlays(
+        state,
+        spot_summary=spot_summary or {},
+        trade=trade if isinstance(trade, dict) else None,
+    )
+
+
+def _format_structure_distance(points, pct):
+    points_f = _as_float_or_none(points)
+    pct_f = _as_float_or_none(pct)
+    if points_f is None or pct_f is None:
+        return None
+    return f"{points_f:+.1f}pts / {pct_f:+.2f}%"
+
+
+def _format_price_structure_level(value, state, dist_pts, dist_pct, *, source=None):
+    value_f = _as_float_or_none(value)
+    if value_f is None:
+        return None
+    distance = _format_structure_distance(dist_pts, dist_pct)
+    parts = [_format_market_level(value_f)]
+    if state:
+        parts.append(str(state))
+    if distance:
+        parts.append(f"({distance})")
+    if source:
+        parts.append(f"via {source}")
+    return " ".join(parts)
+
+
+def _format_opening_range_context(state, minutes):
+    prefix = f"opening_range_{minutes}m"
+    high = _as_float_or_none(state.get(f"{prefix}_high"))
+    low = _as_float_or_none(state.get(f"{prefix}_low"))
+    status = state.get(f"{prefix}_status")
+    relation = state.get(f"{prefix}_state")
+    row_count = _as_float_or_none(state.get(f"{prefix}_row_count"))
+    sample_quality = state.get(f"{prefix}_sample_quality")
+    if not sample_quality and row_count is not None:
+        if row_count <= 1:
+            sample_quality = "LOW_SAMPLE"
+        elif row_count < 3:
+            sample_quality = "THIN_SAMPLE"
+        else:
+            sample_quality = "OK"
+    if high is None or low is None:
+        if status and status != "UNAVAILABLE":
+            return str(status)
+        return None
+    width = _as_float_or_none(state.get(f"{prefix}_width_pts"))
+    label = f"{_format_market_level(low)}-{_format_market_level(high)}"
+    parts = [label]
+    if relation:
+        parts.append(str(relation))
+    if status:
+        parts.append(str(status))
+    if width is not None:
+        parts.append(f"width {width:.1f}pts")
+    if sample_quality and sample_quality not in {"OK", "UNAVAILABLE"}:
+        sample_text = str(sample_quality)
+        if row_count is not None:
+            sample_text += f" n={int(row_count)}"
+        parts.append(sample_text)
+    return " | ".join(parts)
+
+
+def _build_price_structure_context_fields(state):
+    if not isinstance(state, dict) or not state:
+        return {}
+    fields = {}
+    vwap_display = _format_price_structure_level(
+        state.get("price_structure_vwap"),
+        state.get("spot_vs_vwap_state"),
+        state.get("spot_vs_vwap_distance_pts"),
+        state.get("spot_vs_vwap_distance_pct"),
+        source=state.get("price_structure_vwap_source"),
+    )
+    if vwap_display:
+        fields["vwap"] = vwap_display
+    elif state.get("price_structure_vwap_source") == "UNAVAILABLE":
+        fields["vwap"] = "unavailable (spot feed has no traded-volume VWAP)"
+
+    twap_display = _format_price_structure_level(
+        state.get("price_structure_twap_proxy"),
+        state.get("spot_vs_twap_proxy_state"),
+        state.get("spot_vs_twap_proxy_distance_pts"),
+        state.get("spot_vs_twap_proxy_distance_pct"),
+        source=state.get("price_structure_twap_proxy_source"),
+    )
+    if twap_display:
+        fields["twap_proxy"] = twap_display
+
+    range_pos = _as_float_or_none(state.get("price_structure_range_position_pct"))
+    if range_pos is not None:
+        fields["day_range_position"] = f"{range_pos:.1f}% of day range"
+
+    nearest_level = state.get("nearest_price_structure_anchor_level")
+    nearest_label = state.get("nearest_price_structure_anchor_label")
+    nearest_distance = _format_structure_distance(
+        state.get("nearest_price_structure_anchor_distance_pts"),
+        state.get("nearest_price_structure_anchor_distance_pct"),
+    )
+    if nearest_level is not None and nearest_label:
+        fields["nearest_anchor"] = (
+            f"{nearest_label} {_format_market_level(nearest_level)}"
+            + (f" ({nearest_distance})" if nearest_distance else "")
+        )
+
+    pivot_display = _format_price_structure_level(
+        state.get("classic_pivot"),
+        state.get("spot_vs_pivot_state"),
+        state.get("spot_vs_pivot_distance_pts"),
+        state.get("spot_vs_pivot_distance_pct"),
+        source=state.get("prior_session_ohlc_source"),
+    )
+    if pivot_display:
+        prior_date = state.get("prior_session_date")
+        fields["classic_pivot"] = pivot_display + (f" | prior {prior_date}" if prior_date else "")
+
+    cpr_lower = state.get("cpr_lower")
+    cpr_upper = state.get("cpr_upper")
+    if cpr_lower is not None and cpr_upper is not None:
+        width = _as_float_or_none(state.get("cpr_width_pts"))
+        width_pct = _as_float_or_none(state.get("cpr_width_pct"))
+        cpr_parts = [f"{_format_market_level(cpr_lower)}-{_format_market_level(cpr_upper)}"]
+        cpr_state = state.get("spot_vs_cpr_state")
+        if cpr_state:
+            cpr_parts.append(str(cpr_state))
+        if width is not None:
+            width_text = f"width {width:.1f}pts"
+            if width_pct is not None:
+                width_text += f" ({width_pct:.2f}%)"
+            cpr_parts.append(width_text)
+        fields["cpr_band"] = " | ".join(cpr_parts)
+
+    pivot_s1 = state.get("pivot_s1")
+    pivot_r1 = state.get("pivot_r1")
+    pivot_s2 = state.get("pivot_s2")
+    pivot_r2 = state.get("pivot_r2")
+    if pivot_s1 is not None and pivot_r1 is not None:
+        pivot_parts = [f"S1 {_format_market_level(pivot_s1)}", f"R1 {_format_market_level(pivot_r1)}"]
+        if pivot_s2 is not None and pivot_r2 is not None:
+            pivot_parts.extend([f"S2 {_format_market_level(pivot_s2)}", f"R2 {_format_market_level(pivot_r2)}"])
+        fields["pivot_levels"] = " | ".join(pivot_parts)
+
+    confluence_state = state.get("price_level_confluence_state")
+    confluence_level = state.get("nearest_confluence_level")
+    confluence_distance = _format_structure_distance(
+        state.get("nearest_confluence_distance_pts"),
+        state.get("nearest_confluence_distance_pct"),
+    )
+    confluence_sources = state.get("nearest_confluence_sources")
+    if confluence_state and confluence_state != "NO_CONFLUENCE" and confluence_level is not None:
+        fields["level_confluence"] = (
+            f"{confluence_state} {_format_market_level(confluence_level)}"
+            + (f" ({confluence_distance})" if confluence_distance else "")
+            + (f" via {confluence_sources}" if confluence_sources else "")
+        )
+
+    acceptance = state.get("price_structure_acceptance_state")
+    if acceptance and acceptance != "ACCEPTANCE_UNAVAILABLE":
+        fields["acceptance_proxy"] = acceptance
+    day_type = state.get("price_structure_day_type_proxy")
+    trend_score = _as_float_or_none(state.get("price_structure_trend_day_proxy_score"))
+    if day_type and day_type != "DAY_TYPE_UNAVAILABLE":
+        fields["day_type_proxy"] = f"{day_type}" + (f" ({trend_score:.0f}/100)" if trend_score is not None else "")
+
+    for minutes in (5, 15, 30):
+        fields[f"opening_range_{minutes}m"] = _format_opening_range_context(state, minutes)
+
+    return fields
 
 
 def _persist_oi_inference_artifact(*, result, trade, spot_summary, call_oi, put_oi, signal_capture_policy=None, capture_enabled=True):
@@ -3617,6 +4053,21 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         option_chain_frame=option_chain_frame,
         precomputed_oi_levels=(_top_call_oi_levels, _top_put_oi_levels),
     ) if trade else ([], [])
+    _fib_retracement_rows = _resolve_fibonacci_retracement_levels(
+        spot=spot,
+        day_high=spot_summary.get("day_high"),
+        day_low=spot_summary.get("day_low"),
+        top_n=3,
+    )
+    _price_structure_rows = _resolve_price_structure_levels(
+        spot=spot,
+        day_open=spot_summary.get("day_open"),
+        day_high=spot_summary.get("day_high"),
+        day_low=spot_summary.get("day_low"),
+        prev_close=spot_summary.get("prev_close"),
+        top_n=3,
+    )
+    _price_structure_state = _resolve_price_structure_context(result, spot_summary, trade=trade)
 
     _provenance_fields = _market_data_provenance_fields(result=result, trade=trade)
     _print_section("MARKET SUMMARY", {
@@ -3645,8 +4096,13 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
         supports=_top_support_levels,
         call_oi=_top_call_oi_levels,
         put_oi=_top_put_oi_levels,
+        fib_rows=_fib_retracement_rows,
+        price_structure_rows=_price_structure_rows,
         sort_mode=market_levels_sort_mode,
     )
+    _price_structure_context_fields = _build_price_structure_context_fields(_price_structure_state)
+    if _price_structure_context_fields:
+        _print_section("PRICE STRUCTURE CONTEXT", _price_structure_context_fields)
 
     _global_macro_fields = _build_global_macro_snapshot_fields(
         trade=trade,
@@ -4116,23 +4572,18 @@ def render_compact(*, result, trade, spot_summary, macro_event_state,
     else:
         oe_display = oe_status
 
-    # global_risk state label is already shown in REGIME SUMMARY; avoid duplication here.
-    # Annotate the score when the RISK_OFF state is driven by macro regime rather than
-    # the numeric score alone (score < 50 but state = RISK_OFF indicates macro override).
+    # The raw global-risk state score and the later tradeability overlay score
+    # answer different questions. Show both when they differ so COMPACT output
+    # does not imply that a macro state score is the final gate score.
     _grs_score = global_risk_state.get("global_risk_score")
-    _grs_state = global_risk_state.get("global_risk_state")
-    if (
-        _grs_score is not None
-        and isinstance(_grs_score, (int, float))
-        and _grs_state == "RISK_OFF"
-        and _grs_score < 50
-    ):
-        _grs_display = f"{_grs_score} (macro-driven)"
-    else:
-        _grs_display = _grs_score
+    _grs_display = _format_global_risk_state_score(global_risk_state)
+    _grs_overlay_display = _format_global_risk_overlay_score(trade, raw_state_score=_grs_score)
+    _grs_driver_display = _format_global_risk_drivers(global_risk_state)
 
     risk_fields = {
         "global_risk_state_score": _grs_display,
+        "global_risk_overlay_score": _grs_overlay_display,
+        "global_risk_drivers": _grs_driver_display,
         "event_lockdown": event_lock if event_lock else None,
         "watchlist": watchlist if watchlist else None,
         "macro_news_status": trade.get("macro_news_status"),

@@ -312,8 +312,8 @@ def upsert_india_bond_yield_row(row: dict, *, path: str | Path = DEFAULT_BOND_YI
     if output_path.exists():
         existing = pd.read_csv(output_path)
 
-    incoming = pd.DataFrame([row])
-    frame = pd.concat([existing, incoming], ignore_index=True, sort=False)
+    existing_rows = existing.to_dict("records") if not existing.empty else []
+    frame = pd.DataFrame.from_records([*existing_rows, row])
 
     for column in STANDARD_COLUMNS:
         if column not in frame.columns:

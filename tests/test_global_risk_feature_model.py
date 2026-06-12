@@ -433,6 +433,7 @@ class GlobalRiskFeatureModelTests(unittest.TestCase):
         self.assertEqual(diagnostics["market_input_availability"]["oil_change_24h"], True)
         self.assertEqual(diagnostics["market_input_availability"]["gold_change_24h"], False)
         self.assertIn("dominant_risk_driver", diagnostics)
+        self.assertIn("macro_regime_risk_off_bonus", diagnostics["component_contributions"])
 
     def test_build_global_risk_state_uses_market_shocks_even_when_news_is_neutral(self):
         state = build_global_risk_state(

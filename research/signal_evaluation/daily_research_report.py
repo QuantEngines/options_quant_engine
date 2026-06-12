@@ -102,7 +102,8 @@ REGIME_FIELDS = [
 FEATURE_DIAGNOSTICS_COLS = [
     ("spot_vs_flip", "Spot vs Gamma Flip"),
     ("volatility_shock_score", "Volatility Shock Score"),
-    ("global_risk_score", "Global Risk Score"),
+    ("global_risk_state_score", "Global Risk State Score"),
+    ("global_risk_score", "Global Risk Overlay Score"),
     ("dealer_hedging_pressure_score", "Dealer Hedging Pressure"),
     ("gamma_vol_acceleration_score", "Gamma-Vol Acceleration"),
     ("option_efficiency_score", "Option Efficiency Score"),
@@ -608,8 +609,9 @@ def _section_macro_environment(day_df: pd.DataFrame) -> list[str]:
         "*Macroeconomic conditions set the backdrop for all signal generation. The macro regime "
         "(RISK_ON, RISK_OFF, RISK_NEUTRAL) determines the dominant order-flow dynamics, while "
         "volatility regimes influence option pricing and expected move magnitudes. Global risk "
-        "scores aggregate cross-asset stress indicators — higher scores suggest elevated hedging "
-        "demand and wider bid-ask spreads, which can amplify or suppress signal effectiveness.*",
+        "state scores aggregate cross-asset stress indicators, while overlay scores reflect the "
+        "later tradeability/risk gate — higher scores suggest elevated hedging demand, wider "
+        "bid-ask spreads, or stricter signal gating.*",
         "",
     ]
 
@@ -620,7 +622,8 @@ def _section_macro_environment(day_df: pd.DataFrame) -> list[str]:
         ("oil_shock_score", "Oil Shock Score"),
         ("commodity_risk_score", "Commodity Risk Score"),
         ("volatility_shock_score", "Volatility Shock Score"),
-        ("global_risk_score", "Global Risk Score"),
+        ("global_risk_state_score", "Global Risk State Score"),
+        ("global_risk_score", "Global Risk Overlay Score"),
         ("global_risk_state", "Global Risk State"),
         ("volatility_explosion_probability", "Volatility Explosion Probability"),
     ]
@@ -688,9 +691,12 @@ def _section_macro_environment(day_df: pd.DataFrame) -> list[str]:
         f"**{vol_regime}** volatility conditions. Global risk state was "
         f"**{risk_state}**. "
     )
-    grs = _numeric(day_df.get("global_risk_score", pd.Series()))
-    if grs.notna().any():
-        lines.append(f"The average global risk score was **{_r(grs.mean(), 1)}** / 100.")
+    state_grs = _numeric(day_df.get("global_risk_state_score", pd.Series()))
+    overlay_grs = _numeric(day_df.get("global_risk_score", pd.Series()))
+    if state_grs.notna().any():
+        lines.append(f"The average raw global risk state score was **{_r(state_grs.mean(), 1)}** / 100.")
+    if overlay_grs.notna().any():
+        lines.append(f"The average global risk overlay score was **{_r(overlay_grs.mean(), 1)}** / 100.")
     lines.append("")
 
     return lines
@@ -2894,7 +2900,7 @@ def _summarize_macro(day_df: pd.DataFrame) -> str:
     vol = day_df["volatility_regime"].mode().iloc[0] if "volatility_regime" in day_df.columns and not day_df["volatility_regime"].mode().empty else "unknown"
     risk_state = day_df["global_risk_state"].mode().iloc[0] if "global_risk_state" in day_df.columns and not day_df["global_risk_state"].mode().empty else "unknown"
     grs = _numeric(day_df.get("global_risk_score", pd.Series()))
-    grs_str = f" (global risk score {_r(grs.mean(), 1)}/100)" if grs.notna().any() else ""
+    grs_str = f" (global risk overlay score {_r(grs.mean(), 1)}/100)" if grs.notna().any() else ""
     risk_off = "OFF" in str(risk_state)
     risk_note = (
         "In a RISK_OFF environment, institutional hedging demand elevates implied volatility and "

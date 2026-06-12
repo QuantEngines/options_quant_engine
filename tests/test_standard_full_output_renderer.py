@@ -1,7 +1,52 @@
 from contextlib import redirect_stdout
 from io import StringIO
 
-from app.terminal_output import render_snapshot
+from app.terminal_output import (
+    _resolve_fibonacci_retracement_levels,
+    _resolve_price_structure_levels,
+    render_snapshot,
+)
+
+
+def test_resolve_fibonacci_retracement_levels_uses_intraday_range() -> None:
+    rows = _resolve_fibonacci_retracement_levels(
+        spot=23940.0,
+        day_high=24000.0,
+        day_low=23800.0,
+        top_n=3,
+    )
+    rounded_rows = [(kind, rank, round(level, 1), ratio) for kind, rank, level, ratio in rows]
+
+    assert rounded_rows[:2] == [
+        ("resistance", 1, 23952.8, "23.6%"),
+        ("resistance", 2, 24000.0, "0.0%"),
+    ]
+    assert rounded_rows[2:] == [
+        ("support", 1, 23923.6, "38.2%"),
+        ("support", 2, 23900.0, "50.0%"),
+        ("support", 3, 23876.4, "61.8%"),
+    ]
+
+
+def test_resolve_price_structure_levels_uses_existing_session_anchors() -> None:
+    rows = _resolve_price_structure_levels(
+        spot=23940.0,
+        day_open=23850.0,
+        day_high=24000.0,
+        day_low=23800.0,
+        prev_close=23123.0,
+        top_n=3,
+    )
+    rounded_rows = [(kind, rank, round(level, 1), anchor) for kind, rank, level, anchor in rows]
+
+    assert rounded_rows[:1] == [
+        ("resistance", 1, 24000.0, "day_high"),
+    ]
+    assert rounded_rows[1:] == [
+        ("support", 1, 23900.0, "range_mid"),
+        ("support", 2, 23850.0, "day_open"),
+        ("support", 3, 23800.0, "day_low"),
+    ]
 
 
 def _base_payloads():
@@ -129,6 +174,70 @@ def _base_payloads():
         "prev_close": 23123.0,
         "timestamp": "2026-04-08T12:47:40+05:30",
         "lookback_avg_range_pct": 1.7,
+        "price_structure_state": {
+            "price_structure_vwap": 23925.0,
+            "price_structure_vwap_source": "SPOT_SUMMARY_VWAP",
+            "spot_vs_vwap_state": "ABOVE_VWAP",
+            "spot_vs_vwap_distance_pts": -15.0,
+            "spot_vs_vwap_distance_pct": -0.0627,
+            "price_structure_twap_proxy": 23910.0,
+            "price_structure_twap_proxy_source": "SPOT_HISTORY_TWAP_PROXY",
+            "spot_vs_twap_proxy_state": "ABOVE_TWAP_PROXY",
+            "spot_vs_twap_proxy_distance_pts": -30.0,
+            "spot_vs_twap_proxy_distance_pct": -0.1253,
+            "price_structure_range_position_pct": 70.0,
+            "nearest_price_structure_anchor_label": "range_mid",
+            "nearest_price_structure_anchor_level": 23900.0,
+            "nearest_price_structure_anchor_distance_pts": -40.0,
+            "nearest_price_structure_anchor_distance_pct": -0.1671,
+            "prior_session_ohlc_available": True,
+            "prior_session_high": 24100.0,
+            "prior_session_low": 23800.0,
+            "prior_session_close": 23850.0,
+            "prior_session_date": "2026-04-07",
+            "prior_session_ohlc_source": "SPOT_SUMMARY_PRIOR_SESSION_OHLC",
+            "classic_pivot_available": True,
+            "classic_pivot": 23916.6667,
+            "cpr_bc": 23950.0,
+            "cpr_tc": 23883.3333,
+            "cpr_lower": 23883.3333,
+            "cpr_upper": 23950.0,
+            "cpr_width_pts": 66.6667,
+            "cpr_width_pct": 0.2785,
+            "pivot_r1": 24033.3333,
+            "pivot_s1": 23733.3333,
+            "pivot_r2": 24216.6667,
+            "pivot_s2": 23616.6667,
+            "spot_vs_pivot_state": "ABOVE_PIVOT",
+            "spot_vs_pivot_distance_pts": -23.3333,
+            "spot_vs_pivot_distance_pct": -0.0975,
+            "spot_vs_cpr_state": "INSIDE_CPR",
+            "spot_vs_cpr_lower_distance_pts": -56.6667,
+            "spot_vs_cpr_lower_distance_pct": -0.2367,
+            "spot_vs_cpr_upper_distance_pts": 10.0,
+            "spot_vs_cpr_upper_distance_pct": 0.0418,
+            "opening_range_5m_status": "COMPLETE",
+            "opening_range_5m_row_count": 1,
+            "opening_range_5m_sample_quality": "LOW_SAMPLE",
+            "opening_range_5m_low": 23875.0,
+            "opening_range_5m_high": 23875.0,
+            "opening_range_5m_width_pts": 0.0,
+            "opening_range_5m_state": "ABOVE_OPENING_RANGE",
+            "opening_range_15m_status": "COMPLETE",
+            "opening_range_15m_row_count": 4,
+            "opening_range_15m_sample_quality": "OK",
+            "opening_range_15m_low": 23800.0,
+            "opening_range_15m_high": 23920.0,
+            "opening_range_15m_width_pts": 120.0,
+            "opening_range_15m_state": "ABOVE_OPENING_RANGE",
+            "opening_range_30m_status": "COMPLETE",
+            "opening_range_30m_row_count": 8,
+            "opening_range_30m_sample_quality": "OK",
+            "opening_range_30m_low": 23800.0,
+            "opening_range_30m_high": 23950.0,
+            "opening_range_30m_width_pts": 150.0,
+            "opening_range_30m_state": "INSIDE_OPENING_RANGE",
+        },
     }
 
     spot_validation = {
@@ -204,12 +313,25 @@ def _base_payloads():
             "institutional_flow_date": "2026-04-07",
             "institutional_flow_source": "TEST",
             "institutional_flow_source_timestamp": "2026-04-07T18:15:00+05:30",
-            "institutional_flow_staleness_days": 1,
+            "institutional_flow_staleness_days": 9,
+            "institutional_flow_data_available": False,
+            "india_10y_yield": 6.28,
+            "india_10y_change_bp": -2.5,
+            "india_bond_yield_date": "2026-04-05",
+            "india_bond_yield_source": "TEST_BOND",
+            "india_bond_yield_source_timestamp": "2026-04-05T18:15:00+05:30",
+            "india_bond_yield_staleness_days": 11,
+            "india_bond_yield_data_available": False,
         },
         "institutional_flow_snapshot": {
-            "data_available": True,
-            "stale": False,
-            "warnings": [],
+            "data_available": False,
+            "stale": True,
+            "warnings": ["institutional_flow_stale:9d"],
+        },
+        "india_bond_yield_snapshot": {
+            "data_available": False,
+            "stale": True,
+            "warnings": ["india_bond_yield_stale:11d"],
         },
     }
     headline_state = {
@@ -359,4 +481,24 @@ def test_compact_mode_uses_bias_and_execution_suggestion_wording() -> None:
     assert "iv_hv_regime" in output
     assert "GLOBAL MACRO SNAPSHOT" in output
     assert "crude_24h" in output
+    assert "FIBONACCI RETRACEMENT" in output
+    assert "23.6%" in output
+    assert "38.2%" in output
+    assert "PRICE STRUCTURE LEVELS" in output
+    assert "range_mid" in output
+    assert "day_open" in output
+    assert "PRICE STRUCTURE CONTEXT" in output
+    assert "ABOVE_VWAP" in output
+    assert "classic_pivot" in output
+    assert "cpr_band" in output
+    assert "pivot_levels" in output
+    assert "opening_range_5m" in output
+    assert "LOW_SAMPLE n=1" in output
+    assert "level_confluence" in output
+    assert "acceptance_proxy" in output
+    assert "day_type_proxy" in output
+    assert "STALE 2026-04-05 via TEST_BOND (11d lag; research only)" in output
+    assert "6.28% (-2.5bp) [STALE]" in output
+    assert "STALE 2026-04-07 via TEST (9d lag; research only)" in output
+    assert "-1,200.50 [STALE]" in output
     assert "MICROSTRUCTURE_FRICTION" not in output

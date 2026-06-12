@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from analytics.price_structure import add_price_structure_research_overlays, build_price_structure_state
 from config.market_data_policy import IST_TIMEZONE
 from config.signal_evaluation_policy import (
     MOVE_PROBABILITY_BUCKETS,
@@ -469,6 +470,19 @@ def build_signal_evaluation_row(
     signal_timestamp = spot_summary.get("timestamp") or trade.get("valuation_time")
     if signal_timestamp is None:
         raise ValueError("Signal row requires a stable signal timestamp")
+    price_structure_state_obj = spot_summary.get("price_structure_state")
+    if not isinstance(price_structure_state_obj, dict):
+        price_structure_state_obj = result.get("price_structure_state")
+    price_structure_state = (
+        price_structure_state_obj
+        if isinstance(price_structure_state_obj, dict)
+        else build_price_structure_state(str(result.get("symbol") or "NIFTY"), spot_summary)
+    )
+    price_structure_state = add_price_structure_research_overlays(
+        price_structure_state,
+        spot_summary=spot_summary,
+        trade=trade,
+    )
 
     ranked_strikes_obj = result.get("ranked_strikes")
     ranked_strikes = ranked_strikes_obj if isinstance(ranked_strikes_obj, list) else []
@@ -570,6 +584,16 @@ def build_signal_evaluation_row(
     global_risk_features = (
         trade.get("global_risk_features")
         if isinstance(trade.get("global_risk_features"), dict)
+        else {}
+    )
+    global_risk_diagnostics = (
+        trade.get("global_risk_diagnostics")
+        if isinstance(trade.get("global_risk_diagnostics"), dict)
+        else {}
+    )
+    global_risk_component_contributions = (
+        global_risk_diagnostics.get("component_contributions")
+        if isinstance(global_risk_diagnostics.get("component_contributions"), dict)
         else {}
     )
     global_market_snapshot = (
@@ -893,6 +917,88 @@ def build_signal_evaluation_row(
         "day_low": spot_summary.get("day_low"),
         "prev_close": spot_summary.get("prev_close"),
         "lookback_avg_range_pct": spot_summary.get("lookback_avg_range_pct"),
+        "price_structure_vwap": price_structure_state.get("price_structure_vwap"),
+        "price_structure_vwap_source": price_structure_state.get("price_structure_vwap_source"),
+        "price_structure_twap_proxy": price_structure_state.get("price_structure_twap_proxy"),
+        "price_structure_twap_proxy_source": price_structure_state.get("price_structure_twap_proxy_source"),
+        "spot_vs_vwap_state": price_structure_state.get("spot_vs_vwap_state"),
+        "spot_vs_vwap_distance_pts": price_structure_state.get("spot_vs_vwap_distance_pts"),
+        "spot_vs_vwap_distance_pct": price_structure_state.get("spot_vs_vwap_distance_pct"),
+        "spot_vs_twap_proxy_state": price_structure_state.get("spot_vs_twap_proxy_state"),
+        "spot_vs_twap_proxy_distance_pts": price_structure_state.get("spot_vs_twap_proxy_distance_pts"),
+        "spot_vs_twap_proxy_distance_pct": price_structure_state.get("spot_vs_twap_proxy_distance_pct"),
+        "price_structure_range_position_pct": price_structure_state.get("price_structure_range_position_pct"),
+        "prior_session_ohlc_available": price_structure_state.get("prior_session_ohlc_available"),
+        "prior_session_high": price_structure_state.get("prior_session_high"),
+        "prior_session_low": price_structure_state.get("prior_session_low"),
+        "prior_session_close": price_structure_state.get("prior_session_close"),
+        "prior_session_date": price_structure_state.get("prior_session_date"),
+        "prior_session_ohlc_source": price_structure_state.get("prior_session_ohlc_source"),
+        "classic_pivot_available": price_structure_state.get("classic_pivot_available"),
+        "classic_pivot": price_structure_state.get("classic_pivot"),
+        "cpr_bc": price_structure_state.get("cpr_bc"),
+        "cpr_tc": price_structure_state.get("cpr_tc"),
+        "cpr_lower": price_structure_state.get("cpr_lower"),
+        "cpr_upper": price_structure_state.get("cpr_upper"),
+        "cpr_width_pts": price_structure_state.get("cpr_width_pts"),
+        "cpr_width_pct": price_structure_state.get("cpr_width_pct"),
+        "pivot_r1": price_structure_state.get("pivot_r1"),
+        "pivot_s1": price_structure_state.get("pivot_s1"),
+        "pivot_r2": price_structure_state.get("pivot_r2"),
+        "pivot_s2": price_structure_state.get("pivot_s2"),
+        "pivot_r3": price_structure_state.get("pivot_r3"),
+        "pivot_s3": price_structure_state.get("pivot_s3"),
+        "spot_vs_pivot_state": price_structure_state.get("spot_vs_pivot_state"),
+        "spot_vs_pivot_distance_pts": price_structure_state.get("spot_vs_pivot_distance_pts"),
+        "spot_vs_pivot_distance_pct": price_structure_state.get("spot_vs_pivot_distance_pct"),
+        "spot_vs_cpr_state": price_structure_state.get("spot_vs_cpr_state"),
+        "spot_vs_cpr_lower_distance_pts": price_structure_state.get("spot_vs_cpr_lower_distance_pts"),
+        "spot_vs_cpr_lower_distance_pct": price_structure_state.get("spot_vs_cpr_lower_distance_pct"),
+        "spot_vs_cpr_upper_distance_pts": price_structure_state.get("spot_vs_cpr_upper_distance_pts"),
+        "spot_vs_cpr_upper_distance_pct": price_structure_state.get("spot_vs_cpr_upper_distance_pct"),
+        "nearest_price_structure_anchor_label": price_structure_state.get("nearest_price_structure_anchor_label"),
+        "nearest_price_structure_anchor_side": price_structure_state.get("nearest_price_structure_anchor_side"),
+        "nearest_price_structure_anchor_level": price_structure_state.get("nearest_price_structure_anchor_level"),
+        "nearest_price_structure_anchor_distance_pts": price_structure_state.get(
+            "nearest_price_structure_anchor_distance_pts"
+        ),
+        "nearest_price_structure_anchor_distance_pct": price_structure_state.get(
+            "nearest_price_structure_anchor_distance_pct"
+        ),
+        "opening_range_5m_status": price_structure_state.get("opening_range_5m_status"),
+        "opening_range_5m_row_count": price_structure_state.get("opening_range_5m_row_count"),
+        "opening_range_5m_sample_quality": price_structure_state.get("opening_range_5m_sample_quality"),
+        "opening_range_5m_high": price_structure_state.get("opening_range_5m_high"),
+        "opening_range_5m_low": price_structure_state.get("opening_range_5m_low"),
+        "opening_range_5m_width_pts": price_structure_state.get("opening_range_5m_width_pts"),
+        "opening_range_5m_state": price_structure_state.get("opening_range_5m_state"),
+        "opening_range_15m_status": price_structure_state.get("opening_range_15m_status"),
+        "opening_range_15m_row_count": price_structure_state.get("opening_range_15m_row_count"),
+        "opening_range_15m_sample_quality": price_structure_state.get("opening_range_15m_sample_quality"),
+        "opening_range_15m_high": price_structure_state.get("opening_range_15m_high"),
+        "opening_range_15m_low": price_structure_state.get("opening_range_15m_low"),
+        "opening_range_15m_width_pts": price_structure_state.get("opening_range_15m_width_pts"),
+        "opening_range_15m_state": price_structure_state.get("opening_range_15m_state"),
+        "opening_range_30m_status": price_structure_state.get("opening_range_30m_status"),
+        "opening_range_30m_row_count": price_structure_state.get("opening_range_30m_row_count"),
+        "opening_range_30m_sample_quality": price_structure_state.get("opening_range_30m_sample_quality"),
+        "opening_range_30m_high": price_structure_state.get("opening_range_30m_high"),
+        "opening_range_30m_low": price_structure_state.get("opening_range_30m_low"),
+        "opening_range_30m_width_pts": price_structure_state.get("opening_range_30m_width_pts"),
+        "opening_range_30m_state": price_structure_state.get("opening_range_30m_state"),
+        "price_level_confluence_state": price_structure_state.get("price_level_confluence_state"),
+        "price_level_confluence_score": price_structure_state.get("price_level_confluence_score"),
+        "price_level_confluence_source_count": price_structure_state.get("price_level_confluence_source_count"),
+        "price_level_confluence_level_count": price_structure_state.get("price_level_confluence_level_count"),
+        "nearest_confluence_level": price_structure_state.get("nearest_confluence_level"),
+        "nearest_confluence_distance_pts": price_structure_state.get("nearest_confluence_distance_pts"),
+        "nearest_confluence_distance_pct": price_structure_state.get("nearest_confluence_distance_pct"),
+        "nearest_confluence_sources": price_structure_state.get("nearest_confluence_sources"),
+        "nearest_confluence_labels": price_structure_state.get("nearest_confluence_labels"),
+        "price_structure_acceptance_state": price_structure_state.get("price_structure_acceptance_state"),
+        "price_structure_acceptance_basis": price_structure_state.get("price_structure_acceptance_basis"),
+        "price_structure_day_type_proxy": price_structure_state.get("price_structure_day_type_proxy"),
+        "price_structure_trend_day_proxy_score": price_structure_state.get("price_structure_trend_day_proxy_score"),
         "trade_strength": trade.get("trade_strength"),
         "runtime_composite_base_score": trade.get("runtime_composite_base_score"),
         "runtime_composite_score": trade.get("runtime_composite_score"),
@@ -988,6 +1094,20 @@ def build_signal_evaluation_row(
         "event_explanations": "|".join(str(item) for item in (trade.get("event_explanations") or [])),
         "global_risk_state": trade.get("global_risk_state"),
         "global_risk_score": trade.get("global_risk_score"),
+        "global_risk_state_score": _first_present(
+            trade.get("global_risk_state_score"),
+            global_risk_features.get("global_risk_score"),
+            trade.get("global_risk_score"),
+        ),
+        "global_risk_overlay_score": _first_present(
+            trade.get("global_risk_overlay_score"),
+            trade.get("global_risk_score"),
+        ),
+        "global_risk_dominant_driver": global_risk_diagnostics.get("dominant_risk_driver"),
+        "global_risk_component_contributions": _json_compact(global_risk_component_contributions),
+        "global_risk_regime_score": global_risk_diagnostics.get("regime_score"),
+        "global_risk_risk_off_pressure": global_risk_diagnostics.get("risk_off_pressure"),
+        "global_risk_risk_on_support": global_risk_diagnostics.get("risk_on_support"),
         "oil_change_24h": _first_present(trade.get("oil_change_24h"), global_risk_features.get("oil_change_24h"), global_market_inputs.get("oil_change_24h")),
         "oil_shock_score": trade.get("oil_shock_score"),
         "commodity_risk_score": trade.get("commodity_risk_score"),

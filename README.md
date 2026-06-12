@@ -213,11 +213,27 @@ python scripts/refresh_cumulative_signal_dataset.py
 
 Generated signal datasets, SQLite mirrors, audit outputs, research reports, plan documents, and saved snapshots are intentionally ignored by git.
 
+### EOD Macro Context Refresh
+
+After market close and official publication windows, refresh lagged macro context
+with one command:
+
+```bash
+../.venv/bin/python scripts/data_prep/refresh_eod_macro_context.py
+```
+
+This wrapper runs the FII/DII fetcher and the CCIL India bond-yield fetcher,
+writes successful rows to the local macro stores, and reports partial failures
+explicitly. Use `--dry-run` to inspect official-source payloads without writing.
+On the next engine run, check the `GLOBAL MACRO SNAPSHOT` block: recent FII/DII
+and India bond rows should appear without stale labels, while unavailable or
+old rows should remain visibly marked as stale/research-only.
+
 ### Lagged Institutional Flow Update
 
 FII/DII cash-flow data is treated as lagged research context, not a live
 intraday signal input. To update the local institutional-flow store from
-official exchange sources, run after publication:
+official exchange sources only, run after publication:
 
 ```bash
 ../.venv/bin/python scripts/data_prep/fetch_institutional_flows.py
@@ -232,13 +248,23 @@ stored in INR crores and remain research-only until evaluated.
 ### Lagged India Bond Market Context
 
 India G-Sec yields are captured as local macro context, not as live scoring
-inputs. Add EOD rows to:
+inputs. Preferred EOD refresh is the combined macro wrapper above. For a
+bond-only refresh, use CCIL's tenor-wise indicative G-Sec yields:
+
+```bash
+../.venv/bin/python scripts/data_prep/fetch_india_bond_yields.py
+```
+
+The fetcher reads the CCIL benchmark tenor table, maps the 1Y-2Y, 4Y-5Y,
+9Y-10Y, and 28Y-30Y G-Sec buckets into the local 2Y/5Y/10Y/30Y context, and
+derives 10Y daily change from the previous local row when the source does not
+publish a change column. It writes to:
 
 ```bash
 data_store/macro/india_bond_yields.csv
 ```
 
-or use the helper:
+Manual fallback remains available:
 
 ```bash
 ../.venv/bin/python scripts/data_prep/update_india_bond_yields.py \

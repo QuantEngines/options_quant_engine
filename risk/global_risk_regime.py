@@ -279,6 +279,12 @@ def classify_global_risk_state(features: dict | None) -> GlobalRiskState:
         cfg.headline_velocity_full_scale,
     ) * confidence_multiplier
 
+    macro_regime_risk_off_bonus = (
+        cfg.global_risk_score_macro_regime_risk_off_bonus
+        if macro_regime == "RISK_OFF" and not neutral_fallback
+        else 0.0
+    )
+
     global_risk_score = int(round(_clip(
         risk_off_pressure * 100.0 * cfg.global_risk_score_risk_off_pressure_weight
         + macro_event_risk_score * cfg.global_risk_score_macro_event_weight
@@ -287,7 +293,7 @@ def classify_global_risk_state(features: dict | None) -> GlobalRiskState:
         + headline_velocity_score * cfg.global_risk_score_headline_velocity_weight
         + global_bias_risk_score * cfg.global_risk_score_global_bias_weight
         + currency_shock_score * cfg.global_risk_score_currency_weight
-        + (cfg.global_risk_score_macro_regime_risk_off_bonus if macro_regime == "RISK_OFF" and not neutral_fallback else 0.0),
+        + macro_regime_risk_off_bonus,
         0.0,
         100.0,
     )))
@@ -380,6 +386,17 @@ def classify_global_risk_state(features: dict | None) -> GlobalRiskState:
         minutes_to_close=features.get("minutes_to_close"),
     )
 
+    component_contributions = {
+        "risk_off_pressure": round(risk_off_pressure * 100.0 * cfg.global_risk_score_risk_off_pressure_weight, 2),
+        "macro_event_risk": round(macro_event_risk_score * cfg.global_risk_score_macro_event_weight, 2),
+        "volatility_expansion_risk": round(volatility_expansion_risk_score * cfg.global_risk_score_volatility_expansion_weight, 2),
+        "risk_off_intensity": round(risk_off_intensity_score * cfg.global_risk_score_risk_off_intensity_weight, 2),
+        "headline_velocity": round(headline_velocity_score * cfg.global_risk_score_headline_velocity_weight, 2),
+        "global_bias_risk": round(global_bias_risk_score * cfg.global_risk_score_global_bias_weight, 2),
+        "currency_shock": round(currency_shock_score * cfg.global_risk_score_currency_weight, 2),
+        "macro_regime_risk_off_bonus": round(macro_regime_risk_off_bonus, 2),
+    }
+
     diagnostics = {
         "macro_regime": macro_regime,
         "confidence_multiplier": round(confidence_multiplier, 3),
@@ -406,27 +423,8 @@ def classify_global_risk_state(features: dict | None) -> GlobalRiskState:
         "market_volatility_shock_score": round(market_volatility_score, 2),
         "headline_volatility_shock_score": round(headline_volatility_score, 2),
         "currency_shock_score": round(currency_shock_score, 2),
-        "component_contributions": {
-            "risk_off_pressure": round(risk_off_pressure * 100.0 * cfg.global_risk_score_risk_off_pressure_weight, 2),
-            "macro_event_risk": round(macro_event_risk_score * cfg.global_risk_score_macro_event_weight, 2),
-            "volatility_expansion_risk": round(volatility_expansion_risk_score * cfg.global_risk_score_volatility_expansion_weight, 2),
-            "risk_off_intensity": round(risk_off_intensity_score * cfg.global_risk_score_risk_off_intensity_weight, 2),
-            "headline_velocity": round(headline_velocity_score * cfg.global_risk_score_headline_velocity_weight, 2),
-            "global_bias_risk": round(global_bias_risk_score * cfg.global_risk_score_global_bias_weight, 2),
-            "currency_shock": round(currency_shock_score * cfg.global_risk_score_currency_weight, 2),
-        },
-        "dominant_risk_driver": max(
-            {
-                "risk_off_pressure": round(risk_off_pressure * 100.0 * cfg.global_risk_score_risk_off_pressure_weight, 2),
-                "macro_event_risk": round(macro_event_risk_score * cfg.global_risk_score_macro_event_weight, 2),
-                "volatility_expansion_risk": round(volatility_expansion_risk_score * cfg.global_risk_score_volatility_expansion_weight, 2),
-                "risk_off_intensity": round(risk_off_intensity_score * cfg.global_risk_score_risk_off_intensity_weight, 2),
-                "headline_velocity": round(headline_velocity_score * cfg.global_risk_score_headline_velocity_weight, 2),
-                "global_bias_risk": round(global_bias_risk_score * cfg.global_risk_score_global_bias_weight, 2),
-                "currency_shock": round(currency_shock_score * cfg.global_risk_score_currency_weight, 2),
-            }.items(),
-            key=lambda item: item[1],
-        )[0],
+        "component_contributions": component_contributions,
+        "dominant_risk_driver": max(component_contributions.items(), key=lambda item: item[1])[0],
         "event_window_status": event_window_status,
         "overnight_hold_reason": overnight_hold_reason,
         "overnight_risk_penalty": overnight_risk_penalty,

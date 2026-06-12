@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -46,6 +47,71 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                 "timestamp": "2026-03-14T10:00:00+05:30",
                 "lookback_avg_range_pct": 0.92,
                 "ticker": "^NSEI",
+                "price_structure_state": {
+                    "price_structure_vwap": 21980.0,
+                    "price_structure_vwap_source": "SPOT_SUMMARY_VWAP",
+                    "price_structure_twap_proxy": 21970.0,
+                    "price_structure_twap_proxy_source": "SPOT_HISTORY_TWAP_PROXY",
+                    "spot_vs_vwap_state": "ABOVE_VWAP",
+                    "spot_vs_vwap_distance_pts": -20.0,
+                    "spot_vs_vwap_distance_pct": -0.0909,
+                    "spot_vs_twap_proxy_state": "ABOVE_TWAP_PROXY",
+                    "spot_vs_twap_proxy_distance_pts": -30.0,
+                    "spot_vs_twap_proxy_distance_pct": -0.1364,
+                    "price_structure_range_position_pct": 64.2857,
+                    "nearest_price_structure_anchor_label": "range_mid",
+                    "nearest_price_structure_anchor_side": "support",
+                    "nearest_price_structure_anchor_level": 21980.0,
+                    "nearest_price_structure_anchor_distance_pts": -20.0,
+                    "nearest_price_structure_anchor_distance_pct": -0.0909,
+                    "prior_session_ohlc_available": True,
+                    "prior_session_high": 22100.0,
+                    "prior_session_low": 21800.0,
+                    "prior_session_close": 21850.0,
+                    "prior_session_date": "2026-03-13",
+                    "prior_session_ohlc_source": "SPOT_SUMMARY_PRIOR_SESSION_OHLC",
+                    "classic_pivot_available": True,
+                    "classic_pivot": 21916.6667,
+                    "cpr_bc": 21950.0,
+                    "cpr_tc": 21883.3333,
+                    "cpr_lower": 21883.3333,
+                    "cpr_upper": 21950.0,
+                    "cpr_width_pts": 66.6667,
+                    "cpr_width_pct": 0.303,
+                    "pivot_r1": 22033.3333,
+                    "pivot_s1": 21733.3333,
+                    "pivot_r2": 22216.6667,
+                    "pivot_s2": 21616.6667,
+                    "spot_vs_pivot_state": "ABOVE_PIVOT",
+                    "spot_vs_pivot_distance_pts": -83.3333,
+                    "spot_vs_pivot_distance_pct": -0.3788,
+                    "spot_vs_cpr_state": "ABOVE_CPR",
+                    "spot_vs_cpr_lower_distance_pts": -116.6667,
+                    "spot_vs_cpr_lower_distance_pct": -0.5303,
+                    "spot_vs_cpr_upper_distance_pts": -50.0,
+                    "spot_vs_cpr_upper_distance_pct": -0.2273,
+                    "opening_range_5m_status": "COMPLETE",
+                    "opening_range_5m_row_count": 1,
+                    "opening_range_5m_sample_quality": "LOW_SAMPLE",
+                    "opening_range_5m_high": 21990.0,
+                    "opening_range_5m_low": 21935.0,
+                    "opening_range_5m_width_pts": 55.0,
+                    "opening_range_5m_state": "ABOVE_OPENING_RANGE",
+                    "opening_range_15m_status": "COMPLETE",
+                    "opening_range_15m_row_count": 4,
+                    "opening_range_15m_sample_quality": "OK",
+                    "opening_range_15m_high": 22010.0,
+                    "opening_range_15m_low": 21930.0,
+                    "opening_range_15m_width_pts": 80.0,
+                    "opening_range_15m_state": "INSIDE_OPENING_RANGE",
+                    "opening_range_30m_status": "COMPLETE",
+                    "opening_range_30m_row_count": 8,
+                    "opening_range_30m_sample_quality": "OK",
+                    "opening_range_30m_high": 22025.0,
+                    "opening_range_30m_low": 21920.0,
+                    "opening_range_30m_width_pts": 105.0,
+                    "opening_range_30m_state": "INSIDE_OPENING_RANGE",
+                },
             },
             "saved_paths": {
                 "spot": "debug_samples/spot.json",
@@ -216,6 +282,19 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                 "macro_regime": "MACRO_NEUTRAL",
                 "global_risk_state": "GLOBAL_NEUTRAL",
                 "global_risk_score": 24,
+                "global_risk_state_score": 16,
+                "global_risk_overlay_score": 24,
+                "global_risk_diagnostics": {
+                    "dominant_risk_driver": "risk_off_pressure",
+                    "regime_score": 0.28,
+                    "risk_off_pressure": 0.31,
+                    "risk_on_support": 0.03,
+                    "component_contributions": {
+                        "risk_off_pressure": 16.12,
+                        "macro_regime_risk_off_bonus": 0.0,
+                        "volatility_expansion_risk": 4.2,
+                    },
+                },
                 "gamma_vol_acceleration_score": 68,
                 "squeeze_risk_state": "HIGH_ACCELERATION_RISK",
                 "directional_convexity_state": "UPSIDE_SQUEEZE_RISK",
@@ -471,6 +550,36 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(row_a["signal_confidence_calibration_status"], "CAUTION")
         self.assertEqual(row_a["signal_confidence_calibration_guardrail_status"], "CAUTION")
         self.assertEqual(row_a["signal_confidence_recalibration_guards"], "thin_calibration_history")
+        self.assertAlmostEqual(row_a["price_structure_vwap"], 21980.0)
+        self.assertEqual(row_a["price_structure_vwap_source"], "SPOT_SUMMARY_VWAP")
+        self.assertAlmostEqual(row_a["price_structure_twap_proxy"], 21970.0)
+        self.assertEqual(row_a["spot_vs_vwap_state"], "ABOVE_VWAP")
+        self.assertEqual(row_a["spot_vs_twap_proxy_state"], "ABOVE_TWAP_PROXY")
+        self.assertAlmostEqual(row_a["price_structure_range_position_pct"], 64.2857)
+        self.assertEqual(row_a["nearest_price_structure_anchor_label"], "range_mid")
+        self.assertAlmostEqual(row_a["nearest_price_structure_anchor_level"], 21980.0)
+        self.assertEqual(row_a["prior_session_ohlc_available"], True)
+        self.assertAlmostEqual(row_a["prior_session_high"], 22100.0)
+        self.assertEqual(row_a["prior_session_ohlc_source"], "SPOT_SUMMARY_PRIOR_SESSION_OHLC")
+        self.assertAlmostEqual(row_a["classic_pivot"], 21916.6667)
+        self.assertAlmostEqual(row_a["cpr_lower"], 21883.3333)
+        self.assertAlmostEqual(row_a["cpr_upper"], 21950.0)
+        self.assertEqual(row_a["spot_vs_pivot_state"], "ABOVE_PIVOT")
+        self.assertEqual(row_a["spot_vs_cpr_state"], "ABOVE_CPR")
+        self.assertEqual(row_a["opening_range_5m_status"], "COMPLETE")
+        self.assertEqual(row_a["opening_range_5m_row_count"], 1)
+        self.assertEqual(row_a["opening_range_5m_sample_quality"], "LOW_SAMPLE")
+        self.assertEqual(row_a["opening_range_5m_state"], "ABOVE_OPENING_RANGE")
+        self.assertEqual(row_a["opening_range_15m_sample_quality"], "OK")
+        self.assertAlmostEqual(row_a["opening_range_15m_width_pts"], 80.0)
+        self.assertEqual(row_a["opening_range_30m_row_count"], 8)
+        self.assertEqual(row_a["opening_range_30m_state"], "INSIDE_OPENING_RANGE")
+        self.assertIn(row_a["price_level_confluence_state"], {"HIGH_CONFLUENCE", "VERY_HIGH_CONFLUENCE"})
+        self.assertGreaterEqual(row_a["price_level_confluence_source_count"], 4)
+        self.assertIn("dealer_gamma", row_a["nearest_confluence_sources"])
+        self.assertIn("vwap", row_a["nearest_confluence_sources"])
+        self.assertEqual(row_a["price_structure_acceptance_state"], "BALANCED_ROTATION_CANDIDATE")
+        self.assertEqual(row_a["price_structure_day_type_proxy"], "RANGE_DAY_CANDIDATE")
         self.assertAlmostEqual(row_a["oil_change_24h"], -0.8)
         self.assertAlmostEqual(row_a["us_vix_change_24h"], 1.4)
         self.assertAlmostEqual(row_a["us10y_yield"], 4.32)
@@ -514,6 +623,15 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertIn("outcome_pending", row_a["label_quality_reasons"])
         self.assertEqual(row_a["global_risk_state"], "GLOBAL_NEUTRAL")
         self.assertEqual(row_a["global_risk_score"], 24)
+        self.assertEqual(row_a["global_risk_state_score"], 16)
+        self.assertEqual(row_a["global_risk_overlay_score"], 24)
+        self.assertEqual(row_a["global_risk_dominant_driver"], "risk_off_pressure")
+        self.assertAlmostEqual(row_a["global_risk_regime_score"], 0.28)
+        self.assertAlmostEqual(row_a["global_risk_risk_off_pressure"], 0.31)
+        self.assertAlmostEqual(row_a["global_risk_risk_on_support"], 0.03)
+        global_risk_components = json.loads(row_a["global_risk_component_contributions"])
+        self.assertAlmostEqual(global_risk_components["risk_off_pressure"], 16.12)
+        self.assertIn("macro_regime_risk_off_bonus", global_risk_components)
         self.assertEqual(row_a["gamma_vol_acceleration_score"], 68)
         self.assertEqual(row_a["squeeze_risk_state"], "HIGH_ACCELERATION_RISK")
         self.assertEqual(row_a["directional_convexity_state"], "UPSIDE_SQUEEZE_RISK")
