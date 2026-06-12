@@ -31,6 +31,10 @@ def _rows() -> pd.DataFrame:
                 "hybrid_move_probability": 0.62 if strong else 0.38,
                 "option_efficiency_score": 74 if strong else 41,
                 "ta_entry_timing_score": 70 if strong else 20,
+                "price_level_confluence_score": 68 if strong else 24,
+                "price_structure_acceptance_state": "BREAKOUT_ACCEPTED" if strong else "BALANCED_ROTATION_CANDIDATE",
+                "price_structure_trend_day_proxy_score": 64 if strong else 36,
+                "nearest_price_structure_anchor_distance_pct": 0.08 if strong else 0.42,
                 "provider_health_status": "GOOD",
                 "provider_quality_blocks_direction": False,
                 "provider_quality_blocks_execution": runtime_fail,
@@ -67,6 +71,7 @@ def test_prepare_decision_quality_convergence_frame_builds_live_safe_candidates(
     assert not prepared.empty
     assert prepared["candidate_decision_quality_blend_v0"].notna().all()
     assert prepared["candidate_decision_quality_guarded_v0"].notna().all()
+    assert prepared["decision_quality_score_v1"].notna().all()
     assert "TRADE_PASS_RUNTIME_FAIL" in set(prepared["effective_gate_state"])
     assert prepared["probability_score_0_100"].max() > 1.5
 
@@ -77,6 +82,7 @@ def test_build_decision_quality_convergence_report_contains_core_diagnostics():
     assert report["report_type"] == "decision_quality_convergence"
     assert report["coverage"]["prepared_directional_rows"] == 48
     assert report["metric_alignment"]
+    assert any(row["metric"] == "decision_quality_score_v1" for row in report["metric_alignment"])
     assert report["metric_bucket_summary"]
     assert report["effective_gate_state_summary"]
     assert report["trade_strength_runtime_grid"]

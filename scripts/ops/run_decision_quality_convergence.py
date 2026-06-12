@@ -52,6 +52,7 @@ def main() -> int:
         "quality_approved_60m_labels": coverage.get("quality_approved_60m_labels"),
         "trade_strength_spearman_return_60m": read.get("trade_strength_spearman_return_60m"),
         "runtime_composite_spearman_return_60m": read.get("runtime_composite_spearman_return_60m"),
+        "decision_quality_score_v1_spearman_return_60m": read.get("decision_quality_score_v1_spearman_return_60m"),
         "guarded_blend_spearman_return_60m": read.get("guarded_blend_spearman_return_60m"),
         "trade_pass_runtime_fail_label_count_60m": read.get("trade_pass_runtime_fail_label_count_60m"),
         "trade_pass_runtime_fail_avg_return_60m_bps": read.get("trade_pass_runtime_fail_avg_return_60m_bps"),

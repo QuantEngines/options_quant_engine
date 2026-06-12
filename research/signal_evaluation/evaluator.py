@@ -41,6 +41,7 @@ from config.signal_evaluation_scoring import (
 from config.settings import BASE_DIR
 from data.spot_downloader import normalize_underlying_symbol
 from research.signal_evaluation.dataset import SIGNAL_DATASET_PATH, load_signals_dataset, upsert_signal_rows
+from research.signal_evaluation.decision_quality_bridge import compute_decision_quality_bridge
 from research.signal_evaluation.market_data import (
     build_realized_spot_path_cache,
     coerce_market_timestamp,
@@ -1616,6 +1617,30 @@ def build_signal_evaluation_row(
         "probability_calibration_bucket": _bucket_probability(trade.get("hybrid_move_probability")),
         "notes": notes,
     }
+
+    # ── Decision-quality bridge (research only) ─────────────────────
+    decision_quality_bridge = compute_decision_quality_bridge(row)
+    row["decision_quality_score_v1"] = decision_quality_bridge.get("score")
+    row["decision_quality_score_v1_raw"] = decision_quality_bridge.get("raw_score")
+    row["decision_quality_score_v1_available_components"] = _join_list(
+        decision_quality_bridge.get("available_components")
+    )
+    row["decision_quality_score_v1_missing_components"] = _join_list(
+        decision_quality_bridge.get("missing_components")
+    )
+    row["decision_quality_score_v1_primary_drivers"] = _join_list(
+        decision_quality_bridge.get("primary_drivers")
+    )
+    row["decision_quality_score_v1_components"] = json.dumps(
+        decision_quality_bridge.get("components") or {},
+        sort_keys=True,
+        default=str,
+    )
+    row["decision_quality_score_v1_penalties"] = json.dumps(
+        decision_quality_bridge.get("penalties") or {},
+        sort_keys=True,
+        default=str,
+    )
 
     # ── ML Research Layer (observational only) ──────────────────────
     # Run dual-model inference if ML research is enabled.

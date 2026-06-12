@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from research.signal_evaluation.dataset import CUMULATIVE_DATASET_PATH
+from research.signal_evaluation.decision_quality_bridge import compute_decision_quality_bridge
 from research.signal_evaluation.label_quality import apply_quality_label_view
 from research.signal_evaluation.report_manifest import write_report_reproducibility_manifest
 from utils.timestamp_helpers import coerce_timestamp_series
@@ -39,15 +40,21 @@ HORIZONS: tuple[tuple[str, str, str], ...] = (
 LIVE_SCORE_COLUMNS = (
     "trade_strength",
     "runtime_composite_score",
+    "decision_quality_score_v1",
+    "decision_quality_score_v1_raw",
     "hybrid_move_probability",
     "move_probability",
     "rule_move_probability",
     "ml_move_probability",
     "signal_confidence_score",
     "option_efficiency_score",
+    "target_reachability_score",
     "premium_efficiency_score",
     "strike_efficiency_score",
     "ta_entry_timing_score",
+    "price_level_confluence_score",
+    "price_structure_trend_day_proxy_score",
+    "nearest_price_structure_anchor_distance_pct",
 )
 
 LIVE_CONTEXT_COLUMNS = (
@@ -80,8 +87,10 @@ LIVE_CONTEXT_COLUMNS = (
     "nearest_wall_bucket",
     "ta_entry_timing_state",
     "ta_candle_state",
+    "ta_candle_late_chase",
     "final_flow_signal",
     "option_efficiency_status",
+    "price_structure_acceptance_state",
 )
 
 RESEARCH_LABEL_COLUMNS = (
@@ -344,6 +353,14 @@ def prepare_decision_quality_convergence_frame(
 
     timing = pd.to_numeric(working.get("ta_entry_timing_score", pd.Series(index=working.index)), errors="coerce")
     working["timing_score_0_100"] = timing.clip(lower=0.0, upper=100.0)
+
+    bridge_payloads = working.apply(lambda row: compute_decision_quality_bridge(row.to_dict()), axis=1)
+    working["decision_quality_score_v1"] = bridge_payloads.map(lambda payload: payload.get("score"))
+    working["decision_quality_score_v1_raw"] = bridge_payloads.map(lambda payload: payload.get("raw_score"))
+    working["decision_quality_score_v1_penalty_total"] = bridge_payloads.map(lambda payload: payload.get("penalty_total"))
+    working["decision_quality_score_v1_primary_drivers"] = bridge_payloads.map(
+        lambda payload: "|".join(payload.get("primary_drivers") or [])
+    )
 
     working["candidate_decision_quality_blend_v0"] = _weighted_candidate_score(
         working.assign(
@@ -643,6 +660,10 @@ def _primary_read(report: dict[str, Any]) -> dict[str, Any]:
         (correlations.get("candidate_decision_quality_guarded_v0") or {}).get("spearman_return_60m_bps"),
         None,
     )
+    bridge_corr = _safe_float(
+        (correlations.get("decision_quality_score_v1") or {}).get("spearman_return_60m_bps"),
+        None,
+    )
     gate_rows = {row.get("effective_gate_state"): row for row in report.get("effective_gate_state_summary") or []}
     trade_pass_runtime_fail = gate_rows.get("TRADE_PASS_RUNTIME_FAIL") or {}
     both_fail = gate_rows.get("BOTH_FAIL") or {}
@@ -661,6 +682,9 @@ def _primary_read(report: dict[str, Any]) -> dict[str, Any]:
     if candidate_corr is not None and trade_corr is not None and runtime_corr is not None:
         if candidate_corr >= max(trade_corr, runtime_corr) + 0.02:
             observations.append("GUARDED_BLEND_HAS_INCREMENTAL_ALIGNMENT")
+    if bridge_corr is not None and trade_corr is not None and runtime_corr is not None:
+        if bridge_corr >= max(trade_corr, runtime_corr) + 0.02:
+            observations.append("DECISION_QUALITY_BRIDGE_HAS_INCREMENTAL_ALIGNMENT")
     if tprf_count >= 30 and tprf_return is not None and tprf_return > 0:
         if both_fail_return is not None and tprf_return > both_fail_return + 2.0:
             observations.append("TRADE_PASS_RUNTIME_FAIL_OUTPERFORMS_BOTH_FAIL")
@@ -674,6 +698,7 @@ def _primary_read(report: dict[str, Any]) -> dict[str, Any]:
         "trade_strength_spearman_return_60m": _round_or_none(trade_corr, 4),
         "runtime_composite_spearman_return_60m": _round_or_none(runtime_corr, 4),
         "guarded_blend_spearman_return_60m": _round_or_none(candidate_corr, 4),
+        "decision_quality_score_v1_spearman_return_60m": _round_or_none(bridge_corr, 4),
         "trade_pass_runtime_fail_label_count_60m": tprf_count,
         "trade_pass_runtime_fail_avg_return_60m_bps": _round_or_none(tprf_return, 3),
         "both_fail_avg_return_60m_bps": _round_or_none(both_fail_return, 3),
@@ -706,6 +731,7 @@ def build_decision_quality_convergence_report(
         "probability_score_0_100",
         "option_efficiency_score_0_100",
         "timing_score_0_100",
+        "decision_quality_score_v1",
         "candidate_decision_quality_blend_v0",
         "candidate_decision_quality_guarded_v0",
     )
@@ -731,6 +757,14 @@ def build_decision_quality_convergence_report(
             "candidate_guarded_v0_formula": (
                 "candidate_blend_v0 minus provider/data-quality, macro risk-off, and at-flip "
                 "diagnostic penalties. This is research-only and not a live threshold."
+            ),
+            "decision_quality_score_v1_formula": (
+                "live-safe parity bridge using the currently evidence-backed score inputs: "
+                "signal intensity, runtime quality, and option tradeability, then subtracting "
+                "scaled guard penalties. Probability, TA timing, price structure, provider/data "
+                "quality, and regime context are captured as diagnostics, but carry zero positive "
+                "weight until forward evidence shows stable incremental value. This is "
+                "research-only and not a live threshold."
             ),
             "guardrail": (
                 "This report can use matured outcomes and ex-post composite labels only for research. "
@@ -790,6 +824,7 @@ def render_decision_quality_convergence_markdown(report: dict[str, Any]) -> str:
         f"- Observations: `{', '.join(read.get('observations') or [])}`",
         f"- Trade-strength Spearman to 60m return: `{read.get('trade_strength_spearman_return_60m')}`",
         f"- Runtime-composite Spearman to 60m return: `{read.get('runtime_composite_spearman_return_60m')}`",
+        f"- Decision-quality v1 Spearman to 60m return: `{read.get('decision_quality_score_v1_spearman_return_60m')}`",
         f"- Guarded-blend Spearman to 60m return: `{read.get('guarded_blend_spearman_return_60m')}`",
         f"- Trade-pass/runtime-fail 60m labels: `{read.get('trade_pass_runtime_fail_label_count_60m')}`",
         f"- Trade-pass/runtime-fail avg 60m return: `{read.get('trade_pass_runtime_fail_avg_return_60m_bps')}` bps",
