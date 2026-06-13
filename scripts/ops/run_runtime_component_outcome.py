@@ -59,6 +59,7 @@ def main() -> int:
         "suppressed_directional_rows": report.get("suppressed_directional_rows"),
         "component_source": report.get("component_source"),
         "overall_metrics": report.get("overall_metrics"),
+        "expost_winner_summary_60m": report.get("expost_winner_summary_60m"),
         "latest_markdown_path": result.get("latest_markdown_path"),
         "latest_json_path": result.get("latest_json_path"),
         "latest_segments_path": result.get("latest_segments_path"),

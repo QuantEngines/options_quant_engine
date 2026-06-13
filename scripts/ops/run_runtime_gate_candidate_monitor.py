@@ -64,6 +64,7 @@ def main() -> int:
         "component_source": report.get("component_source"),
         "promotion_ready": report.get("promotion_ready"),
         "candidate_bucket_metrics": report.get("candidate_bucket_metrics"),
+        "near_threshold_candidate_metrics": report.get("near_threshold_candidate_metrics"),
         "latest_markdown_path": result.get("latest_markdown_path"),
         "latest_json_path": result.get("latest_json_path"),
         "latest_segments_path": result.get("latest_segments_path"),

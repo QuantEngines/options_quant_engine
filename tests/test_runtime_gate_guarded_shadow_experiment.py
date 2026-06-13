@@ -41,14 +41,19 @@ def _row(
     return_60m: float,
     mfe: float,
     mae: float,
+    composite_threshold: int = 58,
+    activation: int | None = None,
+    maturity: int | None = None,
 ) -> dict:
-    return {
+    row = {
         "signal_timestamp": timestamp,
         "direction": direction,
         "trade_status": "WATCHLIST",
         "runtime_composite_score": runtime,
         "runtime_composite_components": _component_payload(pre_adjust),
+        "effective_min_composite_score_threshold": composite_threshold,
         "trade_strength": trade_strength,
+        "effective_min_trade_strength_threshold": 60,
         "hybrid_move_probability": 0.52,
         "macro_regime": macro,
         "global_risk_state": global_risk,
@@ -64,6 +69,11 @@ def _row(
         "mfe_60m_bps": mfe,
         "mae_60m_bps": mae,
     }
+    if activation is not None:
+        row["setup_activation_score"] = activation
+    if maturity is not None:
+        row["setup_maturity_score"] = maturity
+    return row
 
 
 def test_runtime_gate_guarded_shadow_experiment_splits_preferred_review_guardrail_and_holdout():
@@ -82,6 +92,8 @@ def test_runtime_gate_guarded_shadow_experiment_splits_preferred_review_guardrai
                 return_60m=16.0,
                 mfe=24.0,
                 mae=-8.0,
+                activation=74,
+                maturity=82,
             ),
             _row(
                 timestamp="2026-06-04T09:25:00+05:30",
@@ -152,7 +164,21 @@ def test_runtime_gate_guarded_shadow_experiment_splits_preferred_review_guardrai
     assert actions[ACTION_PRESERVE_REVIEW]["row_count"] == 1
     assert actions[ACTION_KEEP_BLOCKED]["row_count"] == 1
     assert actions[ACTION_DEFER_HOLDOUT]["row_count"] == 1
+    near = {row["near_threshold_action"]: row for row in report["near_threshold_action_metrics"]}
+    assert near["NEAR_THRESHOLD_PRESERVE_READY"]["row_count"] == 1
+    assert near["NEAR_THRESHOLD_PENDING_ACTIVATION_MATURITY"]["row_count"] == 1
+    exact_near = {row["near_threshold_action"]: row for row in report["exact_near_threshold_action_metrics"]}
+    assert exact_near["NEAR_THRESHOLD_PRESERVE_READY"]["avg_signed_return_60m_bps"] == 16.0
 
     comparison = report["exact_action_comparison"]
     assert comparison["preferred_minus_guardrail_return_60m_bps"] == 26.0
     assert comparison["preferred_minus_review_return_60m_bps"] == 12.0
+
+    lineage = report["feature_lineage_attribution"]
+    assert lineage["method"] == "runtime_component_drag_to_feature_lineage"
+    exact_lineage = lineage["shadow_action_lineage_summary"]
+    assert any(
+        row["runtime_gate_shadow_action"] == ACTION_PRESERVE_PREFERRED
+        and row["lineage_factor_bucket"] == "signal_core"
+        for row in exact_lineage
+    )

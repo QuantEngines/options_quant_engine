@@ -169,6 +169,67 @@ def _metrics(group: pd.DataFrame) -> dict[str, Any]:
     return row
 
 
+def _expost_winner_mask(frame: pd.DataFrame) -> pd.Series:
+    hit = _num_series(frame, "correct_60m")
+    ret = _num_series(frame, "signed_return_60m_bps")
+    return hit.ge(1.0) & ret.gt(0.0)
+
+
+def _clean_path_winner_mask(frame: pd.DataFrame) -> pd.Series:
+    winner = _expost_winner_mask(frame)
+    mfe = _num_series(frame, "mfe_60m_bps")
+    mae = _num_series(frame, "mae_60m_bps").abs()
+    return winner & mfe.gt(mae)
+
+
+def _winner_metrics(group: pd.DataFrame) -> dict[str, Any]:
+    hit = _num_series(group, "correct_60m")
+    ret = _num_series(group, "signed_return_60m_bps")
+    labeled = hit.notna() & ret.notna()
+    winner = _expost_winner_mask(group)
+    clean_winner = _clean_path_winner_mask(group)
+    loser = labeled & ~winner
+    return {
+        "row_count": int(len(group)),
+        "label_count_60m": int(labeled.sum()),
+        "expost_winner_count_60m": int(winner.sum()),
+        "expost_winner_rate_60m": _round_or_none(float(winner.sum()) / max(int(labeled.sum()), 1), 4),
+        "clean_path_winner_count_60m": int(clean_winner.sum()),
+        "clean_path_winner_rate_60m": _round_or_none(float(clean_winner.sum()) / max(int(labeled.sum()), 1), 4),
+        "avg_winner_signed_return_60m_bps": _round_or_none(_safe_mean(ret.loc[winner]), 4),
+        "avg_loser_signed_return_60m_bps": _round_or_none(_safe_mean(ret.loc[loser]), 4),
+        "avg_winner_mfe_mae_ratio_60m": _round_or_none(
+            _mfe_mae_ratio(_num_series(group.loc[winner], "mfe_60m_bps"), _num_series(group.loc[winner], "mae_60m_bps")),
+            4,
+        ),
+    }
+
+
+def _gap_bucket(series: pd.Series) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    bins = [-float("inf"), -25, -15, -5, 0, float("inf")]
+    labels = ["<=-25", "-25--15", "-15--5", "-5-0", ">=0"]
+    return pd.cut(values, bins=bins, labels=labels, include_lowest=True).astype("object").where(values.notna(), "UNKNOWN")
+
+
+def _with_threshold_gap_columns(frame: pd.DataFrame, *, probability_floor: float) -> pd.DataFrame:
+    working = frame.copy()
+    probability_points = _probability_points(working)
+    working["runtime_composite_gap_to_threshold"] = (
+        _num_series(working, "runtime_composite_score") - _num_series(working, "effective_min_composite_score_threshold")
+    )
+    working["trade_strength_gap_to_threshold"] = (
+        _num_series(working, "trade_strength") - _num_series(working, "effective_min_trade_strength_threshold")
+    )
+    working["move_probability_gap_to_floor_points"] = probability_points - float(probability_floor) * 100.0
+    working["runtime_composite_gap_bucket"] = _gap_bucket(working["runtime_composite_gap_to_threshold"])
+    working["trade_strength_gap_bucket"] = _gap_bucket(working["trade_strength_gap_to_threshold"])
+    working["move_probability_gap_bucket"] = _gap_bucket(working["move_probability_gap_to_floor_points"])
+    working["setup_activation_bucket"] = _bucket(_num_series(working, "setup_activation_score"), kind="score")
+    working["setup_maturity_bucket"] = _bucket(_num_series(working, "setup_maturity_score"), kind="score")
+    return working
+
+
 def _segment_rows(frame: pd.DataFrame, segment_name: str, field: str, *, min_rows: int) -> list[dict[str, Any]]:
     if frame.empty or field not in frame.columns:
         return []
@@ -186,6 +247,103 @@ def _segment_rows(frame: pd.DataFrame, segment_name: str, field: str, *, min_row
     return sorted(rows, key=lambda item: (-int(item.get("row_count") or 0), str(item.get("value"))))
 
 
+def _winner_segment_rows(frame: pd.DataFrame, segment_name: str, field: str, *, min_rows: int) -> list[dict[str, Any]]:
+    if frame.empty or field not in frame.columns:
+        return []
+    rows: list[dict[str, Any]] = []
+    values = _text_series(frame, field)
+    for value, group in frame.groupby(values, dropna=False):
+        if len(group) < min_rows:
+            continue
+        row = {
+            "segment": segment_name,
+            "value": str(value),
+            **_winner_metrics(group),
+            "avg_runtime_composite_gap": _round_or_none(_safe_mean(_num_series(group, "runtime_composite_gap_to_threshold")), 4),
+            "avg_trade_strength_gap": _round_or_none(_safe_mean(_num_series(group, "trade_strength_gap_to_threshold")), 4),
+            "avg_move_probability_gap_points": _round_or_none(
+                _safe_mean(_num_series(group, "move_probability_gap_to_floor_points")),
+                4,
+            ),
+        }
+        rows.append(row)
+    return sorted(
+        rows,
+        key=lambda item: (
+            -float(item.get("expost_winner_rate_60m") or 0.0),
+            -int(item.get("label_count_60m") or 0),
+            str(item.get("value")),
+        ),
+    )
+
+
+def _signal_intensity_component_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if frame.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    winner = _expost_winner_mask(frame)
+    labeled = _num_series(frame, "correct_60m").notna() & _num_series(frame, "signed_return_60m_bps").notna()
+    loser = labeled & ~winner
+    primary = _text_series(frame, "primary_component_drag", default="UNKNOWN")
+    for component in COMPONENT_COLUMNS:
+        component_primary = primary.eq(component)
+        component_score = _num_series(frame, f"{component}_score")
+        component_deficit = _num_series(frame, f"{component}_weighted_deficit_to_100")
+        group = frame.loc[component_primary].copy()
+        winner_component_score = _safe_mean(component_score.loc[winner])
+        loser_component_score = _safe_mean(component_score.loc[loser])
+        rows.append(
+            {
+                "component": component,
+                "primary_drag_rows": int(component_primary.sum()),
+                "primary_drag_share": _round_or_none(float(component_primary.sum()) / max(int(len(frame)), 1), 4),
+                **_winner_metrics(group),
+                "avg_component_score": _round_or_none(_safe_mean(component_score), 4),
+                "avg_winner_component_score": _round_or_none(winner_component_score, 4),
+                "avg_loser_component_score": _round_or_none(loser_component_score, 4),
+                "winner_minus_loser_component_score": _round_or_none(
+                    (winner_component_score or 0.0) - (loser_component_score or 0.0),
+                    4,
+                )
+                if winner_component_score is not None and loser_component_score is not None
+                else None,
+                "avg_weighted_deficit_to_100": _round_or_none(_safe_mean(component_deficit), 4),
+                "avg_winner_weighted_deficit_to_100": _round_or_none(_safe_mean(component_deficit.loc[winner]), 4),
+                "avg_loser_weighted_deficit_to_100": _round_or_none(_safe_mean(component_deficit.loc[loser]), 4),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda item: (
+            -int(item.get("expost_winner_count_60m") or 0),
+            -int(item.get("primary_drag_rows") or 0),
+            str(item.get("component")),
+        ),
+    )
+
+
+def _capture_status(frame: pd.DataFrame) -> dict[str, Any]:
+    total = max(int(len(frame)), 1)
+    activation = _num_series(frame, "setup_activation_score")
+    maturity = _num_series(frame, "setup_maturity_score")
+    runtime_components = _text_series(frame, "runtime_component_source", default="UNKNOWN")
+    return {
+        "setup_activation_score_rows": int(activation.notna().sum()),
+        "setup_activation_score_coverage": _round_or_none(float(activation.notna().sum()) / total, 4),
+        "setup_maturity_score_rows": int(maturity.notna().sum()),
+        "setup_maturity_score_coverage": _round_or_none(float(maturity.notna().sum()) / total, 4),
+        "exact_runtime_component_rows": int(runtime_components.str.lower().eq("captured_json").sum()),
+        "component_source_counts": [
+            {"source": str(key), "count": int(value)}
+            for key, value in runtime_components.value_counts(dropna=False).items()
+        ],
+        "note": (
+            "setup_activation_score and setup_maturity_score were added to signal capture for future rows; "
+            "older rows may have zero coverage."
+        ),
+    }
+
+
 def _prepare_frame(frame: pd.DataFrame, *, probability_floor: float) -> tuple[pd.DataFrame, str]:
     if frame.empty:
         return frame.copy(), "none"
@@ -200,6 +358,7 @@ def _prepare_frame(frame: pd.DataFrame, *, probability_floor: float) -> tuple[pd
     working["compression_bucket"] = _bucket(working.get("estimated_composite_residual"), kind="residual")
     working["trade_strength_bucket"] = _bucket(working.get("trade_strength"), kind="score")
     working["probability_bucket"] = _bucket(_probability_points(working), kind="probability")
+    working = _with_threshold_gap_columns(working, probability_floor=probability_floor)
     working["risk_flip_context"] = (
         _text_series(working, "macro_regime", default="UNKNOWN")
         + "/"
@@ -255,6 +414,11 @@ def build_runtime_component_outcome_report(
         ("compression_bucket", "compression_bucket"),
         ("trade_strength_bucket", "trade_strength_bucket"),
         ("probability_bucket", "probability_bucket"),
+        ("runtime_composite_gap_bucket", "runtime_composite_gap_bucket"),
+        ("trade_strength_gap_bucket", "trade_strength_gap_bucket"),
+        ("move_probability_gap_bucket", "move_probability_gap_bucket"),
+        ("setup_activation_bucket", "setup_activation_bucket"),
+        ("setup_maturity_bucket", "setup_maturity_bucket"),
         ("risk_flip_context", "risk_flip_context"),
         ("gamma_regime", "gamma_regime"),
         ("volatility_regime", "volatility_regime"),
@@ -263,6 +427,22 @@ def build_runtime_component_outcome_report(
         segments.extend(_segment_rows(prepared, segment_name, field, min_rows=min_segment_rows))
 
     overall = _metrics(prepared) if not prepared.empty else {}
+    winner_segments: list[dict[str, Any]] = []
+    for segment_name, field in (
+        ("primary_component_drag", "primary_component_drag"),
+        ("runtime_composite_gap_bucket", "runtime_composite_gap_bucket"),
+        ("trade_strength_gap_bucket", "trade_strength_gap_bucket"),
+        ("move_probability_gap_bucket", "move_probability_gap_bucket"),
+        ("estimated_pre_adjust_bucket", "estimated_pre_adjust_bucket"),
+        ("runtime_composite_bucket", "runtime_composite_bucket"),
+        ("compression_bucket", "compression_bucket"),
+        ("setup_activation_bucket", "setup_activation_bucket"),
+        ("setup_maturity_bucket", "setup_maturity_bucket"),
+        ("risk_flip_context", "risk_flip_context"),
+        ("ta_entry_timing_state", "ta_entry_timing_state"),
+    ):
+        winner_segments.extend(_winner_segment_rows(prepared, segment_name, field, min_rows=min_segment_rows))
+
     report = {
         "report_type": "runtime_component_outcome",
         "generated_at": _now_utc(),
@@ -279,7 +459,9 @@ def build_runtime_component_outcome_report(
         "input_rows": int(len(dated)),
         "suppressed_directional_rows": int(len(prepared)),
         "component_source": component_source,
+        "subcomponent_capture_status": _capture_status(prepared),
         "overall_metrics": overall,
+        "expost_winner_summary_60m": _winner_metrics(prepared) if not prepared.empty else {},
         "component_summary": [
             {
                 "component": component,
@@ -293,7 +475,9 @@ def build_runtime_component_outcome_report(
             }
             for component in COMPONENT_COLUMNS
         ],
+        "signal_intensity_component_decomposition": _signal_intensity_component_rows(prepared),
         "segments": segments,
+        "expost_winner_segments": winner_segments,
         "recommended_next_actions": [],
     }
     report["overall_read"] = _overall_read(report)
@@ -357,6 +541,66 @@ def render_runtime_component_outcome_markdown(report: dict[str, Any]) -> str:
         _markdown_table(
             report.get("component_summary", []),
             ("component", "avg_score", "avg_weighted_contribution", "avg_weighted_deficit_to_100"),
+        )
+    )
+    capture = report.get("subcomponent_capture_status") or {}
+    lines.extend(["", "## Subcomponent Capture Status", ""])
+    for key in (
+        "setup_activation_score_rows",
+        "setup_activation_score_coverage",
+        "setup_maturity_score_rows",
+        "setup_maturity_score_coverage",
+        "exact_runtime_component_rows",
+    ):
+        lines.append(f"- {key}: `{capture.get(key)}`")
+    if capture.get("note"):
+        lines.append(f"- note: {capture.get('note')}")
+    lines.extend(["", "## Ex-Post Winner Summary", ""])
+    winners = report.get("expost_winner_summary_60m") or {}
+    for key in (
+        "label_count_60m",
+        "expost_winner_count_60m",
+        "expost_winner_rate_60m",
+        "clean_path_winner_count_60m",
+        "clean_path_winner_rate_60m",
+        "avg_winner_signed_return_60m_bps",
+        "avg_loser_signed_return_60m_bps",
+        "avg_winner_mfe_mae_ratio_60m",
+    ):
+        lines.append(f"- {key}: `{winners.get(key)}`")
+    lines.extend(["", "## Signal-Intensity Component Decomposition", ""])
+    lines.extend(
+        _markdown_table(
+            report.get("signal_intensity_component_decomposition", []),
+            (
+                "component",
+                "primary_drag_rows",
+                "expost_winner_count_60m",
+                "expost_winner_rate_60m",
+                "clean_path_winner_rate_60m",
+                "avg_winner_component_score",
+                "avg_loser_component_score",
+                "avg_winner_weighted_deficit_to_100",
+            ),
+        )
+    )
+    lines.extend(["", "## Ex-Post Winner Segments", ""])
+    lines.extend(
+        _markdown_table(
+            report.get("expost_winner_segments", []),
+            (
+                "segment",
+                "value",
+                "row_count",
+                "label_count_60m",
+                "expost_winner_rate_60m",
+                "clean_path_winner_rate_60m",
+                "avg_winner_signed_return_60m_bps",
+                "avg_runtime_composite_gap",
+                "avg_trade_strength_gap",
+                "avg_move_probability_gap_points",
+            ),
+            limit=50,
         )
     )
     lines.extend(["", "## Segments", ""])

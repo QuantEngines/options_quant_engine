@@ -225,6 +225,8 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
                     "confidence": "HIGH",
                 },
                 "trade_strength": 81,
+                "setup_activation_score": 74,
+                "setup_maturity_score": 83,
                 "runtime_composite_score": 86,
                 "runtime_composite_components": {
                     "method": "runtime_composite_v1",
@@ -527,6 +529,8 @@ class SignalEvaluationDatasetTests(unittest.TestCase):
         self.assertEqual(row_a["option_chain_is_valid"], True)
         self.assertEqual(row_a["option_chain_warning_count"], 1)
         self.assertEqual(row_a["runtime_composite_score"], 86)
+        self.assertEqual(row_a["setup_activation_score"], 74)
+        self.assertEqual(row_a["setup_maturity_score"], 83)
         self.assertIsNotNone(row_a["decision_quality_score_v1"])
         self.assertGreater(row_a["decision_quality_score_v1"], 0)
         self.assertIn("signal_intensity", row_a["decision_quality_score_v1_available_components"])

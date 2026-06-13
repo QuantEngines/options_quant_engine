@@ -17,6 +17,10 @@ import pandas as pd
 
 from config.signal_evaluation_scoring import SIGNAL_EVALUATION_SELECTION_POLICY
 from research.signal_evaluation.dataset import CUMULATIVE_DATASET_PATH
+from research.signal_evaluation.feature_lineage_report import (
+    attach_lineage_columns,
+    lineage_outcome_summary,
+)
 from research.signal_evaluation.runtime_component_outcome import (
     _filter_dates,
     _load_dataset,
@@ -49,6 +53,13 @@ PROMISING_RISK_FLIP_CONTEXTS = {"RISK_OFF/RISK_OFF/BELOW_FLIP"}
 DISCARD_GAMMA_REGIMES = {"NEGATIVE_GAMMA"}
 DISCARD_VOLATILITY_REGIMES = {"LOW_VOL"}
 DISCARD_RISK_FLIP_CONTEXTS = {"MACRO_NEUTRAL/GLOBAL_NEUTRAL/AT_FLIP"}
+NEAR_THRESHOLD_STATE_READY = "NEAR_THRESHOLD_PRESERVE_READY"
+NEAR_THRESHOLD_STATE_PENDING_ACTIVATION = "NEAR_THRESHOLD_PENDING_ACTIVATION_MATURITY"
+NEAR_THRESHOLD_STATE_WEAK_ACTIVATION = "NEAR_THRESHOLD_WEAK_ACTIVATION_MATURITY"
+NEAR_THRESHOLD_STATE_GUARDRAIL = "NEAR_THRESHOLD_KEEP_BLOCKED_GUARDRAIL"
+NEAR_THRESHOLD_STATE_HOLDOUT = "NEAR_THRESHOLD_HOLDOUT"
+NEAR_THRESHOLD_ACTIVATION_FLOOR = 55.0
+NEAR_THRESHOLD_MATURITY_FLOOR = 70.0
 
 
 def _now_utc() -> str:
@@ -81,8 +92,11 @@ def _add_candidate_columns(frame: pd.DataFrame, *, min_preserve_matches: int) ->
     risk_context = _risk_flip_context(working).str.upper()
     pre_adjust = _num_series(working, "estimated_pre_adjust_score")
     runtime = _num_series(working, "runtime_composite_score")
+    runtime_gap = _num_series(working, "runtime_composite_gap_to_threshold")
     trade_strength = _num_series(working, "trade_strength")
     residual = _num_series(working, "estimated_composite_residual")
+    activation = _num_series(working, "setup_activation_score")
+    maturity = _num_series(working, "setup_maturity_score")
 
     preserve_flags: dict[str, pd.Series] = {
         "positive_or_neutral_gamma": gamma.isin(PROMISING_GAMMA_REGIMES),
@@ -129,6 +143,45 @@ def _add_candidate_columns(frame: pd.DataFrame, *, min_preserve_matches: int) ->
     working["runtime_gate_candidate_reason"] = reason
     working["candidate_preserve_match_count_bucket"] = working["candidate_preserve_match_count"].astype(str)
     working["candidate_guardrail_count_bucket"] = working["candidate_guardrail_count"].astype(str)
+
+    near_threshold_base = _between(pre_adjust, 70.0, 80.0) & runtime_gap.ge(-15.0) & runtime_gap.le(0.0)
+    activation_present = activation.notna()
+    maturity_present = maturity.notna()
+    activation_maturity_present = activation_present & maturity_present
+    activation_maturity_strong = activation.ge(NEAR_THRESHOLD_ACTIVATION_FLOOR) & maturity.ge(
+        NEAR_THRESHOLD_MATURITY_FLOOR
+    )
+    near_threshold_no_guardrail = near_threshold_base & guard_count.eq(0)
+
+    near_state = pd.Series(NEAR_THRESHOLD_STATE_HOLDOUT, index=working.index, dtype="object")
+    near_state.loc[near_threshold_base & guard_count.gt(0)] = NEAR_THRESHOLD_STATE_GUARDRAIL
+    near_state.loc[near_threshold_no_guardrail & ~activation_maturity_present] = (
+        NEAR_THRESHOLD_STATE_PENDING_ACTIVATION
+    )
+    near_state.loc[near_threshold_no_guardrail & activation_maturity_present & ~activation_maturity_strong] = (
+        NEAR_THRESHOLD_STATE_WEAK_ACTIVATION
+    )
+    near_state.loc[near_threshold_no_guardrail & activation_maturity_strong] = NEAR_THRESHOLD_STATE_READY
+
+    near_reason = pd.Series("not_near_threshold_pre_adjust_runtime_gap", index=working.index, dtype="object")
+    near_reason.loc[near_threshold_base & guard_count.gt(0)] = "near_threshold_but_guardrail_present"
+    near_reason.loc[near_threshold_no_guardrail & ~activation_maturity_present] = (
+        "near_threshold_waiting_for_setup_activation_maturity_capture"
+    )
+    near_reason.loc[near_threshold_no_guardrail & activation_maturity_present & ~activation_maturity_strong] = (
+        f"near_threshold_activation_maturity_below_{int(NEAR_THRESHOLD_ACTIVATION_FLOOR)}_"
+        f"{int(NEAR_THRESHOLD_MATURITY_FLOOR)}"
+    )
+    near_reason.loc[near_threshold_no_guardrail & activation_maturity_strong] = (
+        "near_threshold_pre_adjust_70_80_runtime_gap_minus_15_to_0_zero_guardrails_strong_activation_maturity"
+    )
+
+    working["near_threshold_candidate_state"] = near_state
+    working["near_threshold_candidate_reason"] = near_reason
+    working["near_threshold_candidate_base"] = near_threshold_base.fillna(False)
+    working["near_threshold_candidate_no_guardrail"] = near_threshold_no_guardrail.fillna(False)
+    working["near_threshold_activation_maturity_present"] = activation_maturity_present.fillna(False)
+    working["near_threshold_activation_maturity_strong"] = activation_maturity_strong.fillna(False)
     return working
 
 
@@ -157,6 +210,29 @@ def _candidate_bucket_metrics(frame: pd.DataFrame) -> list[dict[str, Any]]:
         }
         rows.append(row)
     return sorted(rows, key=lambda item: str(item.get("bucket")))
+
+
+def _near_threshold_metrics(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if frame.empty or "near_threshold_candidate_state" not in frame.columns:
+        return []
+    rows: list[dict[str, Any]] = []
+    for state, group in frame.groupby(_text_series(frame, "near_threshold_candidate_state"), dropna=False):
+        row = {
+            "near_threshold_state": str(state),
+            **_metrics(group),
+            "avg_runtime_gap_to_threshold": _round_or_none(
+                _safe_mean(_num_series(group, "runtime_composite_gap_to_threshold")),
+                4,
+            ),
+            "avg_estimated_pre_adjust": _round_or_none(
+                _safe_mean(_num_series(group, "estimated_pre_adjust_score")),
+                4,
+            ),
+            "avg_setup_activation_score": _round_or_none(_safe_mean(_num_series(group, "setup_activation_score")), 4),
+            "avg_setup_maturity_score": _round_or_none(_safe_mean(_num_series(group, "setup_maturity_score")), 4),
+        }
+        rows.append(row)
+    return sorted(rows, key=lambda item: (-int(item.get("row_count") or 0), str(item.get("near_threshold_state"))))
 
 
 def _candidate_read(bucket_metrics: list[dict[str, Any]], *, min_candidate_rows: int) -> str:
@@ -202,6 +278,8 @@ def prepare_runtime_gate_candidate_frame(
         if not prepared.empty
         else prepared.copy()
     )
+    if not candidate_frame.empty:
+        candidate_frame = attach_lineage_columns(candidate_frame, component_drag_column="primary_component_drag")
     return candidate_frame, component_source
 
 
@@ -238,10 +316,14 @@ def build_runtime_gate_candidate_monitor_report(
         ("runtime_gate_candidate_reason", "runtime_gate_candidate_reason"),
         ("candidate_preserve_match_count", "candidate_preserve_match_count_bucket"),
         ("candidate_guardrail_count", "candidate_guardrail_count_bucket"),
+        ("near_threshold_candidate_state", "near_threshold_candidate_state"),
+        ("near_threshold_candidate_reason", "near_threshold_candidate_reason"),
         ("gamma_regime", "gamma_regime"),
         ("volatility_regime", "volatility_regime"),
         ("risk_flip_context", "risk_flip_context"),
         ("ta_entry_timing_state", "ta_entry_timing_state"),
+        ("lineage_factor_bucket", "lineage_factor_bucket"),
+        ("lineage_feature_id", "lineage_feature_id"),
     ):
         segments.extend(_segment_rows(candidate_frame, segment_name, field, min_rows=min_segment_rows))
 
@@ -265,6 +347,21 @@ def build_runtime_gate_candidate_monitor_report(
         "component_source": component_source,
         "overall_metrics": _metrics(candidate_frame) if not candidate_frame.empty else {},
         "candidate_bucket_metrics": bucket_metrics,
+        "near_threshold_candidate_metrics": _near_threshold_metrics(candidate_frame),
+        "feature_lineage_attribution": {
+            "research_only": True,
+            "method": "runtime_component_drag_to_feature_lineage",
+            "lineage_factor_summary": lineage_outcome_summary(candidate_frame, min_rows=min_segment_rows),
+            "candidate_bucket_lineage_summary": lineage_outcome_summary(
+                candidate_frame,
+                min_rows=min_segment_rows,
+                action_column="runtime_gate_candidate_bucket",
+            ),
+            "caveat": (
+                "Candidate rows are mapped to lineage by primary runtime component drag; "
+                "this is diagnostic and does not alter candidate classification."
+            ),
+        },
         "candidate_read": _candidate_read(bucket_metrics, min_candidate_rows=min_candidate_rows),
         "promotion_ready": False,
         "candidate_config": {
@@ -283,6 +380,14 @@ def build_runtime_gate_candidate_monitor_report(
                 "trade strength >= 80",
                 "MACRO_NEUTRAL/GLOBAL_NEUTRAL/AT_FLIP",
                 "compression <= -40 or >= 0",
+            ],
+            "near_threshold_research_slice": [
+                "estimated pre-adjust runtime component blend 70-80",
+                "runtime composite gap to effective threshold between -15 and 0",
+                "candidate_guardrail_count == 0",
+                f"setup activation >= {int(NEAR_THRESHOLD_ACTIVATION_FLOOR)} when captured",
+                f"setup maturity >= {int(NEAR_THRESHOLD_MATURITY_FLOOR)} when captured",
+                "missing setup activation/maturity is tracked as pending capture, not approval",
             ],
         },
         "segments": segments,
@@ -347,6 +452,56 @@ def render_runtime_gate_candidate_monitor_markdown(report: dict[str, Any]) -> st
                 "avg_preserve_match_count",
                 "avg_guardrail_count",
             ),
+        )
+    )
+    lines.extend(["", "## Near-Threshold Preserve Slice", ""])
+    lines.extend(
+        _markdown_table(
+            report.get("near_threshold_candidate_metrics", []) or [],
+            (
+                "near_threshold_state",
+                "row_count",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+                "mfe_mae_ratio_60m",
+                "avg_runtime_gap_to_threshold",
+                "avg_estimated_pre_adjust",
+                "avg_setup_activation_score",
+                "avg_setup_maturity_score",
+            ),
+        )
+    )
+    lineage = report.get("feature_lineage_attribution") or {}
+    lines.extend(["", "## Feature Lineage Attribution", ""])
+    lines.append(f"- Method: `{lineage.get('method')}`")
+    lines.append(f"- Caveat: {lineage.get('caveat')}")
+    lines.extend(["", "### Lineage Factor Summary", ""])
+    lines.extend(
+        _markdown_table(
+            lineage.get("lineage_factor_summary", []) or [],
+            (
+                "lineage_factor_bucket",
+                "lineage_feature_id",
+                "row_count",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+            ),
+            limit=20,
+        )
+    )
+    lines.extend(["", "### Candidate Bucket By Lineage", ""])
+    lines.extend(
+        _markdown_table(
+            lineage.get("candidate_bucket_lineage_summary", []) or [],
+            (
+                "runtime_gate_candidate_bucket",
+                "lineage_factor_bucket",
+                "lineage_feature_id",
+                "row_count",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+            ),
+            limit=30,
         )
     )
     lines.extend(["", "## Segments", ""])

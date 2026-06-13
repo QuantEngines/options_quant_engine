@@ -77,6 +77,7 @@ def main() -> int:
         "suppressed_directional_rows": report.get("suppressed_directional_rows"),
         "exact_forward_summary": report.get("exact_forward_summary"),
         "exact_action_metrics": report.get("exact_action_metrics"),
+        "exact_near_threshold_action_metrics": report.get("exact_near_threshold_action_metrics"),
         "latest_markdown_path": result.get("latest_markdown_path"),
         "latest_json_path": result.get("latest_json_path"),
         "latest_segments_path": result.get("latest_segments_path"),
@@ -87,4 +88,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

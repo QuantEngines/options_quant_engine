@@ -234,6 +234,8 @@ SIGNAL_DATASET_COLUMNS = [
     "price_structure_day_type_proxy",
     "price_structure_trend_day_proxy_score",
     "trade_strength",
+    "setup_activation_score",
+    "setup_maturity_score",
     "runtime_composite_base_score",
     "runtime_composite_score",
     "runtime_composite_components",

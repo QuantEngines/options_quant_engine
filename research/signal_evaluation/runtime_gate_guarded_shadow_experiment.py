@@ -16,6 +16,7 @@ import pandas as pd
 
 from config.signal_evaluation_scoring import SIGNAL_EVALUATION_SELECTION_POLICY
 from research.signal_evaluation.dataset import CUMULATIVE_DATASET_PATH
+from research.signal_evaluation.feature_lineage_report import lineage_outcome_summary
 from research.signal_evaluation.runtime_component_outcome import (
     _load_dataset,
     _metrics,
@@ -24,7 +25,10 @@ from research.signal_evaluation.runtime_component_outcome import (
     _safe_mean,
     _text_series,
 )
-from research.signal_evaluation.runtime_gate_candidate_monitor import prepare_runtime_gate_candidate_frame
+from research.signal_evaluation.runtime_gate_candidate_monitor import (
+    NEAR_THRESHOLD_STATE_READY,
+    prepare_runtime_gate_candidate_frame,
+)
 from research.signal_evaluation.runtime_gate_candidate_readiness import (
     _component_capture_start,
     _signal_dates,
@@ -96,6 +100,19 @@ def _add_shadow_actions(frame: pd.DataFrame, *, preferred_preserve_matches: int)
     working["runtime_gate_shadow_preferred_preserve"] = action.eq(ACTION_PRESERVE_PREFERRED)
     working["runtime_gate_shadow_guardrail_count_bucket"] = guard_count.fillna(0).astype(int).astype(str)
     working["runtime_gate_shadow_preserve_count_bucket"] = preserve_count.fillna(0).astype(int).astype(str)
+    working["runtime_gate_near_threshold_shadow_action"] = _text_series(
+        working,
+        "near_threshold_candidate_state",
+        default="NEAR_THRESHOLD_HOLDOUT",
+    )
+    working["runtime_gate_near_threshold_shadow_reason"] = _text_series(
+        working,
+        "near_threshold_candidate_reason",
+        default="not_near_threshold_pre_adjust_runtime_gap",
+    )
+    working["runtime_gate_near_threshold_preserve_ready"] = working[
+        "runtime_gate_near_threshold_shadow_action"
+    ].eq(NEAR_THRESHOLD_STATE_READY)
     return working
 
 
@@ -234,12 +251,24 @@ def build_runtime_gate_guarded_shadow_report(
 
     action_metrics = _bucket_metrics(shadow_frame, field="runtime_gate_shadow_action", label_key="shadow_action")
     exact_action_metrics = _bucket_metrics(exact_forward, field="runtime_gate_shadow_action", label_key="shadow_action")
+    near_threshold_action_metrics = _bucket_metrics(
+        shadow_frame,
+        field="runtime_gate_near_threshold_shadow_action",
+        label_key="near_threshold_action",
+    )
+    exact_near_threshold_action_metrics = _bucket_metrics(
+        exact_forward,
+        field="runtime_gate_near_threshold_shadow_action",
+        label_key="near_threshold_action",
+    )
     segments: list[dict[str, Any]] = []
     for segment_name, field in (
         ("shadow_action", "runtime_gate_shadow_action"),
         ("shadow_reason", "runtime_gate_shadow_reason"),
         ("preserve_count", "runtime_gate_shadow_preserve_count_bucket"),
         ("guardrail_count", "runtime_gate_shadow_guardrail_count_bucket"),
+        ("near_threshold_action", "runtime_gate_near_threshold_shadow_action"),
+        ("near_threshold_reason", "runtime_gate_near_threshold_shadow_reason"),
         ("gamma_regime", "gamma_regime"),
         ("volatility_regime", "volatility_regime"),
         ("risk_flip_context", "risk_flip_context"),
@@ -253,6 +282,8 @@ def build_runtime_gate_guarded_shadow_report(
         ("shadow_reason", "runtime_gate_shadow_reason"),
         ("preserve_count", "runtime_gate_shadow_preserve_count_bucket"),
         ("guardrail_count", "runtime_gate_shadow_guardrail_count_bucket"),
+        ("near_threshold_action", "runtime_gate_near_threshold_shadow_action"),
+        ("near_threshold_reason", "runtime_gate_near_threshold_shadow_reason"),
     ):
         exact_segments.extend(_segment_rows(exact_forward, segment_name, field, min_rows=max(10, min_segment_rows // 2)))
 
@@ -287,6 +318,10 @@ def build_runtime_gate_guarded_shadow_report(
         "approved_shadow_scope": {
             "preserve_rule": "candidate_guardrail_count == 0 and candidate_preserve_match_count >= 3",
             "preferred_preserve_rule": f"candidate_guardrail_count == 0 and candidate_preserve_match_count >= {int(preferred_preserve_matches)}",
+            "near_threshold_preserve_rule": (
+                "estimated_pre_adjust 70-80, runtime_composite_gap_to_threshold -15..0, "
+                "candidate_guardrail_count == 0, and setup activation/maturity strong when captured"
+            ),
             "primary_horizons": ["30m", "60m"],
             "safety_horizons": ["120m", "session_close"],
         },
@@ -302,8 +337,29 @@ def build_runtime_gate_guarded_shadow_report(
         "overall_metrics": _shadow_metrics(shadow_frame) if not shadow_frame.empty else {},
         "action_metrics": action_metrics,
         "exact_action_metrics": exact_action_metrics,
+        "near_threshold_action_metrics": near_threshold_action_metrics,
+        "exact_near_threshold_action_metrics": exact_near_threshold_action_metrics,
         "action_comparison": _action_comparison(action_metrics),
         "exact_action_comparison": _action_comparison(exact_action_metrics),
+        "feature_lineage_attribution": {
+            "research_only": True,
+            "method": "runtime_component_drag_to_feature_lineage",
+            "lineage_factor_summary": lineage_outcome_summary(shadow_frame, min_rows=min_segment_rows),
+            "shadow_action_lineage_summary": lineage_outcome_summary(
+                shadow_frame,
+                min_rows=min_segment_rows,
+                action_column="runtime_gate_shadow_action",
+            ),
+            "exact_shadow_action_lineage_summary": lineage_outcome_summary(
+                exact_forward,
+                min_rows=max(10, min_segment_rows // 2),
+                action_column="runtime_gate_shadow_action",
+            ),
+            "caveat": (
+                "Shadow rows are mapped to lineage by primary runtime component drag; "
+                "exact-forward lineage is the preferred review surface."
+            ),
+        },
         "segments": segments,
         "exact_segments": exact_segments,
         "promotion_requirements": [
@@ -394,9 +450,79 @@ def render_runtime_gate_guarded_shadow_markdown(report: dict[str, Any]) -> str:
             ),
         )
     )
+    lines.extend(["", "## Near-Threshold Preserve Slice", ""])
+    lines.extend(
+        _markdown_table(
+            report.get("near_threshold_action_metrics", []) or [],
+            (
+                "near_threshold_action",
+                "row_count",
+                "hit_rate_30m",
+                "avg_signed_return_30m_bps",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+                "mfe_mae_ratio_60m",
+                "avg_signed_return_120m_bps",
+                "avg_signed_return_session_close_bps",
+            ),
+            limit=20,
+        )
+    )
+    lines.extend(["", "## Exact Near-Threshold Preserve Slice", ""])
+    lines.extend(
+        _markdown_table(
+            report.get("exact_near_threshold_action_metrics", []) or [],
+            (
+                "near_threshold_action",
+                "row_count",
+                "hit_rate_30m",
+                "avg_signed_return_30m_bps",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+                "mfe_mae_ratio_60m",
+                "avg_signed_return_120m_bps",
+                "avg_signed_return_session_close_bps",
+            ),
+            limit=20,
+        )
+    )
     lines.extend(["", "## Exact Action Comparison", ""])
     for key, value in (report.get("exact_action_comparison") or {}).items():
         lines.append(f"- {key}: `{value}`")
+    lineage = report.get("feature_lineage_attribution") or {}
+    lines.extend(["", "## Feature Lineage Attribution", ""])
+    lines.append(f"- Method: `{lineage.get('method')}`")
+    lines.append(f"- Caveat: {lineage.get('caveat')}")
+    lines.extend(["", "### Shadow Action By Lineage", ""])
+    lines.extend(
+        _markdown_table(
+            lineage.get("shadow_action_lineage_summary", []) or [],
+            (
+                "runtime_gate_shadow_action",
+                "lineage_factor_bucket",
+                "lineage_feature_id",
+                "row_count",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+            ),
+            limit=30,
+        )
+    )
+    lines.extend(["", "### Exact Shadow Action By Lineage", ""])
+    lines.extend(
+        _markdown_table(
+            lineage.get("exact_shadow_action_lineage_summary", []) or [],
+            (
+                "runtime_gate_shadow_action",
+                "lineage_factor_bucket",
+                "lineage_feature_id",
+                "row_count",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+            ),
+            limit=30,
+        )
+    )
     lines.extend(["", "## Segments", ""])
     lines.extend(
         _markdown_table(

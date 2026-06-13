@@ -17,6 +17,10 @@ import pandas as pd
 from config.signal_evaluation_scoring import SIGNAL_EVALUATION_SELECTION_POLICY
 from config.signal_policy import get_trade_runtime_thresholds
 from research.signal_evaluation.dataset import CUMULATIVE_DATASET_PATH
+from research.signal_evaluation.feature_lineage_report import (
+    attach_lineage_columns,
+    lineage_outcome_summary,
+)
 from research.signal_evaluation.signal_quality_model_audit import (
     _atomic_write_csv,
     _atomic_write_text,
@@ -487,6 +491,71 @@ def _primary_blocker(row: pd.Series) -> str:
     return "unclassified"
 
 
+def _attach_feature_lineage_attribution(
+    suppressed: pd.DataFrame,
+    component_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    if suppressed.empty:
+        working = suppressed.copy()
+        working["primary_component_drag"] = pd.Series(dtype="object")
+        working["lineage_feature_id"] = pd.Series(dtype="object")
+        working["lineage_factor_bucket"] = pd.Series(dtype="object")
+        working["lineage_reason"] = pd.Series(dtype="object")
+        return working
+    working = suppressed.copy()
+    if not component_frame.empty and "primary_component_drag" in component_frame.columns:
+        working["primary_component_drag"] = component_frame["primary_component_drag"].reindex(working.index)
+    else:
+        working["primary_component_drag"] = "UNKNOWN"
+    return attach_lineage_columns(
+        working,
+        blocker_column="primary_blocker",
+        component_drag_column="primary_component_drag",
+    )
+
+
+def _lineage_factor_summary(suppressed: pd.DataFrame) -> list[dict[str, Any]]:
+    rows = lineage_outcome_summary(suppressed)
+    for row in rows:
+        row["count"] = row.pop("row_count")
+        row["share_of_suppressed"] = row.pop("share_of_rows")
+        factor_group = suppressed.loc[
+            (suppressed.get("lineage_factor_bucket") == row.get("lineage_factor_bucket"))
+            & (suppressed.get("lineage_feature_id") == row.get("lineage_feature_id"))
+        ]
+        row["avg_runtime_composite_gap"] = _round_or_none(
+            float(pd.to_numeric(factor_group.get("runtime_composite_gap"), errors="coerce").dropna().mean()),
+            4,
+        ) if pd.to_numeric(factor_group.get("runtime_composite_gap"), errors="coerce").notna().any() else None
+        row["avg_trade_strength_gap"] = _round_or_none(
+            float(pd.to_numeric(factor_group.get("trade_strength_gap"), errors="coerce").dropna().mean()),
+            4,
+        ) if pd.to_numeric(factor_group.get("trade_strength_gap"), errors="coerce").notna().any() else None
+    return rows
+
+
+def _lineage_blocker_summary(suppressed: pd.DataFrame) -> list[dict[str, Any]]:
+    required = {"primary_blocker", "lineage_factor_bucket", "lineage_feature_id", "primary_component_drag"}
+    if suppressed.empty or not required.issubset(suppressed.columns):
+        return []
+    total = max(int(len(suppressed)), 1)
+    rows: list[dict[str, Any]] = []
+    group_cols = ["primary_blocker", "primary_component_drag", "lineage_factor_bucket", "lineage_feature_id"]
+    for keys, group in suppressed.groupby(group_cols, dropna=False):
+        blocker, component_drag, factor, feature_id = keys
+        rows.append(
+            {
+                "primary_blocker": str(blocker),
+                "primary_component_drag": str(component_drag),
+                "lineage_factor_bucket": str(factor),
+                "lineage_feature_id": str(feature_id),
+                "count": int(len(group)),
+                "share_of_suppressed": _round_or_none(float(len(group)) / total, 4),
+            }
+        )
+    return sorted(rows, key=lambda item: (-int(item["count"]), str(item["primary_blocker"])))
+
+
 def _recommendations(report: dict[str, Any]) -> list[str]:
     suppressed = int(report.get("suppressed_directional_count") or 0)
     if suppressed <= 0:
@@ -584,6 +653,7 @@ def build_daily_suppression_attribution_report(
         suppressed["blocker_combo"] = pd.Series(dtype="object")
 
     component_frame, component_source = _runtime_component_frame(suppressed, probability_floor)
+    suppressed = _attach_feature_lineage_attribution(suppressed, component_frame)
     component_summary = _component_summary(suppressed, component_frame, probability_floor)
     component_primary_counts = (
         _value_counts(component_frame, "primary_component_drag") if not component_frame.empty else []
@@ -651,6 +721,16 @@ def build_daily_suppression_attribution_report(
             "adjustment_summary": _runtime_adjustment_summary(component_frame, suppressed),
             "caveat": (
                 "Rows without runtime_composite_components use reconstructed component estimates from captured live-time fields."
+            ),
+        },
+        "feature_lineage_attribution": {
+            "research_only": True,
+            "method": "primary_blocker_plus_runtime_component_drag",
+            "lineage_factor_summary": _lineage_factor_summary(suppressed),
+            "lineage_blocker_summary": _lineage_blocker_summary(suppressed),
+            "caveat": (
+                "Runtime-composite blocker rows are mapped to the primary runtime component drag when available; "
+                "other blocker rows use the blocker-to-feature lineage map."
             ),
         },
         "suppressed_outcome": suppressed_outcome,
@@ -748,6 +828,45 @@ def render_daily_suppression_attribution_markdown(report: dict[str, Any]) -> str
             ("value", "count", "share"),
         )
     )
+    feature_lineage = report.get("feature_lineage_attribution") or {}
+    lines.extend(
+        [
+            "",
+            "## Feature Lineage Suppression Attribution",
+            "",
+            f"- Method: `{feature_lineage.get('method')}`",
+            f"- Caveat: {feature_lineage.get('caveat')}",
+            "",
+            "### Lineage Factor Summary",
+        ]
+    )
+    lines.extend(
+        _table(
+            feature_lineage.get("lineage_factor_summary", []),
+            (
+                "lineage_factor_bucket",
+                "lineage_feature_id",
+                "count",
+                "share_of_suppressed",
+                "hit_rate_60m",
+                "avg_signed_return_60m_bps",
+            ),
+        )
+    )
+    lines.extend(["", "### Blocker To Lineage Map"])
+    lines.extend(
+        _table(
+            feature_lineage.get("lineage_blocker_summary", []),
+            (
+                "primary_blocker",
+                "primary_component_drag",
+                "lineage_factor_bucket",
+                "lineage_feature_id",
+                "count",
+                "share_of_suppressed",
+            ),
+        )
+    )
     adjustment_summary = component_attribution.get("adjustment_summary") or {}
     lines.extend(
         [
@@ -825,6 +944,42 @@ def write_daily_suppression_attribution_report(
     directional = session.loc[_directional_mask(session)].copy()
     trade_status = _text_series(directional, "trade_status", default="UNKNOWN").str.upper()
     suppressed = directional.loc[trade_status != "TRADE"].copy()
+    probability_floor = float(
+        report.get("probability_floor")
+        if report.get("probability_floor") is not None
+        else SIGNAL_EVALUATION_SELECTION_POLICY.get("move_probability_floor", 0.60)
+    )
+    composite = _num_series(suppressed, "runtime_composite_score")
+    composite_threshold = _num_series(suppressed, "effective_min_composite_score_threshold")
+    trade_strength = _num_series(suppressed, "trade_strength")
+    trade_strength_threshold = _num_series(suppressed, "effective_min_trade_strength_threshold")
+    probability = _num_series(suppressed, "hybrid_move_probability").fillna(_num_series(suppressed, "move_probability"))
+    suppressed["runtime_composite_gap"] = composite - composite_threshold
+    suppressed["trade_strength_gap"] = trade_strength - trade_strength_threshold
+    suppressed["probability_gap"] = probability - probability_floor
+    suppressed["runtime_composite_below_threshold"] = composite.notna() & composite_threshold.notna() & (composite < composite_threshold)
+    suppressed["trade_strength_below_threshold"] = (
+        trade_strength.notna() & trade_strength_threshold.notna() & (trade_strength < trade_strength_threshold)
+    )
+    suppressed["move_probability_below_floor"] = probability.notna() & (probability < probability_floor)
+    suppressed["risk_off_macro"] = _text_series(suppressed, "macro_regime", default="").str.upper().str.contains("RISK_OFF")
+    suppressed["risk_off_global"] = _text_series(suppressed, "global_risk_state", default="").str.upper().str.contains("RISK_OFF")
+    suppressed["at_gamma_flip"] = _text_series(suppressed, "spot_vs_flip", default="").str.upper().eq("AT_FLIP")
+    suppressed["provider_execution_blocked"] = (
+        _bool_series(suppressed, "provider_quality_blocks_execution")
+        | _text_series(suppressed, "provider_quality_mode", default="").str.upper().str.contains("BLOCKED")
+        | ~_text_series(suppressed, "market_data_trade_blocking_status", default="PASS").str.upper().eq("PASS")
+    )
+    suppressed["provider_direction_blocked"] = _bool_series(suppressed, "provider_quality_blocks_direction")
+    suppressed["provider_health_not_good"] = ~_text_series(suppressed, "provider_health_status", default="GOOD").str.upper().eq("GOOD")
+    suppressed["data_quality_not_strong"] = ~_text_series(suppressed, "data_quality_status", default="STRONG").str.upper().eq("STRONG")
+    suppressed["weak_signal_quality"] = _text_series(suppressed, "signal_quality", default="").str.upper().isin({"WEAK", "VERY_WEAK"})
+    ta_score = _num_series(suppressed, "ta_entry_timing_score")
+    suppressed["low_ta_entry_timing"] = ta_score.notna() & (ta_score < 50.0)
+    if not suppressed.empty:
+        suppressed["primary_blocker"] = suppressed.apply(_primary_blocker, axis=1)
+    component_frame, _ = _runtime_component_frame(suppressed, probability_floor)
+    suppressed = _attach_feature_lineage_attribution(suppressed, component_frame)
     export_columns = [
         column
         for column in (
@@ -845,6 +1000,11 @@ def write_daily_suppression_attribution_report(
             "provider_health_status",
             "data_quality_status",
             "signal_quality",
+            "primary_blocker",
+            "primary_component_drag",
+            "lineage_factor_bucket",
+            "lineage_feature_id",
+            "lineage_reason",
             "correct_60m",
             "signed_return_60m_bps",
         )

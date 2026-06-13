@@ -1001,6 +1001,8 @@ def build_signal_evaluation_row(
         "price_structure_day_type_proxy": price_structure_state.get("price_structure_day_type_proxy"),
         "price_structure_trend_day_proxy_score": price_structure_state.get("price_structure_trend_day_proxy_score"),
         "trade_strength": trade.get("trade_strength"),
+        "setup_activation_score": trade.get("setup_activation_score"),
+        "setup_maturity_score": trade.get("setup_maturity_score"),
         "runtime_composite_base_score": trade.get("runtime_composite_base_score"),
         "runtime_composite_score": trade.get("runtime_composite_score"),
         "runtime_composite_components": json.dumps(
